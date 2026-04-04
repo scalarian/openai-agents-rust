@@ -1,0 +1,12 @@
+[package]
+name = "agents-realtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+agents-core = { path = "../agents-core" }
+serde.workspace = true
+tokio.workspace = true

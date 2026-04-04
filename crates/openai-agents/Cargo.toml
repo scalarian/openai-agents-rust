@@ -1,0 +1,15 @@
+[package]
+name = "openai-agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+agents-core = { path = "../agents-core" }
+agents-extensions = { path = "../agents-extensions" }
+agents-openai = { path = "../agents-openai" }
+agents-realtime = { path = "../agents-realtime" }
+agents-voice = { path = "../agents-voice" }
+tokio.workspace = true

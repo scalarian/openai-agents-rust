@@ -1,0 +1,28 @@
+# openai-agents-rust
+
+Rust-first port of the OpenAI Agents SDK.
+
+This repository currently contains:
+
+- A hybrid Cargo workspace mirroring the planned crate boundaries.
+- Pinned local clones of the Python and JS/TS reference SDKs under `reference/`.
+- Generated porting docs under `docs/`, including a file-by-file translation matrix for the Python SDK.
+- An initial, compileable Rust facade and subsystem scaffolding that establishes the public API shape and crate boundaries before the deeper feature port begins.
+
+## Workspace layout
+
+- `crates/agents-core`: shared agent, runner, tool, session, tracing, and result abstractions
+- `crates/agents-openai`: default OpenAI provider, hosted tools, and OpenAI-specific sessions/models
+- `crates/agents-realtime`: realtime-specific agent/session/event types
+- `crates/agents-voice`: voice pipeline and workflow abstractions
+- `crates/agents-extensions`: optional integrations and experimental features
+- `crates/openai-agents`: public facade crate
+
+## Reference sources
+
+- `reference/openai-agents-python`
+- `reference/openai-agents-js`
+
+## Current status
+
+The repository is in bootstrap mode. The Rust workspace builds, the public surface is scaffolded, and the porting matrix is generated from the pinned upstream repos. The feature-complete port still needs to be implemented module by module.
