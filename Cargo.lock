@@ -26,8 +26,10 @@ dependencies = [
  "async-trait",
  "redis",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
 ]
 
@@ -52,7 +54,9 @@ name = "agents-realtime"
 version = "0.1.0"
 dependencies = [
  "agents-core",
+ "async-trait",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -61,8 +65,11 @@ name = "agents-voice"
 version = "0.1.0"
 dependencies = [
  "agents-core",
+ "agents-openai",
  "async-trait",
+ "reqwest",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

@@ -12,6 +12,8 @@ agents-openai = { path = "../agents-openai" }
 async-trait.workspace = true
 redis.workspace = true
 reqwest.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
