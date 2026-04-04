@@ -23,7 +23,7 @@ impl fmt::Display for RunErrorDetails {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 #[error("{message}")]
 pub struct MaxTurnsExceeded {
     pub message: String,

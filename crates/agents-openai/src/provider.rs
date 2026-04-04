@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use agents_core::{Model, ModelProvider};
+use agents_core::{Model, ModelProvider, get_default_model};
 
 use crate::defaults::{
     OpenAIApi, default_openai_api, default_openai_base_url, default_openai_key,
@@ -132,10 +132,8 @@ impl OpenAIProvider {
 
 impl ModelProvider for OpenAIProvider {
     fn resolve(&self, model: Option<&str>) -> Arc<dyn Model> {
-        let model_name = model.unwrap_or(match self.resolved_api() {
-            OpenAIApi::ChatCompletions => "gpt-4.1",
-            OpenAIApi::Responses => "gpt-5",
-        });
+        let resolved_default_model = get_default_model();
+        let model_name = model.unwrap_or(resolved_default_model.as_str());
         let options = self.client_options();
 
         match (self.resolved_api(), self.responses_transport()) {
@@ -195,5 +193,18 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert!(!Arc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn uses_shared_default_model_resolution() {
+        let provider = OpenAIProvider::new()
+            .with_api_key("sk-test")
+            .with_use_responses(true)
+            .with_use_responses_websocket(true);
+        let default_model = get_default_model();
+        let model = provider.resolve(None);
+        let explicit = provider.resolve(Some(default_model.as_str()));
+
+        assert!(Arc::ptr_eq(&model, &explicit));
     }
 }

@@ -30,8 +30,8 @@ RENAME_MAP: dict[str, tuple[str, str, str]] = {
     ),
     "tool.py": (
         "agents-core + agents-openai",
-        "crates/agents-core/src/tool.rs + crates/agents-openai/src/tools.rs",
-        "Generic tool abstractions and OpenAI hosted tools split across crates.",
+        "crates/agents-core/src/tool.rs",
+        "Generic tool abstractions live in core; hosted OpenAI tool constructors are re-exported from the facade and implemented in crates/agents-openai/src/tools.rs.",
     ),
     "responses_websocket_session.py": (
         "agents-openai",

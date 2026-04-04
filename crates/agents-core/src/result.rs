@@ -1,10 +1,14 @@
+use futures::StreamExt;
+use futures::stream::{self, BoxStream};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::agent::Agent;
 use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::ModelResponse;
 use crate::run_state::{RunInterruption, RunState, RunStateContextSnapshot};
+use crate::stream_events::StreamEvent;
 use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult};
 use crate::tracing::Trace;
 use crate::usage::Usage;
@@ -58,6 +62,59 @@ impl RunResult {
 
     pub fn previous_response_id(&self) -> Option<&str> {
         self.previous_response_id.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RunResultStreaming {
+    pub current_agent: Option<Agent>,
+    pub current_turn: usize,
+    pub max_turns: usize,
+    pub is_complete: bool,
+    pub final_output: Option<Value>,
+    pub new_items: Vec<RunItem>,
+    pub raw_responses: Vec<ModelResponse>,
+    pub input_guardrail_results: Vec<InputGuardrailResult>,
+    pub output_guardrail_results: Vec<OutputGuardrailResult>,
+    pub events: Vec<StreamEvent>,
+    pub final_run_result: Option<RunResult>,
+}
+
+impl RunResultStreaming {
+    pub fn from_run_result(
+        result: RunResult,
+        current_turn: usize,
+        max_turns: usize,
+        events: Vec<StreamEvent>,
+    ) -> Self {
+        let final_output = result
+            .final_output
+            .as_ref()
+            .map(|text| Value::String(text.clone()));
+        Self {
+            current_agent: result.last_agent.clone(),
+            current_turn,
+            max_turns,
+            is_complete: true,
+            final_output,
+            new_items: result.new_items.clone(),
+            raw_responses: result.raw_responses.clone(),
+            input_guardrail_results: result.input_guardrail_results.clone(),
+            output_guardrail_results: result.output_guardrail_results.clone(),
+            events,
+            final_run_result: Some(result),
+        }
+    }
+
+    pub fn to_input_list(&self) -> Vec<InputItem> {
+        self.final_run_result
+            .as_ref()
+            .map(RunResult::to_input_list)
+            .unwrap_or_default()
+    }
+
+    pub fn stream_events(&self) -> BoxStream<'static, StreamEvent> {
+        stream::iter(self.events.clone()).boxed()
     }
 }
 

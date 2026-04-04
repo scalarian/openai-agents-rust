@@ -1,36 +1,32 @@
 use std::sync::Arc;
 
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::agent::Agent;
 use crate::errors::Result;
-use crate::exceptions::{
-    MaxTurnsExceeded, ModelBehaviorError, ToolInputGuardrailTripwireTriggered,
-    ToolOutputGuardrailTripwireTriggered, UserError,
-};
+use crate::exceptions::{MaxTurnsExceeded, ModelBehaviorError, UserError};
+use crate::internal::agent_runner_helpers as internal_agent_runner_helpers;
+use crate::internal::error_handlers as internal_error_handlers;
 use crate::internal::guardrails as internal_guardrails;
 use crate::internal::items as internal_items;
+use crate::internal::model_retry as internal_model_retry;
+use crate::internal::oai_conversation as internal_oai_conversation;
 use crate::internal::session_persistence as internal_session_persistence;
+use crate::internal::streaming as internal_streaming;
+use crate::internal::tool_execution as internal_tool_execution;
+use crate::internal::turn_preparation as internal_turn_preparation;
 use crate::internal::turn_resolution as internal_turn_resolution;
 use crate::items::{InputItem, OutputItem, RunItem};
-use crate::model::{ModelProvider, ModelRequest, ModelResponse};
-use crate::result::RunResult;
-use crate::run_config::{DEFAULT_MAX_TURNS, RunConfig};
-use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
+use crate::model::{ModelProvider, ModelRequest, ModelResponse, get_default_model_settings};
+use crate::result::{RunResult, RunResultStreaming};
+use crate::run_config::{DEFAULT_MAX_TURNS, ModelInputData, RunConfig};
+use crate::run_error_handlers::{RunErrorData, RunErrorHandlerInput};
+use crate::run_state::{RunInterruptionKind, RunState};
 use crate::session::Session;
-use crate::tool::{Tool, ToolOutput};
-use crate::tool_context::{ToolCall, ToolContext};
-use crate::tool_guardrails::{
-    ToolGuardrailBehavior, ToolInputGuardrailResult, ToolOutputGuardrailResult,
-};
 use crate::tracing::{
-    SpanData, TraceCtxManager, function_span, get_model_tracing_impl, get_trace_provider,
-    handoff_span,
+    SpanData, TraceCtxManager, get_model_tracing_impl, get_trace_provider, handoff_span,
 };
 use crate::usage::Usage;
-
-const DEFAULT_APPROVAL_REJECTION_MESSAGE: &str = "Tool execution was not approved.";
 
 /// Entry point for executing agents.
 #[derive(Clone, Default)]
@@ -65,9 +61,34 @@ impl Runner {
         self.run_items(agent, vec![input.into()]).await
     }
 
+    pub async fn run_streamed(
+        &self,
+        agent: &Agent,
+        input: impl Into<InputItem>,
+    ) -> Result<RunResultStreaming> {
+        self.run_items_streamed(agent, vec![input.into()]).await
+    }
+
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
         self.run_items_internal(agent, input.clone(), input, None)
             .await
+    }
+
+    pub async fn run_items_streamed(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+    ) -> Result<RunResultStreaming> {
+        let result = self.run_items(agent, input).await?;
+        let current_turn = result.raw_responses.len();
+        let events = internal_streaming::result_to_stream_events(agent, &result);
+
+        Ok(RunResultStreaming::from_run_result(
+            result,
+            current_turn,
+            self.config.max_turns,
+            events,
+        ))
     }
 
     pub async fn run_with_session(
@@ -86,9 +107,9 @@ impl Runner {
         input: Vec<InputItem>,
         session: &(dyn Session + Sync),
     ) -> Result<RunResult> {
-        internal_session_persistence::validate_session_conversation_settings(&self.config)?;
+        internal_agent_runner_helpers::validate_session_conversation_settings(&self.config)?;
         let (prepared_input, original_input) =
-            internal_session_persistence::prepare_input_with_session(&input, session).await?;
+            internal_agent_runner_helpers::prepare_input_with_session(&input, session).await?;
         self.run_items_internal(agent, original_input, prepared_input, Some(session))
             .await
     }
@@ -100,6 +121,8 @@ impl Runner {
         base_input: Vec<InputItem>,
         session: Option<&(dyn Session + Sync)>,
     ) -> Result<RunResult> {
+        internal_turn_preparation::validate_run_hooks()?;
+
         let workflow_name = if self.config.workflow_name.is_empty() {
             agent.name.clone()
         } else {
@@ -129,8 +152,8 @@ impl Runner {
         let mut interruptions = Vec::new();
         let mut final_output = None;
         let mut final_output_items = Vec::new();
-        let mut request_previous_response_id = self.config.previous_response_id.clone();
-        let request_conversation_id = self.config.conversation_id.clone();
+        let mut conversation_tracker =
+            internal_oai_conversation::OpenAIServerConversationTracker::new(&self.config);
 
         for _turn in 0..self.config.max_turns {
             let prepared_input = internal_items::prepare_model_input_items(
@@ -138,31 +161,37 @@ impl Runner {
                 &generated_items,
                 self.config.reasoning_item_id_policy,
             );
+            let model_data = internal_turn_preparation::maybe_filter_model_input(
+                &self.config,
+                &current_agent,
+                &context,
+                ModelInputData {
+                    input: prepared_input,
+                    instructions: current_agent.instructions.clone(),
+                },
+            )?;
 
             let response = self
-                .call_model(
+                .call_model_with_retry(
                     &current_agent,
                     trace.id,
-                    &prepared_input,
-                    request_previous_response_id.as_deref(),
-                    request_conversation_id.as_deref(),
+                    model_data,
+                    conversation_tracker.previous_response_id(),
+                    conversation_tracker.conversation_id(),
                 )
                 .await?;
-            usage = merge_usage(usage, response.usage);
+            usage = internal_agent_runner_helpers::merge_usage(usage, response.usage.clone());
             context.usage = usage;
+            conversation_tracker.apply_response(&response);
 
             let output = response.output.clone();
             let response_items = internal_turn_resolution::build_message_output_items(&output);
             generated_items.extend(response_items);
-            if request_conversation_id.is_none()
-                && (self.config.auto_previous_response_id || request_previous_response_id.is_some())
-                && response.response_id.is_some()
-            {
-                request_previous_response_id = response.response_id.clone();
-            }
             raw_responses.push(response);
 
-            if let Some(target_agent) = resolve_handoff_agent(&current_agent, &output)? {
+            if let Some(target_agent) =
+                internal_tool_execution::resolve_handoff_agent(&current_agent, &output)?
+            {
                 let provider = get_trace_provider();
                 let mut span = handoff_span(
                     Some(current_agent.name.clone()),
@@ -177,7 +206,7 @@ impl Runner {
                 continue;
             }
 
-            let tool_calls = extract_tool_calls(&output);
+            let tool_calls = internal_tool_execution::extract_tool_calls(&output);
             if tool_calls.is_empty() {
                 output_guardrail_results = internal_guardrails::run_output_guardrails(
                     &current_agent,
@@ -191,9 +220,13 @@ impl Runner {
                 break;
             }
 
-            let tool_outcome =
-                execute_local_function_tools(&current_agent, &self.config, &context, tool_calls)
-                    .await?;
+            let tool_outcome = internal_tool_execution::execute_local_function_tools(
+                &current_agent,
+                &self.config,
+                &context,
+                tool_calls,
+            )
+            .await?;
             tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
             tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
             generated_items.extend(tool_outcome.new_items);
@@ -204,14 +237,60 @@ impl Runner {
         }
 
         if final_output_items.is_empty() && final_output.is_none() && interruptions.is_empty() {
-            let _ = trace_manager.finish();
-            return Err(MaxTurnsExceeded {
+            let max_turns_error = MaxTurnsExceeded {
                 message: format!(
                     "run for agent `{}` exceeded max_turns ({}) before producing a final output",
                     agent.name, self.config.max_turns
                 ),
+            };
+
+            if let Some(handler) = &self.config.run_error_handlers.max_turns {
+                let history = internal_items::prepare_model_input_items(
+                    &base_input,
+                    &generated_items,
+                    self.config.reasoning_item_id_policy,
+                );
+                let handler_result = handler(RunErrorHandlerInput {
+                    error: MaxTurnsExceeded {
+                        message: max_turns_error.message.clone(),
+                    },
+                    context: context.clone(),
+                    run_data: RunErrorData {
+                        input: original_input.clone(),
+                        new_items: generated_items.clone(),
+                        history,
+                        output: final_output_items.clone(),
+                        raw_responses: raw_responses.clone(),
+                        last_agent: current_agent.clone(),
+                    },
+                })
+                .await;
+
+                if let Some(handler_result) = handler_result {
+                    internal_error_handlers::validate_handler_final_output(
+                        &handler_result.final_output,
+                    )?;
+                    if let Some((text, output_item, include_in_history)) =
+                        internal_error_handlers::resolve_run_error_handler_result(Some(
+                            handler_result,
+                        ))
+                    {
+                        final_output = Some(text);
+                        final_output_items = vec![output_item.clone()];
+                        if include_in_history {
+                            generated_items.push(RunItem::MessageOutput {
+                                content: output_item,
+                            });
+                        }
+                    }
+                } else {
+                    let _ = trace_manager.finish();
+                    return Err(max_turns_error.into());
+                }
+            } else {
+                let _ = trace_manager.finish();
+                return Err(max_turns_error.into());
             }
-            .into());
         }
 
         let persisted_item_count = if let Some(session) = session {
@@ -234,9 +313,7 @@ impl Runner {
         run_state.current_turn = raw_responses.len();
         run_state.set_current_agent(current_agent.clone());
         run_state.set_trace(trace.clone());
-        run_state.conversation_id = request_conversation_id.clone();
-        run_state.previous_response_id = request_previous_response_id.clone();
-        run_state.auto_previous_response_id = self.config.auto_previous_response_id;
+        conversation_tracker.apply_to_state(&mut run_state);
         run_state.persisted_item_count = persisted_item_count;
         run_state.extend_generated_items(generated_items.clone());
         run_state.extend_session_items(generated_items.clone());
@@ -278,9 +355,9 @@ impl Runner {
             interruptions,
             usage,
             trace: Some(trace),
-            conversation_id: request_conversation_id,
-            previous_response_id: request_previous_response_id,
-            auto_previous_response_id: self.config.auto_previous_response_id,
+            conversation_id: conversation_tracker.conversation_id.clone(),
+            previous_response_id: conversation_tracker.previous_response_id.clone(),
+            auto_previous_response_id: conversation_tracker.auto_previous_response_id,
         })
     }
 
@@ -301,13 +378,10 @@ impl Runner {
         if let Some(trace) = &state.trace {
             resumed_config.workflow_name = trace.workflow_name.clone();
         }
-        if resumed_config.previous_response_id.is_none() {
-            resumed_config.previous_response_id = state.previous_response_id.clone();
-        }
-        if resumed_config.conversation_id.is_none() {
-            resumed_config.conversation_id = state.conversation_id.clone();
-        }
-        resumed_config.auto_previous_response_id |= state.auto_previous_response_id;
+        internal_agent_runner_helpers::apply_resumed_conversation_settings(
+            &mut resumed_config,
+            state,
+        );
 
         let runner = Self {
             model_provider: self.model_provider.clone(),
@@ -383,8 +457,8 @@ impl Runner {
             message: "cannot resume a pending approval without a tool call id".to_owned(),
         })?;
 
-        let tool_call =
-            find_pending_tool_call(state, &call_id).ok_or_else(|| ModelBehaviorError {
+        let tool_call = internal_tool_execution::find_pending_tool_call(state, &call_id)
+            .ok_or_else(|| ModelBehaviorError {
                 message: format!("cannot find pending tool call `{call_id}` in run state"),
             })?;
         let approval = state.approval(&call_id).cloned().ok_or_else(|| UserError {
@@ -392,8 +466,13 @@ impl Runner {
         })?;
 
         let context = state.restore_context::<crate::run_context::RunContext>()?;
-        let tool_outcome =
-            execute_local_function_tools(agent, &self.config, &context, vec![tool_call]).await?;
+        let tool_outcome = internal_tool_execution::execute_local_function_tools(
+            agent,
+            &self.config,
+            &context,
+            vec![tool_call],
+        )
+        .await?;
         if !tool_outcome.interruptions.is_empty() {
             return Err(UserError {
                 message: "resumed approval unexpectedly produced another interruption".to_owned(),
@@ -421,13 +500,10 @@ impl Runner {
         if let Some(trace) = &continued_state.trace {
             resumed_config.workflow_name = trace.workflow_name.clone();
         }
-        if resumed_config.previous_response_id.is_none() {
-            resumed_config.previous_response_id = continued_state.previous_response_id.clone();
-        }
-        if resumed_config.conversation_id.is_none() {
-            resumed_config.conversation_id = continued_state.conversation_id.clone();
-        }
-        resumed_config.auto_previous_response_id |= continued_state.auto_previous_response_id;
+        internal_agent_runner_helpers::apply_resumed_conversation_settings(
+            &mut resumed_config,
+            &continued_state,
+        );
 
         let runner = Self {
             model_provider: self.model_provider.clone(),
@@ -479,7 +555,7 @@ impl Runner {
         &self,
         agent: &Agent,
         trace_id: Uuid,
-        prepared_input: &[InputItem],
+        model_data: ModelInputData,
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
     ) -> Result<ModelResponse> {
@@ -488,24 +564,30 @@ impl Runner {
         provider.start_span(&mut span, true);
 
         if let Some(model_provider) = &self.model_provider {
+            let requested_model = self
+                .config
+                .model
+                .clone()
+                .or_else(|| internal_turn_preparation::get_model(agent));
+            let settings = get_default_model_settings(requested_model.as_deref());
             let request = ModelRequest {
                 trace_id: Some(trace_id),
-                model: agent.model.clone(),
-                instructions: agent.instructions.clone(),
+                model: requested_model.clone(),
+                instructions: model_data.instructions,
                 previous_response_id: previous_response_id.map(ToOwned::to_owned),
                 conversation_id: conversation_id.map(ToOwned::to_owned),
-                settings: Default::default(),
-                input: prepared_input.to_vec(),
-                tools: agent.tool_definitions(),
+                settings: settings.clone(),
+                input: model_data.input,
+                tools: internal_turn_preparation::get_all_tools(agent),
             };
             let response = model_provider
-                .resolve(agent.model.as_deref())
+                .resolve_with_settings(requested_model.as_deref(), &settings)
                 .generate(request)
                 .await;
             match response {
                 Ok(response) => {
                     if let SpanData::Generation(data) = &mut span.data {
-                        data.model = response.model.clone();
+                        data.model = response.model.clone().or(requested_model);
                         data.usage = serde_json::to_value(&response.usage).ok();
                     }
                     provider.finish_span(&mut span, true);
@@ -518,14 +600,15 @@ impl Runner {
                 }
             }
         } else {
-            let text = prepared_input
+            let text = model_data
+                .input
                 .iter()
                 .rev()
                 .find_map(InputItem::as_text)
                 .unwrap_or_default()
                 .to_owned();
             let response = ModelResponse {
-                model: agent.model.clone(),
+                model: self.config.model.clone().or_else(|| agent.model.clone()),
                 output: vec![OutputItem::Text { text }],
                 usage: Usage::default(),
                 response_id: None,
@@ -539,6 +622,26 @@ impl Runner {
             Ok(response)
         }
     }
+
+    async fn call_model_with_retry(
+        &self,
+        agent: &Agent,
+        trace_id: Uuid,
+        model_data: ModelInputData,
+        previous_response_id: Option<&str>,
+        conversation_id: Option<&str>,
+    ) -> Result<ModelResponse> {
+        internal_model_retry::get_response_with_retry(|| {
+            self.call_model(
+                agent,
+                trace_id,
+                model_data,
+                previous_response_id,
+                conversation_id,
+            )
+        })
+        .await
+    }
 }
 
 pub async fn run(agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
@@ -551,259 +654,6 @@ pub async fn run_with_session(
     session: &(dyn Session + Sync),
 ) -> Result<RunResult> {
     Runner::new().run_with_session(agent, input, session).await
-}
-
-struct ToolExecutionOutcome {
-    new_items: Vec<RunItem>,
-    input_guardrail_results: Vec<ToolInputGuardrailResult>,
-    output_guardrail_results: Vec<ToolOutputGuardrailResult>,
-    interruptions: Vec<RunInterruption>,
-}
-
-async fn execute_local_function_tools(
-    agent: &Agent,
-    run_config: &RunConfig,
-    context: &crate::run_context::RunContextWrapper,
-    tool_calls: Vec<ToolCall>,
-) -> Result<ToolExecutionOutcome> {
-    let mut new_items = Vec::new();
-    let mut input_guardrail_results = Vec::new();
-    let mut output_guardrail_results = Vec::new();
-    let mut interruptions = Vec::new();
-
-    for tool_call in tool_calls {
-        let function_tool = agent
-            .find_function_tool(&tool_call.name, tool_call.namespace.as_deref())
-            .ok_or_else(|| ModelBehaviorError {
-                message: format!(
-                    "model requested unknown local function tool `{}`",
-                    tool_call.name
-                ),
-            })?;
-
-        let tool_context = ToolContext::from_tool_call(context, tool_call.clone())
-            .with_agent(agent.clone())
-            .with_run_config(run_config.clone());
-        let provider = get_trace_provider();
-        let mut span = function_span(
-            &tool_context.trace_name(),
-            Some(tool_call.arguments.clone()),
-            None,
-        );
-        provider.start_span(&mut span, true);
-
-        if function_tool.needs_approval {
-            match context.approvals.get(&tool_call.id) {
-                None => {
-                    provider.finish_span(&mut span, true);
-                    interruptions.push(RunInterruption {
-                        kind: Some(RunInterruptionKind::ToolApproval),
-                        call_id: Some(tool_call.id.clone()),
-                        tool_name: Some(tool_call.name.clone()),
-                        reason: Some("tool approval required".to_owned()),
-                    });
-                    break;
-                }
-                Some(approval) if !approval.approved => {
-                    let output = ToolOutput::from(
-                        approval
-                            .reason
-                            .as_deref()
-                            .unwrap_or(DEFAULT_APPROVAL_REJECTION_MESSAGE),
-                    );
-                    new_items.push(RunItem::ToolCallOutput {
-                        tool_name: tool_call.name,
-                        output: output.to_output_item(),
-                        call_id: Some(tool_call.id),
-                        namespace: tool_call.namespace,
-                    });
-                    if let SpanData::Function(data) = &mut span.data {
-                        data.output = Some("tool approval rejected".to_owned());
-                    }
-                    provider.finish_span(&mut span, true);
-                    continue;
-                }
-                Some(_) => {}
-            }
-        }
-
-        let mut invocation_rejected = None;
-        for guardrail in &function_tool.tool_input_guardrails {
-            let result = guardrail
-                .run(crate::tool_guardrails::ToolInputGuardrailData {
-                    context: tool_context.clone(),
-                    agent: agent.clone(),
-                })
-                .await?;
-            match &result.output.behavior {
-                ToolGuardrailBehavior::Allow => {}
-                ToolGuardrailBehavior::RejectContent { message } => {
-                    invocation_rejected = Some(ToolOutput::from(message.as_str()));
-                }
-                ToolGuardrailBehavior::RaiseException => {
-                    span.set_error(
-                        format!("tool input guardrail `{}` triggered", result.guardrail_name),
-                        None,
-                    );
-                    provider.finish_span(&mut span, true);
-                    return Err(ToolInputGuardrailTripwireTriggered {
-                        guardrail_name: result.guardrail_name.clone(),
-                        output: result.output.clone(),
-                    }
-                    .into());
-                }
-            }
-            input_guardrail_results.push(result);
-        }
-
-        let mut output = if let Some(rejected) = invocation_rejected {
-            rejected
-        } else {
-            let parsed_arguments =
-                serde_json::from_str::<Value>(&tool_call.arguments).unwrap_or(Value::Null);
-            function_tool
-                .invoke(tool_context.clone(), parsed_arguments)
-                .await?
-        };
-
-        for guardrail in &function_tool.tool_output_guardrails {
-            let result = guardrail
-                .run(crate::tool_guardrails::ToolOutputGuardrailData {
-                    context: tool_context.clone(),
-                    agent: agent.clone(),
-                    output: output.clone(),
-                })
-                .await?;
-            match &result.output.behavior {
-                ToolGuardrailBehavior::Allow => {}
-                ToolGuardrailBehavior::RejectContent { message } => {
-                    output = ToolOutput::from(message.as_str());
-                }
-                ToolGuardrailBehavior::RaiseException => {
-                    span.set_error(
-                        format!(
-                            "tool output guardrail `{}` triggered",
-                            result.guardrail_name
-                        ),
-                        None,
-                    );
-                    provider.finish_span(&mut span, true);
-                    return Err(ToolOutputGuardrailTripwireTriggered {
-                        guardrail_name: result.guardrail_name.clone(),
-                        output: result.output.clone(),
-                    }
-                    .into());
-                }
-            }
-            output_guardrail_results.push(result);
-        }
-
-        new_items.push(RunItem::ToolCallOutput {
-            tool_name: tool_call.name,
-            output: output.to_output_item(),
-            call_id: Some(tool_call.id),
-            namespace: tool_call.namespace,
-        });
-        if let SpanData::Function(data) = &mut span.data {
-            data.output = serde_json::to_string(&output).ok();
-        }
-        provider.finish_span(&mut span, true);
-    }
-
-    Ok(ToolExecutionOutcome {
-        new_items,
-        input_guardrail_results,
-        output_guardrail_results,
-        interruptions,
-    })
-}
-
-fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {
-    output
-        .iter()
-        .filter_map(|item| match item {
-            OutputItem::ToolCall {
-                call_id,
-                tool_name,
-                arguments,
-                namespace,
-            } => Some(ToolCall {
-                id: call_id.clone(),
-                name: tool_name.clone(),
-                arguments: serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_owned()),
-                namespace: namespace.clone(),
-            }),
-            OutputItem::Text { .. }
-            | OutputItem::Json { .. }
-            | OutputItem::Handoff { .. }
-            | OutputItem::Reasoning { .. } => None,
-        })
-        .collect()
-}
-
-fn resolve_handoff_agent(current_agent: &Agent, output: &[OutputItem]) -> Result<Option<Agent>> {
-    let target = output.iter().find_map(|item| match item {
-        OutputItem::Handoff { target_agent } => Some(target_agent.as_str()),
-        OutputItem::Text { .. }
-        | OutputItem::Json { .. }
-        | OutputItem::ToolCall { .. }
-        | OutputItem::Reasoning { .. } => None,
-    });
-
-    let Some(target) = target else {
-        return Ok(None);
-    };
-
-    let handoff = current_agent
-        .find_handoff(target)
-        .ok_or_else(|| ModelBehaviorError {
-            message: format!(
-                "model requested unknown handoff target `{}` from agent `{}`",
-                target, current_agent.name
-            ),
-        })?;
-
-    let target_agent = handoff.runtime_agent().cloned().ok_or_else(|| UserError {
-        message: format!(
-            "handoff target `{}` is not bound to a runtime agent instance",
-            target
-        ),
-    })?;
-
-    Ok(Some(target_agent))
-}
-
-fn find_pending_tool_call(state: &RunState, call_id: &str) -> Option<ToolCall> {
-    state
-        .generated_items
-        .iter()
-        .rev()
-        .find_map(|item| match item {
-            RunItem::ToolCall {
-                tool_name,
-                arguments,
-                call_id: Some(existing_call_id),
-                namespace,
-            } if existing_call_id == call_id => Some(ToolCall {
-                id: existing_call_id.clone(),
-                name: tool_name.clone(),
-                arguments: serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_owned()),
-                namespace: namespace.clone(),
-            }),
-            RunItem::MessageOutput { .. }
-            | RunItem::ToolCallOutput { .. }
-            | RunItem::HandoffCall { .. }
-            | RunItem::HandoffOutput { .. }
-            | RunItem::Reasoning { .. }
-            | RunItem::ToolCall { .. } => None,
-        })
-}
-
-fn merge_usage(previous: Usage, next: Usage) -> Usage {
-    Usage {
-        input_tokens: previous.input_tokens.saturating_add(next.input_tokens),
-        output_tokens: previous.output_tokens.saturating_add(next.output_tokens),
-    }
 }
 
 fn merge_run_states(previous: &RunState, next: &mut RunState) {
@@ -857,8 +707,10 @@ fn merge_run_states(previous: &RunState, next: &mut RunState) {
     next.persisted_item_count += previous.persisted_item_count;
     next.trace = previous.trace.clone().or(next.trace.clone());
     next.context_snapshot.context = previous.context_snapshot.context.clone();
-    next.context_snapshot.usage =
-        merge_usage(previous.context_snapshot.usage, next.context_snapshot.usage);
+    next.context_snapshot.usage = internal_agent_runner_helpers::merge_usage(
+        previous.context_snapshot.usage,
+        next.context_snapshot.usage,
+    );
 
     let mut approvals = previous.context_snapshot.approvals.clone();
     approvals.extend(next.context_snapshot.approvals.clone());
@@ -880,9 +732,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+    use futures::FutureExt;
     use schemars::JsonSchema;
     use serde::Deserialize;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::errors::AgentsError;
     use crate::guardrail::{GuardrailFunctionOutput, input_guardrail, output_guardrail};
@@ -1153,6 +1006,40 @@ mod tests {
     }
 
     impl ModelProvider for SessionCaptureProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct LoopingToolModel;
+
+    #[async_trait]
+    impl Model for LoopingToolModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::ToolCall {
+                    call_id: format!("call-{}", request.input.len()),
+                    tool_name: "search".to_owned(),
+                    arguments: json!({"query":"rust"}),
+                    namespace: None,
+                }],
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                response_id: Some(format!("resp-{}", request.input.len())),
+                request_id: None,
+            })
+        }
+    }
+
+    struct LoopingToolProvider {
+        model: Arc<LoopingToolModel>,
+    }
+
+    impl ModelProvider for LoopingToolProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
         }
@@ -1603,5 +1490,102 @@ mod tests {
             .expect_err("session with previous response id should fail");
 
         assert!(matches!(error, AgentsError::User(_)));
+    }
+
+    #[tokio::test]
+    async fn runner_streamed_matches_non_streamed_result() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let runner = Runner::new().with_model_provider(provider);
+        let streamed = runner
+            .run_streamed(&agent, "hello")
+            .await
+            .expect("streamed run should succeed");
+        let final_result = streamed
+            .final_run_result
+            .as_ref()
+            .expect("streamed run should retain final result");
+
+        assert!(streamed.is_complete);
+        assert_eq!(streamed.current_turn, 2);
+        assert_eq!(
+            final_result.final_output.as_deref(),
+            Some("final:result:rust")
+        );
+        assert!(
+            streamed
+                .events
+                .iter()
+                .any(|event| matches!(event, crate::stream_events::StreamEvent::RunItemEvent(_)))
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_uses_max_turn_handler_for_terminal_output() {
+        let provider = Arc::new(LoopingToolProvider {
+            model: Arc::new(LoopingToolModel),
+        });
+        let search_tool =
+            function_tool(
+                "search",
+                "Search documents",
+                |_ctx, args: SearchArgs| async move {
+                    Ok::<_, AgentsError>(format!("loop:{}", args.query))
+                },
+            )
+            .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                max_turns: 2,
+                run_error_handlers: crate::run_error_handlers::RunErrorHandlers {
+                    max_turns: Some(Arc::new(|input| {
+                        async move {
+                            assert_eq!(input.run_data.last_agent.name, "assistant");
+                            Some(crate::run_error_handlers::RunErrorHandlerResult {
+                                final_output: json!({"status":"max_turns","turns":2}),
+                                include_in_history: true,
+                            })
+                        }
+                        .boxed()
+                    })),
+                },
+                ..RunConfig::default()
+            });
+
+        let result = runner
+            .run(&agent, "hello")
+            .await
+            .expect("run should resolve through the max-turn handler");
+
+        assert!(
+            result
+                .final_output
+                .as_deref()
+                .is_some_and(|value| value.contains("max_turns"))
+        );
+        assert!(
+            result
+                .output
+                .iter()
+                .any(|item| matches!(item, OutputItem::Json { .. }))
+        );
     }
 }

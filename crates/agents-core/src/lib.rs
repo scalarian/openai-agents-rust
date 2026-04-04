@@ -17,6 +17,7 @@ pub mod errors;
 pub mod exceptions;
 pub mod function_schema;
 pub mod guardrail;
+#[path = "handoff/mod.rs"]
 pub mod handoff;
 pub(crate) mod internal;
 pub mod items;
@@ -24,15 +25,18 @@ pub mod lifecycle;
 pub mod logger;
 pub mod mcp;
 pub mod memory;
+#[path = "model/mod.rs"]
 pub mod model;
 pub mod model_settings;
 pub mod models;
 pub mod prompts;
+pub mod repl;
 pub mod result;
 pub mod retry;
 pub mod run;
 pub mod run_config;
 pub mod run_context;
+pub mod run_error_handlers;
 pub mod run_state;
 pub mod session;
 pub mod stream_events;
@@ -43,6 +47,7 @@ pub mod tool_guardrails;
 #[path = "tracing/mod.rs"]
 pub mod tracing;
 pub mod usage;
+pub mod util;
 pub mod version;
 
 pub use _config::{
@@ -90,7 +95,9 @@ pub use guardrail::{
     GuardrailFunctionOutput, InputGuardrail, InputGuardrailResult, OutputGuardrail,
     OutputGuardrailResult, input_guardrail, output_guardrail,
 };
-pub use handoff::Handoff;
+pub use handoff::{
+    Handoff, HandoffBuilder, HandoffHistoryMapper, HandoffInputData, HandoffInputFilter, handoff,
+};
 pub use items::{InputItem, OutputItem, RunItem};
 pub use lifecycle::{AgentHooks, RunHooks};
 pub use mcp::{
@@ -102,15 +109,20 @@ pub use memory::{
     MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession,
     SQLiteSession, Session, SessionSettings, is_openai_responses_compaction_aware_session,
 };
-pub use model::{Model, ModelProvider, ModelRequest, ModelResponse};
-pub use model_settings::ModelSettings;
+pub use model::{
+    Model, ModelProvider, ModelRequest, ModelResponse, get_default_model,
+    get_default_model_settings, gpt_5_reasoning_settings_required, is_gpt_5_default,
+};
+pub use model_settings::{ModelSettings, ReasoningSettings};
 pub use models::{
     MultiProvider, MultiProviderMap, MultiProviderOpenAIPrefixMode, MultiProviderUnknownPrefixMode,
 };
 pub use prompts::{
     DynamicPromptFunction, GenerateDynamicPromptData, Prompt, PromptSpec, PromptUtil,
 };
+pub use repl::run_demo_loop;
 pub use result::RunResult;
+pub use result::RunResultStreaming;
 pub use retry::{
     ModelRetryAdvice, ModelRetryAdviceRequest, ModelRetryBackoffSettings,
     ModelRetryNormalizedError, ModelRetrySettings, RetryDecision, RetryPolicyContext,
@@ -121,6 +133,9 @@ pub use run_config::{
     ToolErrorFormatterArgs,
 };
 pub use run_context::{AgentHookContext, ApprovalRecord, RunContext, RunContextWrapper};
+pub use run_error_handlers::{
+    RunErrorData, RunErrorHandler, RunErrorHandlerInput, RunErrorHandlerResult, RunErrorHandlers,
+};
 pub use run_state::{
     CURRENT_RUN_STATE_SCHEMA_VERSION, RunInterruption, RunInterruptionKind, RunState,
     RunStateContextSnapshot,
@@ -141,4 +156,10 @@ pub use tool_guardrails::{
 };
 pub use tracing::{Span, Trace};
 pub use usage::Usage;
+pub use util::{
+    MaybeAwaitable, attach_error_to_current_span, attach_error_to_span,
+    evaluate_needs_approval_setting, noop_coroutine, pretty_print_result,
+    pretty_print_run_error_details, pretty_print_run_result_streaming,
+    transform_string_function_style, validate_json,
+};
 pub use version::VERSION;

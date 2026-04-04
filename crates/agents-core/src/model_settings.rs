@@ -10,8 +10,16 @@ pub struct ModelSettings {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub max_output_tokens: Option<u32>,
+    pub reasoning: Option<ReasoningSettings>,
+    pub verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReasoningSettings {
+    pub effort: Option<String>,
+    pub summary: Option<String>,
 }
 
 impl ModelSettings {
@@ -29,6 +37,12 @@ impl ModelSettings {
         }
         if override_settings.max_output_tokens.is_some() {
             resolved.max_output_tokens = override_settings.max_output_tokens;
+        }
+        if override_settings.reasoning.is_some() {
+            resolved.reasoning = override_settings.reasoning.clone();
+        }
+        if override_settings.verbosity.is_some() {
+            resolved.verbosity = override_settings.verbosity.clone();
         }
         if !override_settings.metadata.is_empty() {
             resolved.metadata.extend(override_settings.metadata.clone());
@@ -49,12 +63,22 @@ mod tests {
             temperature: Some(0.2),
             top_p: Some(0.9),
             max_output_tokens: Some(128),
+            reasoning: Some(ReasoningSettings {
+                effort: Some("low".to_owned()),
+                summary: None,
+            }),
+            verbosity: Some("medium".to_owned()),
             metadata: BTreeMap::from([("tier".to_owned(), json!("base"))]),
         };
         let override_settings = ModelSettings {
             temperature: Some(0.8),
             top_p: None,
             max_output_tokens: Some(256),
+            reasoning: Some(ReasoningSettings {
+                effort: Some("medium".to_owned()),
+                summary: Some("auto".to_owned()),
+            }),
+            verbosity: Some("low".to_owned()),
             metadata: BTreeMap::from([("route".to_owned(), json!("fast"))]),
         };
 
@@ -63,6 +87,14 @@ mod tests {
         assert_eq!(resolved.temperature, Some(0.8));
         assert_eq!(resolved.top_p, Some(0.9));
         assert_eq!(resolved.max_output_tokens, Some(256));
+        assert_eq!(
+            resolved
+                .reasoning
+                .as_ref()
+                .and_then(|value| value.effort.as_deref()),
+            Some("medium")
+        );
+        assert_eq!(resolved.verbosity.as_deref(), Some("low"));
         assert_eq!(resolved.metadata.get("tier"), Some(&json!("base")));
         assert_eq!(resolved.metadata.get("route"), Some(&json!("fast")));
     }
