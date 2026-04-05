@@ -11,7 +11,7 @@ fn contains_machine_local_absolute_path(contents: &str) -> bool {
         "/github/workspace/",
         "/__w/",
     ];
-    const WINDOWS_PATH_PREFIXES: &[&str] = &["Users\\", "a\\", "workspace\\", "workspaces\\"];
+    const WINDOWS_PATH_PREFIXES: &[&str] = &["Users", "a", "workspace", "workspaces"];
 
     if UNIX_ROOTS.iter().any(|root| contents.contains(root)) || contents.contains("\\Users\\") {
         return true;
@@ -26,10 +26,13 @@ fn contains_machine_local_absolute_path(contents: &str) -> bool {
         let mut chars = tail.chars();
         let _drive = chars.next();
         matches!(chars.next(), Some(':'))
-            && matches!(chars.next(), Some('\\'))
-            && WINDOWS_PATH_PREFIXES
-                .iter()
-                .any(|prefix| chars.as_str().starts_with(prefix))
+            && matches!(chars.next(), Some('\\' | '/'))
+            && WINDOWS_PATH_PREFIXES.iter().any(|prefix| {
+                chars
+                    .as_str()
+                    .strip_prefix(prefix)
+                    .is_some_and(|tail| tail.starts_with(['\\', '/']))
+            })
     })
 }
 
@@ -74,6 +77,8 @@ fn portability_detector_rejects_non_macos_machine_local_absolute_paths() {
         "/__w/openai-agents-rust/openai-agents-rust/docs/PORTING_PI_ID.md",
         "C:\\Users\\alice\\openai-agents-rust\\docs\\ROOT_EXPORT_PARITY.md",
         "D:\\a\\openai-agents-rust\\openai-agents-rust\\docs\\BEHAVIOR_PARITY.md",
+        "C:/Users/alice/openai-agents-rust/docs/ROOT_EXPORT_PARITY.md",
+        "D:/a/openai-agents-rust/openai-agents-rust/docs/BEHAVIOR_PARITY.md",
     ] {
         assert!(
             contains_machine_local_absolute_path(absolute_path),
