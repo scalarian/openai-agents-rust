@@ -4,10 +4,7 @@ use std::sync::Mutex;
 
 use agents_core::{Model, ModelProvider, get_default_model};
 
-use crate::defaults::{
-    OpenAIApi, default_openai_api, default_openai_base_url, default_openai_key,
-    default_openai_websocket_base_url,
-};
+use crate::defaults::{OpenAIApi, default_openai_api, default_openai_key};
 use crate::models::{
     OpenAIChatCompletionsModel, OpenAIClientOptions, OpenAIResponsesModel, OpenAIResponsesWsModel,
 };
@@ -160,6 +157,7 @@ impl ModelProvider for OpenAIProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::defaults::{default_openai_base_url, default_openai_websocket_base_url};
     use crate::{
         get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
         get_use_responses_websocket_by_default, set_default_openai_websocket_base_url,
