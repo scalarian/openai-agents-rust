@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Debug settings used while porting and validating behavior.
+/// Debug settings used while validating runtime behavior.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DebugSettings {
     pub log_model_payloads: bool,

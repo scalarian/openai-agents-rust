@@ -23,7 +23,7 @@ pub use agents_core::{
     MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool, MCPToolAnnotations,
     MCPToolApprovalFunction, MCPToolApprovalFunctionResult, MCPToolApprovalRequest,
     MCPToolMetaContext, MCPToolMetaResolver, MCPTransportAuth, MCPTransportClient,
-    MCPTransportClientConfig, MCPTransportClientFactory, MCPTransportKind, MCPUtil,
+    MCPTransportClientBuilder, MCPTransportClientConfig, MCPTransportKind, MCPUtil,
     MaxTurnsExceeded, MaybeAwaitable, MemorySession, MessageOutputItem, Model, ModelBehaviorError,
     ModelProvider, ModelRequest, ModelResponse, ModelRetryAdvice, ModelRetryAdviceRequest,
     ModelRetryBackoffSettings, ModelRetryNormalizedError, ModelRetrySettings, ModelSettings,

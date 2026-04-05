@@ -272,7 +272,7 @@ impl MCPTransportClient for DefaultMCPTransportClient {
     }
 }
 
-pub type MCPTransportClientFactory =
+pub type MCPTransportClientBuilder =
     Arc<dyn Fn(MCPTransportClientConfig) -> Arc<dyn MCPTransportClient> + Send + Sync + 'static>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -425,7 +425,7 @@ pub struct MCPServerSse {
     name: String,
     pub params: MCPServerSseParams,
     connected: Arc<AtomicBool>,
-    client_factory: Option<MCPTransportClientFactory>,
+    client_builder: Option<MCPTransportClientBuilder>,
     current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
@@ -447,7 +447,7 @@ impl MCPServerSse {
             name: name.into(),
             params,
             connected: Arc::new(AtomicBool::new(false)),
-            client_factory: None,
+            client_builder: None,
             current_client: Arc::new(StdMutex::new(None)),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
@@ -455,8 +455,8 @@ impl MCPServerSse {
         }
     }
 
-    pub fn with_client_factory(mut self, client_factory: MCPTransportClientFactory) -> Self {
-        self.client_factory = Some(client_factory);
+    pub fn with_client_builder(mut self, client_builder: MCPTransportClientBuilder) -> Self {
+        self.client_builder = Some(client_builder);
         self
     }
 
@@ -502,9 +502,9 @@ impl MCPServerSse {
 
     fn build_client(&self) -> Arc<dyn MCPTransportClient> {
         let config = self.client_config();
-        self.client_factory
+        self.client_builder
             .as_ref()
-            .map(|factory| factory(config.clone()))
+            .map(|builder| builder(config.clone()))
             .unwrap_or_else(|| Arc::new(DefaultMCPTransportClient::new(config)))
     }
 }
@@ -596,7 +596,7 @@ pub struct MCPServerStreamableHttp {
     name: String,
     pub params: MCPServerStreamableHttpParams,
     connected: Arc<AtomicBool>,
-    client_factory: Option<MCPTransportClientFactory>,
+    client_builder: Option<MCPTransportClientBuilder>,
     current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
@@ -618,7 +618,7 @@ impl MCPServerStreamableHttp {
             name: name.into(),
             params,
             connected: Arc::new(AtomicBool::new(false)),
-            client_factory: None,
+            client_builder: None,
             current_client: Arc::new(StdMutex::new(None)),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
@@ -626,8 +626,8 @@ impl MCPServerStreamableHttp {
         }
     }
 
-    pub fn with_client_factory(mut self, client_factory: MCPTransportClientFactory) -> Self {
-        self.client_factory = Some(client_factory);
+    pub fn with_client_builder(mut self, client_builder: MCPTransportClientBuilder) -> Self {
+        self.client_builder = Some(client_builder);
         self
     }
 
@@ -681,9 +681,9 @@ impl MCPServerStreamableHttp {
 
     fn build_client(&self) -> Arc<dyn MCPTransportClient> {
         let config = self.client_config();
-        self.client_factory
+        self.client_builder
             .as_ref()
-            .map(|factory| factory(config.clone()))
+            .map(|builder| builder(config.clone()))
             .unwrap_or_else(|| Arc::new(DefaultMCPTransportClient::new(config)))
     }
 }
@@ -826,11 +826,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sse_transport_preserves_auth_and_client_factory_configuration() {
+    async fn sse_transport_preserves_auth_and_client_builder_configuration() {
         let seen = Arc::new(StdMutex::new(Vec::new()));
         let capture = seen.clone();
         let state = Arc::new(TestTransportState::default());
-        let factory_state = state.clone();
+        let builder_state = state.clone();
         let server = MCPServerSse::new(
             "docs",
             MCPServerSseParams {
@@ -841,11 +841,11 @@ mod tests {
                 auth: Some(MCPTransportAuth::basic("user", "pass")),
             },
         )
-        .with_client_factory(Arc::new(move |config| {
+        .with_client_builder(Arc::new(move |config| {
             capture.lock().expect("capture mutex").push(config.clone());
             Arc::new(TestTransportClient::new(
                 config,
-                factory_state.clone(),
+                builder_state.clone(),
                 None,
             ))
         }));
@@ -870,13 +870,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streamable_http_transport_preserves_factory_and_session_id_semantics() {
+    async fn streamable_http_transport_preserves_builder_and_session_id_semantics() {
         let seen = Arc::new(StdMutex::new(Vec::new()));
         let capture = seen.clone();
         let state = Arc::new(TestTransportState::default());
         let next_generated_session = Arc::new(AtomicUsize::new(0));
-        let factory_state = state.clone();
-        let factory_session = next_generated_session.clone();
+        let builder_state = state.clone();
+        let builder_session = next_generated_session.clone();
         let generated = MCPServerStreamableHttp::new(
             "docs",
             MCPServerStreamableHttpParams {
@@ -888,23 +888,23 @@ mod tests {
                 session_id: None,
             },
         )
-        .with_client_factory(Arc::new(move |config| {
+        .with_client_builder(Arc::new(move |config| {
             capture.lock().expect("capture mutex").push(config.clone());
-            let sequence = factory_session.fetch_add(1, Ordering::SeqCst);
+            let sequence = builder_session.fetch_add(1, Ordering::SeqCst);
             Arc::new(TestTransportClient::new(
                 config,
-                factory_state.clone(),
-                Some(format!("factory-session-{sequence}")),
+                builder_state.clone(),
+                Some(format!("builder-session-{sequence}")),
             ))
         }));
 
         assert_eq!(generated.session_id(), None);
         generated.connect().await.expect("connect should succeed");
-        assert_eq!(generated.session_id(), Some("factory-session-0".to_owned()));
+        assert_eq!(generated.session_id(), Some("builder-session-0".to_owned()));
         generated.cleanup().await.expect("cleanup should succeed");
         assert_eq!(generated.session_id(), None);
         generated.connect().await.expect("reconnect should succeed");
-        assert_eq!(generated.session_id(), Some("factory-session-1".to_owned()));
+        assert_eq!(generated.session_id(), Some("builder-session-1".to_owned()));
         assert_eq!(state.connect_calls.load(Ordering::SeqCst), 2);
         generated.cleanup().await.expect("cleanup should succeed");
         assert_eq!(state.cleanup_calls.load(Ordering::SeqCst), 2);

@@ -10,8 +10,8 @@ pub use server::{
     MCPReadResourceResult, MCPResource, MCPResourceContents, MCPResourceTemplate, MCPServer,
     MCPServerSse, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
     MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
-    MCPToolAnnotations, MCPTransportAuth, MCPTransportClient, MCPTransportClientConfig,
-    MCPTransportClientFactory, MCPTransportKind, RequireApprovalObject, RequireApprovalToolList,
+    MCPToolAnnotations, MCPTransportAuth, MCPTransportClient, MCPTransportClientBuilder,
+    MCPTransportClientConfig, MCPTransportKind, RequireApprovalObject, RequireApprovalToolList,
 };
 pub use util::{
     MCPToolMetaContext, MCPToolMetaResolver, MCPUtil, ToolFilter, ToolFilterCallable,

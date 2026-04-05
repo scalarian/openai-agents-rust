@@ -121,7 +121,7 @@ pub use mcp::{
     MCPServerManager, MCPServerSse, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
     MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
     MCPToolAnnotations, MCPToolMetaContext, MCPToolMetaResolver, MCPTransportAuth,
-    MCPTransportClient, MCPTransportClientConfig, MCPTransportClientFactory, MCPTransportKind,
+    MCPTransportClient, MCPTransportClientBuilder, MCPTransportClientConfig, MCPTransportKind,
     MCPUtil, RequireApprovalObject, RequireApprovalToolList, ToolFilter, ToolFilterCallable,
     ToolFilterContext, ToolFilterStatic, create_static_tool_filter,
 };
