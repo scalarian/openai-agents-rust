@@ -5,11 +5,19 @@ use futures::StreamExt;
 
 use crate::events::{VoiceStreamEvent, VoiceStreamEventError, VoiceStreamEventLifecycle};
 use crate::input::{AudioInput, StreamedAudioInput};
-use crate::model::{STTModelSettings, TTSModel, TTSModelSettings, VoiceModelProvider};
+use crate::model::{TTSModel, TTSModelSettings, VoiceModelProvider};
 use crate::openai_model_provider::OpenAIVoiceModelProvider;
 use crate::pipeline_config::VoicePipelineConfig;
 use crate::result::{StreamedAudioResult, VoiceStreamRecorder};
 use crate::workflow::VoiceWorkflowBase;
+
+#[cfg(test)]
+use async_trait::async_trait;
+#[cfg(test)]
+use tokio::sync::Mutex;
+
+#[cfg(test)]
+use crate::model::{STTModel, STTModelSettings, StreamedTranscriptionSession};
 
 #[derive(Clone)]
 pub struct VoicePipeline {
@@ -44,7 +52,7 @@ impl VoicePipeline {
         let stt_model = self.model_provider.stt_model();
         let tts_model = self.model_provider.tts_model();
         let transcription = stt_model
-            .transcribe(&input, &STTModelSettings::default())
+            .transcribe(&input, &self.config.stt_settings)
             .await?;
         self.run_transcription(workflow, transcription, tts_model)
             .await
@@ -57,9 +65,7 @@ impl VoicePipeline {
     ) -> Result<StreamedAudioResult> {
         let stt_model = self.model_provider.stt_model();
         let tts_model = self.model_provider.tts_model();
-        let mut session = stt_model
-            .start_session(&STTModelSettings::default())
-            .await?;
+        let mut session = stt_model.start_session(&self.config.stt_settings).await?;
         for chunk in input.chunks {
             session.push_audio(&chunk).await?;
         }
@@ -77,6 +83,7 @@ impl VoicePipeline {
         let recorder = VoiceStreamRecorder::new(self.config.stream_audio);
         let result = recorder.result();
         let workflow = workflow.clone();
+        let tts_settings = self.config.tts_settings.clone();
 
         tokio::spawn(async move {
             recorder
@@ -93,12 +100,12 @@ impl VoicePipeline {
             let completion = async {
                 let mut intro = Box::pin(workflow.on_start());
                 while let Some(chunk) = intro.next().await {
-                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?).await?;
+                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?, &tts_settings).await?;
                 }
 
                 let mut text_stream = Box::pin(workflow.run(transcription));
                 while let Some(chunk) = text_stream.next().await {
-                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?).await?;
+                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?, &tts_settings).await?;
                 }
 
                 Result::<()>::Ok(())
@@ -134,15 +141,163 @@ impl VoicePipeline {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{VoiceStreamEvent, VoiceStreamEventAudio};
+    use futures::stream::{self, BoxStream};
+
+    #[derive(Clone, Default)]
+    struct RecordingProvider {
+        stt_settings: Arc<Mutex<Vec<STTModelSettings>>>,
+        tts_settings: Arc<Mutex<Vec<TTSModelSettings>>>,
+    }
+
+    impl VoiceModelProvider for RecordingProvider {
+        fn stt_model(&self) -> Box<dyn STTModel> {
+            Box::new(RecordingSttModel {
+                settings: self.stt_settings.clone(),
+            })
+        }
+
+        fn tts_model(&self) -> Box<dyn TTSModel> {
+            Box::new(RecordingTtsModel {
+                settings: self.tts_settings.clone(),
+            })
+        }
+    }
+
+    struct RecordingSttModel {
+        settings: Arc<Mutex<Vec<STTModelSettings>>>,
+    }
+
+    #[async_trait]
+    impl STTModel for RecordingSttModel {
+        async fn transcribe(
+            &self,
+            _input: &AudioInput,
+            settings: &STTModelSettings,
+        ) -> Result<String> {
+            self.settings.lock().await.push(settings.clone());
+            Ok("normalized transcript".to_owned())
+        }
+
+        async fn start_session(
+            &self,
+            settings: &STTModelSettings,
+        ) -> Result<Box<dyn StreamedTranscriptionSession>> {
+            self.settings.lock().await.push(settings.clone());
+            Ok(Box::new(RecordingSession::default()))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSession {
+        transcript: String,
+    }
+
+    #[async_trait]
+    impl StreamedTranscriptionSession for RecordingSession {
+        async fn push_audio(&mut self, chunk: &[u8]) -> Result<()> {
+            self.transcript.push_str(&format!("[{}]", chunk.len()));
+            Ok(())
+        }
+
+        async fn finish(&mut self) -> Result<String> {
+            Ok(std::mem::take(&mut self.transcript))
+        }
+    }
+
+    struct RecordingTtsModel {
+        settings: Arc<Mutex<Vec<TTSModelSettings>>>,
+    }
+
+    #[async_trait]
+    impl TTSModel for RecordingTtsModel {
+        async fn synthesize(
+            &self,
+            _text: &str,
+            settings: &TTSModelSettings,
+        ) -> Result<Vec<VoiceStreamEvent>> {
+            self.settings.lock().await.push(settings.clone());
+            Ok(vec![VoiceStreamEvent::Audio(VoiceStreamEventAudio {
+                data: Some(vec![1.0]),
+            })])
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticWorkflow;
+
+    impl VoiceWorkflowBase for StaticWorkflow {
+        fn run(&self, transcription: String) -> BoxStream<'static, Result<String>> {
+            stream::iter(vec![Ok(transcription)]).boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_forwards_configured_stt_and_tts_settings() {
+        let provider = Arc::new(RecordingProvider::default());
+        let pipeline = VoicePipeline::new(VoicePipelineConfig {
+            stream_audio: true,
+            split_sentences: false,
+            stt_settings: STTModelSettings {
+                model: Some("whisper-1".to_owned()),
+                language: Some("en".to_owned()),
+                prompt: Some("be accurate".to_owned()),
+            },
+            tts_settings: TTSModelSettings {
+                model: Some("gpt-4o-mini-tts".to_owned()),
+                voice: Some("fable".to_owned()),
+                speed: Some(1.25),
+            },
+        })
+        .with_model_provider(provider.clone());
+
+        let result = pipeline
+            .run(
+                &StaticWorkflow,
+                AudioInput {
+                    mime_type: "audio/wav".to_owned(),
+                    bytes: vec![1, 2, 3],
+                },
+            )
+            .await
+            .expect("pipeline should succeed");
+
+        let completed = result
+            .wait_for_completion()
+            .await
+            .expect("pipeline should complete");
+
+        assert_eq!(completed.audio_chunks, 1);
+        assert_eq!(
+            provider.stt_settings.lock().await.as_slice(),
+            &[STTModelSettings {
+                model: Some("whisper-1".to_owned()),
+                language: Some("en".to_owned()),
+                prompt: Some("be accurate".to_owned()),
+            }]
+        );
+        assert_eq!(
+            provider.tts_settings.lock().await.as_slice(),
+            &[TTSModelSettings {
+                model: Some("gpt-4o-mini-tts".to_owned()),
+                voice: Some("fable".to_owned()),
+                speed: Some(1.25),
+            }]
+        );
+    }
+}
+
 async fn synthesize_chunk(
     recorder: &VoiceStreamRecorder,
     tts_model: &dyn TTSModel,
     text: String,
+    settings: &TTSModelSettings,
 ) -> Result<()> {
     recorder.push_transcript(text.clone()).await;
-    let synthesized = tts_model
-        .synthesize(&text, &TTSModelSettings::default())
-        .await?;
+    let synthesized = tts_model.synthesize(&text, settings).await?;
     recorder.push_events(synthesized).await;
     Ok(())
 }

@@ -78,3 +78,81 @@ async fn voice_pipeline_supports_streamed_audio_input() {
         |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "session_ended")
     ));
 }
+
+#[tokio::test]
+async fn voice_pipeline_suppresses_audio_for_buffered_input_when_streaming_disabled() {
+    let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: false,
+        ..VoicePipelineConfig::default()
+    });
+
+    let result = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![9, 8, 7],
+            },
+        )
+        .await
+        .expect("buffered pipeline should start");
+    let completed = result
+        .wait_for_completion()
+        .await
+        .expect("buffered pipeline should complete");
+
+    assert_eq!(
+        completed.transcript,
+        vec!["transcribed:audio/wav:3".to_owned()]
+    );
+    assert_eq!(completed.audio_chunks, 0);
+    assert!(
+        completed
+            .events
+            .iter()
+            .all(|event| !matches!(event, VoiceStreamEvent::Audio(_)))
+    );
+}
+
+#[tokio::test]
+async fn single_agent_voice_workflow_retains_state_across_pipeline_turns() {
+    let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: false,
+        ..VoicePipelineConfig::default()
+    });
+
+    let first = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1],
+            },
+        )
+        .await
+        .expect("first turn should start")
+        .wait_for_completion()
+        .await
+        .expect("first turn should complete");
+    let second = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1, 2],
+            },
+        )
+        .await
+        .expect("second turn should start")
+        .wait_for_completion()
+        .await
+        .expect("second turn should complete");
+
+    assert_eq!(first.transcript, vec!["transcribed:audio/wav:1".to_owned()]);
+    assert_eq!(
+        second.transcript,
+        vec!["transcribed:audio/wav:2".to_owned()]
+    );
+}

@@ -173,3 +173,41 @@ impl VoiceWorkflowBase for SingleAgentVoiceWorkflow {
         .boxed()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SingleAgentVoiceWorkflow;
+    use crate::workflow::VoiceWorkflowBase;
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn single_agent_workflow_carries_state_across_turns() {
+        let workflow =
+            SingleAgentVoiceWorkflow::new(agents_core::Agent::builder("assistant").build());
+
+        let first = workflow
+            .run("hello".to_owned())
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<agents_core::Result<Vec<_>>>()
+            .expect("first turn should succeed");
+        let second = workflow
+            .run("again".to_owned())
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<agents_core::Result<Vec<_>>>()
+            .expect("second turn should succeed");
+
+        assert_eq!(first, vec!["hello".to_owned()]);
+        assert_eq!(second, vec!["again".to_owned()]);
+
+        let state = workflow.state.lock().await;
+        assert!(
+            state.input_history.len() >= 4,
+            "workflow should retain both user turns and generated responses"
+        );
+        assert_eq!(state.current_agent.name, "assistant");
+    }
+}
