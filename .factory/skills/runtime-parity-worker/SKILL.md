@@ -26,7 +26,7 @@ Use this skill for features that change Rust runtime behavior, add or deepen sem
    - prefer crate-local unit tests for helpers/state machines
    - prefer `crates/openai-agents/tests/*.rs` for cross-crate semantics
    - if the feature changes parity audits, add the failing audit/assertion test first
-5. Run the smallest relevant test command and confirm it fails for the intended reason before implementation.
+5. Run the smallest relevant test command and confirm it fails for the intended reason before implementation. If the feature is audit-oriented and the real gap is missing executable coverage around behavior that already works, capture that explicitly in the transcript and in the handoff instead of pretending there was a runtime failure.
 6. Implement the runtime change using existing crate boundaries and public facade patterns:
    - preserve the current crate split and facade
    - preserve existing landed parity behavior unless it is off-truth
