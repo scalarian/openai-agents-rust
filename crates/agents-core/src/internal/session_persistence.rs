@@ -6,10 +6,10 @@ use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_EMPTY_JSON_OBJECT_IDENTITY: AtomicU64 = AtomicU64::new(1);
+const EMPTY_JSON_OBJECT_SIDECAR_PREFIX: &str = "__agents_internal_empty_object_identity_";
 
 pub(crate) async fn prepare_input_with_session(
     input: &[InputItem],
@@ -49,9 +49,10 @@ pub(crate) async fn prepare_input_with_session(
 
             for item in &combined {
                 let key = session_item_key(item);
+                let normalized_item = strip_empty_json_object_identity(item.clone());
                 if consume_reference(&mut new_refs, item) {
                     decrement_count(&mut new_counts, &key);
-                    session_input_items.push(item.clone());
+                    session_input_items.push(normalized_item.clone());
                     continue;
                 }
                 if consume_reference(&mut history_refs, item) {
@@ -61,7 +62,7 @@ pub(crate) async fn prepare_input_with_session(
                 if prefers_new_frequency_match(item) {
                     if new_counts.get(&key).copied().unwrap_or_default() > 0 {
                         decrement_count(&mut new_counts, &key);
-                        session_input_items.push(item.clone());
+                        session_input_items.push(normalized_item.clone());
                         continue;
                     }
                     if history_counts.get(&key).copied().unwrap_or_default() > 0 {
@@ -75,15 +76,21 @@ pub(crate) async fn prepare_input_with_session(
                     }
                     if new_counts.get(&key).copied().unwrap_or_default() > 0 {
                         decrement_count(&mut new_counts, &key);
-                        session_input_items.push(item.clone());
+                        session_input_items.push(normalized_item.clone());
                         continue;
                     }
                 }
 
-                session_input_items.push(item.clone());
+                session_input_items.push(normalized_item);
             }
 
-            (combined, session_input_items)
+            (
+                combined
+                    .into_iter()
+                    .map(strip_empty_json_object_identity)
+                    .collect(),
+                session_input_items,
+            )
         } else {
             let mut prepared = history;
             prepared.extend(original_input.clone());
@@ -192,7 +199,8 @@ fn decrement_count(counts: &mut HashMap<String, usize>, key: &str) {
 }
 
 fn session_item_key(item: &InputItem) -> String {
-    serde_json::to_string(item).expect("input items should serialize")
+    serde_json::to_string(&strip_empty_json_object_identity(item.clone()))
+        .expect("input items should serialize")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,10 +228,11 @@ fn json_value_identity(value: &serde_json::Value) -> Option<InputItemIdentity> {
             Some(InputItemIdentity::JsonArray(values.as_ptr() as usize))
         }
         serde_json::Value::Object(map) => {
+            if let Some(identity) = empty_json_object_identity(map) {
+                return Some(InputItemIdentity::EmptyJsonObject(identity));
+            }
             if map.is_empty() {
-                return Some(InputItemIdentity::EmptyJsonObject(
-                    empty_json_object_identity(map),
-                ));
+                return None;
             }
             map.iter()
                 .next()
@@ -249,26 +258,53 @@ fn seed_empty_json_object_identity(items: &mut [InputItem]) {
         }
 
         let sentinel_key = format!(
-            "__agents_internal_empty_object_identity_{}__",
+            "{EMPTY_JSON_OBJECT_SIDECAR_PREFIX}{}__",
             NEXT_EMPTY_JSON_OBJECT_IDENTITY.fetch_add(1, Ordering::Relaxed)
         );
-        map.insert(sentinel_key.clone(), serde_json::Value::Null);
-        map.remove(&sentinel_key);
+        map.insert(
+            sentinel_key.clone(),
+            serde_json::Value::String(sentinel_key.clone()),
+        );
     }
 }
 
-fn empty_json_object_identity(map: &serde_json::Map<String, serde_json::Value>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    let map_bytes = unsafe {
-        // Internal-only: callback-owned empty objects are "touched" before the callback runs,
-        // which seeds stable backing state that survives moves while remaining semantically `{}`.
-        std::slice::from_raw_parts(
-            (map as *const serde_json::Map<String, serde_json::Value>).cast::<u8>(),
-            std::mem::size_of::<serde_json::Map<String, serde_json::Value>>(),
-        )
+fn empty_json_object_identity(map: &serde_json::Map<String, serde_json::Value>) -> Option<u64> {
+    if map.len() != 1 {
+        return None;
+    }
+
+    let (key, value) = map.iter().next()?;
+    if !key.starts_with(EMPTY_JSON_OBJECT_SIDECAR_PREFIX) || !key.ends_with("__") {
+        return None;
+    }
+
+    let identity = key[EMPTY_JSON_OBJECT_SIDECAR_PREFIX.len()..key.len() - 2]
+        .parse::<u64>()
+        .ok()?;
+    let serde_json::Value::String(stored_key) = value else {
+        return None;
     };
-    map_bytes.hash(&mut hasher);
-    hasher.finish()
+    if stored_key != key {
+        return None;
+    }
+
+    Some(identity)
+}
+
+fn strip_empty_json_object_identity(item: InputItem) -> InputItem {
+    match item {
+        InputItem::Json {
+            value: serde_json::Value::Object(mut map),
+        } => {
+            if let Some(identity) = empty_json_object_identity(&map) {
+                map.remove(&format!("{EMPTY_JSON_OBJECT_SIDECAR_PREFIX}{identity}__"));
+            }
+            InputItem::Json {
+                value: serde_json::Value::Object(map),
+            }
+        }
+        other => other,
+    }
 }
 
 fn prefers_new_frequency_match(item: &InputItem) -> bool {
@@ -480,5 +516,29 @@ mod tests {
     #[tokio::test]
     async fn session_input_callback_preserves_duplicate_json_null_provenance() {
         assert_session_input_callback_preserves_duplicate_json_value_provenance(Value::Null).await;
+    }
+
+    #[test]
+    fn empty_json_object_sidecars_are_unique_and_strip_cleanly() {
+        let mut items = vec![
+            InputItem::Json { value: json!({}) },
+            InputItem::Json { value: json!({}) },
+        ];
+
+        seed_empty_json_object_identity(&mut items);
+
+        let left_identity = input_item_identity(&items[0]);
+        let right_identity = input_item_identity(&items[1]);
+        assert_ne!(left_identity, right_identity);
+        assert_eq!(session_item_key(&items[0]), r#"{"type":"json","value":{}}"#);
+        assert_eq!(session_item_key(&items[1]), r#"{"type":"json","value":{}}"#);
+        assert_eq!(
+            strip_empty_json_object_identity(items[0].clone()),
+            InputItem::Json { value: json!({}) }
+        );
+        assert_eq!(
+            strip_empty_json_object_identity(items[1].clone()),
+            InputItem::Json { value: json!({}) }
+        );
     }
 }
