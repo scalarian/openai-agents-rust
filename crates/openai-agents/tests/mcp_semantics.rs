@@ -230,6 +230,19 @@ async fn runner_calls_mcp_tools_in_streamed_runs() {
     );
     assert!(!events.is_empty());
     assert_eq!(server_state.tool_calls.load(Ordering::SeqCst), 1);
+    assert!(result.new_items.iter().any(|item| {
+        matches!(
+            item,
+            RunItem::ToolCallOutput {
+                tool_name,
+                call_id,
+                namespace,
+                ..
+            } if tool_name == "lookup"
+                && call_id.as_deref() == Some("call-mcp-1")
+                && namespace.as_deref() == Some("docs")
+        )
+    }));
 }
 
 #[tokio::test]

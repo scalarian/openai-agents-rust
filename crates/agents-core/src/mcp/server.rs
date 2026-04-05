@@ -456,6 +456,8 @@ mod tests {
             .await
             .expect_err("unconnected resource listing should fail");
         assert!(matches!(error, AgentsError::User(_)));
+        assert!(server.list_resource_templates(None).await.is_err());
+        assert!(server.read_resource("file:///readme.md").await.is_err());
 
         server.connect().await.expect("connect should succeed");
 
@@ -475,5 +477,14 @@ mod tests {
         assert_eq!(resources.resources.len(), 1);
         assert_eq!(templates.resource_templates.len(), 1);
         assert_eq!(content.contents.len(), 1);
+        let unknown = server
+            .read_resource("file:///missing.md")
+            .await
+            .expect_err("unknown resource should fail");
+        assert!(
+            unknown
+                .to_string()
+                .contains("resource `file:///missing.md` not found")
+        );
     }
 }

@@ -361,4 +361,84 @@ mod tests {
             .expect("tool should run");
         assert!(matches!(output, ToolOutput::Text(_)));
     }
+
+    #[tokio::test]
+    async fn applies_static_and_callable_tool_filters() {
+        let server = Arc::new(FakeServer) as Arc<dyn MCPServer>;
+        let run_context = RunContextWrapper::new(RunContext::default());
+        let agent = Agent::builder("assistant").build();
+
+        let static_tools = MCPUtil::list_tools_filtered_connected(
+            server.clone(),
+            Some(&ToolFilter::Static(ToolFilterStatic {
+                allowed_tool_names: Some(vec!["lookup".to_owned()]),
+                blocked_tool_names: Some(vec!["other".to_owned()]),
+            })),
+            run_context.clone(),
+            agent.clone(),
+        )
+        .await
+        .expect("static filter should succeed");
+        assert_eq!(static_tools.len(), 1);
+
+        let callable_filter: ToolFilterCallable =
+            Arc::new(|context, tool| context.server_name == "test-server" && tool.name == "lookup");
+        let callable_tools = MCPUtil::list_tools_filtered_connected(
+            server,
+            Some(&ToolFilter::Callable(callable_filter)),
+            run_context,
+            agent,
+        )
+        .await
+        .expect("callable filter should succeed");
+        assert_eq!(callable_tools.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn metadata_resolver_and_approval_mapping_flow_into_function_tool() {
+        let server = Arc::new(FakeServer) as Arc<dyn MCPServer>;
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let resolver_captured = captured.clone();
+        let resolver: MCPToolMetaResolver = Arc::new(move |context| {
+            resolver_captured
+                .lock()
+                .expect("capture mutex")
+                .push((context.server_name, context.tool_name));
+            Some(json!({"request_id":"req-123"}))
+        });
+        let run_context = RunContextWrapper::new(RunContext::default());
+        let agent = Agent::builder("assistant").build();
+        let tools = MCPUtil::get_function_tools_connected(
+            server,
+            None,
+            run_context.clone(),
+            agent,
+            Some(resolver),
+        )
+        .await
+        .expect("tools should load");
+
+        assert_eq!(tools.len(), 1);
+        assert!(tools[0].needs_approval);
+        assert_eq!(tools[0].definition.namespace.as_deref(), Some("mcp"));
+
+        let output = tools[0]
+            .invoke(
+                crate::tool_context::ToolContext::new(
+                    run_context,
+                    "lookup",
+                    "call-1",
+                    "{\"q\":\"hello\"}",
+                ),
+                json!({"q":"hello"}),
+            )
+            .await
+            .expect("tool should run");
+
+        assert!(matches!(output, ToolOutput::Text(_)));
+        assert_eq!(
+            captured.lock().expect("capture mutex").as_slice(),
+            [("test-server".to_owned(), "lookup".to_owned())]
+        );
+    }
 }

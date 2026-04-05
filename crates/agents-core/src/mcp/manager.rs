@@ -73,10 +73,19 @@ impl MCPServerManager {
         let servers = self.all_servers.clone();
         let mut active = Vec::new();
         for server in &servers {
-            if self.connect_server(server).await? {
-                active.push(server.clone());
-            } else if !self.drop_failed_servers {
-                active.push(server.clone());
+            match self.connect_server(server).await {
+                Ok(true) => active.push(server.clone()),
+                Ok(false) => {
+                    if !self.drop_failed_servers {
+                        active.push(server.clone());
+                    }
+                }
+                Err(error) => {
+                    let _ = self.cleanup_connected_servers(Some(server.clone())).await;
+                    self.connected_server_names.clear();
+                    self.active_servers.clear();
+                    return Err(error);
+                }
             }
         }
 
@@ -127,14 +136,30 @@ impl MCPServerManager {
     }
 
     pub async fn cleanup_all(&mut self) -> Result<()> {
+        self.cleanup_connected_servers(None).await?;
+        self.connected_server_names.clear();
+        self.active_servers.clear();
+        Ok(())
+    }
+
+    async fn cleanup_connected_servers(
+        &mut self,
+        extra_server: Option<Arc<dyn MCPServer>>,
+    ) -> Result<()> {
         let connected = self.connected_server_names.clone();
+        let mut cleaned = HashSet::new();
+
+        if let Some(server) = extra_server {
+            cleaned.insert(server.name().to_owned());
+            server.cleanup().await?;
+        }
+
         for server in self.all_servers.iter().rev() {
-            if connected.contains(server.name()) {
+            if connected.contains(server.name()) && cleaned.insert(server.name().to_owned()) {
                 server.cleanup().await?;
             }
         }
-        self.connected_server_names.clear();
-        self.active_servers.clear();
+
         Ok(())
     }
 }
@@ -143,6 +168,7 @@ impl MCPServerManager {
 mod tests {
     use async_trait::async_trait;
     use serde_json::Value;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::errors::{AgentsError, Result};
@@ -175,6 +201,47 @@ mod tests {
 
         async fn list_tools(&self) -> Result<Vec<MCPTool>> {
             Ok(self.tools.clone())
+        }
+
+        async fn call_tool(
+            &self,
+            _tool_name: &str,
+            _arguments: Value,
+            _meta: Option<Value>,
+        ) -> Result<ToolOutput> {
+            Ok(ToolOutput::from("ok"))
+        }
+    }
+
+    struct CountingServer {
+        name: String,
+        fail_connects_remaining: AtomicUsize,
+        cleanup_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl MCPServer for CountingServer {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        async fn connect(&self) -> Result<()> {
+            let remaining = self.fail_connects_remaining.load(Ordering::SeqCst);
+            if remaining > 0 {
+                self.fail_connects_remaining.fetch_sub(1, Ordering::SeqCst);
+                Err(AgentsError::message("connect failed"))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn cleanup(&self) -> Result<()> {
+            self.cleanup_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn list_tools(&self) -> Result<Vec<MCPTool>> {
+            Ok(Vec::new())
         }
 
         async fn call_tool(
@@ -221,6 +288,68 @@ mod tests {
         manager.reconnect(true).await.expect("retry should succeed");
 
         assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn strict_connect_cleans_up_connected_servers_and_clears_state() {
+        let stable = Arc::new(CountingServer {
+            name: "stable".to_owned(),
+            fail_connects_remaining: AtomicUsize::new(0),
+            cleanup_calls: AtomicUsize::new(0),
+        });
+        let flaky = Arc::new(CountingServer {
+            name: "flaky".to_owned(),
+            fail_connects_remaining: AtomicUsize::new(1),
+            cleanup_calls: AtomicUsize::new(0),
+        });
+        let mut manager = MCPServerManager::new(vec![
+            stable.clone() as Arc<dyn MCPServer>,
+            flaky.clone() as Arc<dyn MCPServer>,
+        ]);
+        manager.strict = true;
+
+        let error = manager
+            .connect_all()
+            .await
+            .err()
+            .expect("strict connect should fail");
+        assert!(error.to_string().contains("connect failed"));
+        assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 1);
+        assert!(manager.active_servers().is_empty());
+        assert!(manager.connected_server_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconnect_failed_only_retries_failed_subset() {
+        let stable = Arc::new(CountingServer {
+            name: "stable".to_owned(),
+            fail_connects_remaining: AtomicUsize::new(0),
+            cleanup_calls: AtomicUsize::new(0),
+        });
+        let flaky = Arc::new(CountingServer {
+            name: "flaky".to_owned(),
+            fail_connects_remaining: AtomicUsize::new(1),
+            cleanup_calls: AtomicUsize::new(0),
+        });
+        let mut manager = MCPServerManager::new(vec![
+            stable.clone() as Arc<dyn MCPServer>,
+            flaky.clone() as Arc<dyn MCPServer>,
+        ]);
+
+        manager
+            .connect_all()
+            .await
+            .expect("initial connect should succeed");
+        assert_eq!(manager.active_server_names(), vec!["stable".to_owned()]);
+
+        manager
+            .reconnect(true)
+            .await
+            .expect("retry should reconnect only failed server");
+
+        assert_eq!(manager.active_server_names().len(), 2);
+        assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
