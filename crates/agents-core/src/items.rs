@@ -2,6 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub type TResponseInputItem = InputItem;
+
 /// Input items passed into a run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -97,6 +99,78 @@ pub enum RunItem {
     Reasoning {
         text: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CompactionItem {
+    pub raw_item: InputItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MessageOutputItem {
+    pub raw_item: OutputItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ReasoningItem {
+    pub raw_item: RunItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolCallItem {
+    pub raw_item: RunItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolCallOutputItem {
+    pub raw_item: RunItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HandoffCallItem {
+    pub raw_item: RunItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HandoffOutputItem {
+    pub raw_item: RunItem,
+    pub source_agent: Option<String>,
+    pub target_agent: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPApprovalRequestItem {
+    pub raw_item: InputItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPApprovalResponseItem {
+    pub raw_item: InputItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolApprovalItem {
+    pub raw_item: InputItem,
+}
+
+pub struct ItemHelpers;
+
+impl ItemHelpers {
+    pub fn to_input_item(item: &RunItem) -> Option<InputItem> {
+        item.to_input_item()
+    }
+
+    pub fn to_input_items(items: &[RunItem]) -> Vec<InputItem> {
+        items.iter().filter_map(Self::to_input_item).collect()
+    }
+
+    pub fn extract_text(item: &OutputItem) -> Option<&str> {
+        item.as_text()
+    }
+
+    pub fn is_tool_call(item: &RunItem) -> bool {
+        matches!(item, RunItem::ToolCall { .. })
+    }
 }
 
 impl RunItem {

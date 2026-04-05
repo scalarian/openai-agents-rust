@@ -48,6 +48,7 @@ pub use fake_id::{FAKE_RESPONSES_ID, fake_id};
 pub use memory::{
     OpenAIConversationsSession, OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession,
 };
+pub use models::OpenAIResponsesWsModel as OpenAIResponsesWSModel;
 pub use models::{
     OpenAIChatCompletionsModel, OpenAIClientOptions, OpenAIResponsesModel, OpenAIResponsesWsModel,
 };
@@ -56,6 +57,7 @@ pub use reasoning_content_replay::{
     ReasoningContentReplayContext, ReasoningContentSource, default_should_replay_reasoning_content,
 };
 pub use tools::{
+    CodeInterpreterTool, FileSearchTool, ImageGenerationTool, ToolSearchTool, WebSearchTool,
     code_interpreter_tool, file_search_tool, image_generation_tool, tool_search_tool,
     web_search_tool,
 };

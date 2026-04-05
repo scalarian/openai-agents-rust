@@ -26,3 +26,5 @@ impl Editor {
         }
     }
 }
+
+pub type ApplyPatchEditor = Editor;

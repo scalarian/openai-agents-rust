@@ -10,11 +10,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::_tool_identity::tool_qualified_name;
+use crate::computer::Computer;
 use crate::errors::{AgentsError, Result};
 use crate::function_schema::FunctionSchema;
 use crate::items::{OutputItem, RunItem};
+use crate::run_config::ToolErrorFormatterArgs;
+use crate::run_context::{RunContext, RunContextWrapper};
 use crate::tool_context::ToolContext;
 use crate::tool_guardrails::{ToolInputGuardrail, ToolOutputGuardrail};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolDefinition {
@@ -125,10 +129,20 @@ impl From<Value> for ToolOutput {
 #[derive(Clone, Debug)]
 pub struct FunctionToolResult {
     pub tool_name: String,
+    pub qualified_name: Option<String>,
     pub output: ToolOutput,
     pub run_item: Option<RunItem>,
     pub interruptions: Vec<RunItem>,
     pub agent_run_result: Option<Value>,
+}
+
+impl FunctionToolResult {
+    pub fn final_output_value(&self) -> Value {
+        match &self.output {
+            ToolOutput::Text(value) => Value::String(value.text.clone()),
+            _ => serde_json::to_value(&self.output).unwrap_or(Value::Null),
+        }
+    }
 }
 
 #[async_trait]
@@ -236,6 +250,226 @@ impl FunctionTool {
         self.definition.defer_loading = defer_loading;
         self
     }
+}
+
+pub type ApplyPatchTool = StaticTool;
+pub type ComputerTool = StaticTool;
+pub type HostedMCPTool = StaticTool;
+pub type LocalShellTool = StaticTool;
+pub type ShellTool = StaticTool;
+
+pub type ComputerCreate = Arc<
+    dyn Fn(RunContextWrapper<RunContext>) -> BoxFuture<'static, Result<Computer>> + Send + Sync,
+>;
+pub type ComputerDispose = Arc<
+    dyn Fn(RunContextWrapper<RunContext>, Computer) -> BoxFuture<'static, Result<()>> + Send + Sync,
+>;
+
+#[derive(Clone)]
+pub struct ComputerProvider {
+    pub create: ComputerCreate,
+    pub dispose: Option<ComputerDispose>,
+}
+
+impl std::fmt::Debug for ComputerProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComputerProvider")
+            .field("create", &"<function>")
+            .field("dispose", &self.dispose.as_ref().map(|_| "<function>"))
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocalShellCommandRequest {
+    pub command: String,
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellCommandRequest {
+    pub command: String,
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellActionRequest {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellCommandOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellCallData {
+    pub call_id: Option<String>,
+    pub request: ShellCommandRequest,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellCallOutcome {
+    pub data: ShellCallData,
+    pub output: ShellCommandOutput,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellResult {
+    pub output: ShellCommandOutput,
+}
+
+pub type ShellExecutor = Arc<
+    dyn Fn(ShellCommandRequest) -> BoxFuture<'static, Result<ShellCommandOutput>> + Send + Sync,
+>;
+pub type LocalShellExecutor = Arc<
+    dyn Fn(LocalShellCommandRequest) -> BoxFuture<'static, Result<ShellCommandOutput>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPToolApprovalRequest {
+    pub call_id: String,
+    pub tool_name: String,
+    pub arguments: Value,
+    pub namespace: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPToolApprovalFunctionResult {
+    pub approved: bool,
+    pub reason: Option<String>,
+}
+
+pub type MCPToolApprovalFunction = Arc<
+    dyn Fn(MCPToolApprovalRequest) -> BoxFuture<'static, Result<MCPToolApprovalFunctionResult>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolHostedEnvironment {
+    pub image: Option<String>,
+    pub ephemeral: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolLocalEnvironment {
+    pub cwd: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolContainerAutoEnvironment {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolContainerReferenceEnvironment {
+    pub reference: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolContainerSkill {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolSkillReference {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolLocalSkill {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolInlineSkillSource {
+    pub language: Option<String>,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolInlineSkill {
+    pub name: String,
+    pub source: ShellToolInlineSkillSource,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolContainerNetworkPolicyAllowlist {
+    #[serde(default)]
+    pub domains: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolContainerNetworkPolicyDisabled {
+    pub disabled: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShellToolContainerNetworkPolicyDomainSecret {
+    pub domain: String,
+    pub secret_env_var: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ShellToolContainerNetworkPolicy {
+    Allowlist(ShellToolContainerNetworkPolicyAllowlist),
+    Disabled(ShellToolContainerNetworkPolicyDisabled),
+    DomainSecret(ShellToolContainerNetworkPolicyDomainSecret),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ShellToolEnvironment {
+    Hosted(ShellToolHostedEnvironment),
+    Local(ShellToolLocalEnvironment),
+    ContainerAuto(ShellToolContainerAutoEnvironment),
+    ContainerReference(ShellToolContainerReferenceEnvironment),
+}
+
+pub fn tool_namespace(definition: &ToolDefinition) -> Option<&str> {
+    definition.namespace.as_deref()
+}
+
+pub async fn resolve_computer(
+    run_context: &RunContextWrapper<RunContext>,
+    computer: Option<Computer>,
+    provider: Option<&ComputerProvider>,
+) -> Result<Option<Computer>> {
+    match (computer, provider) {
+        (Some(computer), _) => Ok(Some(computer)),
+        (None, Some(provider)) => (provider.create)(run_context.clone()).await.map(Some),
+        (None, None) => Ok(None),
+    }
+}
+
+pub async fn dispose_resolved_computers(
+    run_context: &RunContextWrapper<RunContext>,
+    provider: Option<&ComputerProvider>,
+    computer: Option<Computer>,
+) -> Result<()> {
+    if let (Some(provider), Some(computer)) = (provider, computer) {
+        let Some(dispose) = provider.dispose.as_ref() else {
+            return Ok(());
+        };
+        dispose(run_context.clone(), computer).await?;
+    }
+    Ok(())
+}
+
+pub fn default_tool_error_function<TContext>(args: &ToolErrorFormatterArgs<TContext>) -> String {
+    format!("Tool `{}` failed: {}", args.tool_name, args.default_message)
 }
 
 #[async_trait]

@@ -1,8 +1,122 @@
-use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
 
+use futures::future::BoxFuture;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::errors::Result;
 use crate::guardrail::{InputGuardrail, OutputGuardrail};
 use crate::handoff::Handoff;
-use crate::tool::{FunctionTool, StaticTool};
+use crate::run_context::{RunContext, RunContextWrapper};
+use crate::stream_events::StreamEvent;
+use crate::tool::{FunctionTool, FunctionToolResult, StaticTool};
+use crate::tool_context::ToolCall;
+
+pub type AgentBase = Agent;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopAtTools {
+    #[serde(default)]
+    pub stop_at_tool_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ToolsToFinalOutputResult {
+    pub is_final_output: bool,
+    pub final_output: Option<Value>,
+}
+
+impl ToolsToFinalOutputResult {
+    pub fn not_final() -> Self {
+        Self {
+            is_final_output: false,
+            final_output: None,
+        }
+    }
+
+    pub fn final_output(final_output: Value) -> Self {
+        Self {
+            is_final_output: true,
+            final_output: Some(final_output),
+        }
+    }
+}
+
+pub type ToolsToFinalOutputFunction = Arc<
+    dyn Fn(
+            RunContextWrapper<RunContext>,
+            Vec<FunctionToolResult>,
+        ) -> BoxFuture<'static, Result<ToolsToFinalOutputResult>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentToolStreamEvent {
+    pub event: StreamEvent,
+    pub agent: Agent,
+    pub tool_call: Option<ToolCall>,
+}
+
+#[derive(Clone, Default)]
+pub enum ToolUseBehavior {
+    #[default]
+    RunLlmAgain,
+    StopOnFirstTool,
+    StopAtTools(StopAtTools),
+    Custom(ToolsToFinalOutputFunction),
+}
+
+impl fmt::Debug for ToolUseBehavior {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RunLlmAgain => f.write_str("ToolUseBehavior::RunLlmAgain"),
+            Self::StopOnFirstTool => f.write_str("ToolUseBehavior::StopOnFirstTool"),
+            Self::StopAtTools(value) => f
+                .debug_tuple("ToolUseBehavior::StopAtTools")
+                .field(value)
+                .finish(),
+            Self::Custom(_) => f.write_str("ToolUseBehavior::Custom(<function>)"),
+        }
+    }
+}
+
+impl ToolUseBehavior {
+    pub async fn evaluate(
+        &self,
+        context: &RunContextWrapper<RunContext>,
+        tool_results: &[FunctionToolResult],
+    ) -> Result<ToolsToFinalOutputResult> {
+        if tool_results.is_empty() {
+            return Ok(ToolsToFinalOutputResult::not_final());
+        }
+
+        match self {
+            Self::RunLlmAgain => Ok(ToolsToFinalOutputResult::not_final()),
+            Self::StopOnFirstTool => Ok(ToolsToFinalOutputResult::final_output(
+                tool_results[0].final_output_value(),
+            )),
+            Self::StopAtTools(config) => {
+                for result in tool_results {
+                    if config.stop_at_tool_names.iter().any(|name| {
+                        name == &result.tool_name
+                            || result
+                                .qualified_name
+                                .as_ref()
+                                .is_some_and(|qualified_name| qualified_name == name)
+                    }) {
+                        return Ok(ToolsToFinalOutputResult::final_output(
+                            result.final_output_value(),
+                        ));
+                    }
+                }
+                Ok(ToolsToFinalOutputResult::not_final())
+            }
+            Self::Custom(handler) => handler(context.clone(), tool_results.to_vec()).await,
+        }
+    }
+}
 
 /// High-level agent definition.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -16,6 +130,8 @@ pub struct Agent {
     pub input_guardrails: Vec<InputGuardrail>,
     pub output_guardrails: Vec<OutputGuardrail>,
     pub model: Option<String>,
+    #[serde(skip, default)]
+    pub tool_use_behavior: ToolUseBehavior,
 }
 
 impl Agent {
@@ -92,6 +208,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn tool_use_behavior(mut self, tool_use_behavior: ToolUseBehavior) -> Self {
+        self.agent.tool_use_behavior = tool_use_behavior;
+        self
+    }
+
     pub fn input_guardrail(mut self, guardrail: InputGuardrail) -> Self {
         self.agent.input_guardrails.push(guardrail);
         self
@@ -137,5 +258,34 @@ mod tests {
         assert_eq!(agent.tools.len(), 1);
         assert_eq!(agent.function_tools.len(), 1);
         assert!(agent.find_function_tool("search", None).is_some());
+    }
+
+    #[tokio::test]
+    async fn stop_at_tools_matches_public_and_qualified_names() {
+        let behavior = ToolUseBehavior::StopAtTools(StopAtTools {
+            stop_at_tool_names: vec![
+                "lookup_account".to_owned(),
+                "billing.lookup_account".to_owned(),
+            ],
+        });
+        let context = RunContextWrapper::new(RunContext::default());
+
+        let result = behavior
+            .evaluate(
+                &context,
+                &[crate::tool::FunctionToolResult {
+                    tool_name: "lookup_account".to_owned(),
+                    qualified_name: Some("billing.lookup_account".to_owned()),
+                    output: crate::tool::ToolOutput::from("ok"),
+                    run_item: None,
+                    interruptions: Vec::new(),
+                    agent_run_result: None,
+                }],
+            )
+            .await
+            .expect("tool behavior should evaluate");
+
+        assert!(result.is_final_output);
+        assert_eq!(result.final_output, Some(Value::String("ok".to_owned())));
     }
 }

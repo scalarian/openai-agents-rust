@@ -69,7 +69,10 @@ pub use _tool_identity::{
     is_reserved_synthetic_tool_namespace, tool_qualified_name, tool_trace_name,
     validate_function_tool_namespace_shape,
 };
-pub use agent::{Agent, AgentBuilder};
+pub use agent::{
+    Agent, AgentBase, AgentBuilder, AgentToolStreamEvent, StopAtTools, ToolUseBehavior,
+    ToolsToFinalOutputFunction, ToolsToFinalOutputResult,
+};
 pub use agent_output::{AgentOutputSchema, AgentOutputSchemaBase};
 pub use agent_tool_input::{
     AgentAsToolInput, ResolvedToolInput, StructuredInputSchemaInfo, default_tool_input_builder,
@@ -80,10 +83,11 @@ pub use agent_tool_state::{
     peek_agent_tool_run_result, record_agent_tool_run_result, set_agent_tool_state_scope,
 };
 pub use apply_diff::apply_diff;
-pub use computer::Computer;
+pub use computer::{AsyncComputer, Button, Computer, Environment};
 pub use config::SdkConfig;
 pub use debug::DebugSettings;
-pub use editor::{ApplyPatchOperation, ApplyPatchResult, Editor};
+pub use editor::{ApplyPatchEditor, ApplyPatchOperation, ApplyPatchResult, Editor};
+pub use errors::AgentsError as AgentsException;
 pub use errors::{AgentsError, Result};
 pub use exceptions::{
     InputGuardrailTripwireTriggered, MaxTurnsExceeded, ModelBehaviorError,
@@ -96,21 +100,30 @@ pub use guardrail::{
     OutputGuardrailResult, input_guardrail, output_guardrail,
 };
 pub use handoff::{
-    Handoff, HandoffBuilder, HandoffHistoryMapper, HandoffInputData, HandoffInputFilter, handoff,
+    DEFAULT_CONVERSATION_HISTORY_END, DEFAULT_CONVERSATION_HISTORY_START, Handoff, HandoffBuilder,
+    HandoffHistoryMapper, HandoffInputData, HandoffInputFilter, default_handoff_history_mapper,
+    get_conversation_history_wrappers, handoff, nest_handoff_history,
+    reset_conversation_history_wrappers, set_conversation_history_wrappers,
 };
-pub use items::{InputItem, OutputItem, RunItem};
+pub use items::{
+    CompactionItem, HandoffCallItem, HandoffOutputItem, InputItem, ItemHelpers,
+    MCPApprovalRequestItem, MCPApprovalResponseItem, MessageOutputItem, OutputItem, ReasoningItem,
+    RunItem, TResponseInputItem, ToolApprovalItem, ToolCallItem, ToolCallOutputItem,
+};
 pub use lifecycle::{AgentHooks, RunHooks};
+pub use logger::{LOGGER_TARGET, enable_verbose_stdout_logging};
 pub use mcp::{
     MCPServer, MCPServerManager, MCPTool, MCPToolAnnotations, MCPToolMetaContext,
     MCPToolMetaResolver, MCPUtil, RequireApprovalObject, RequireApprovalToolList, ToolFilter,
     ToolFilterCallable, ToolFilterContext, ToolFilterStatic, create_static_tool_filter,
 };
+pub use memory::Session as SessionABC;
 pub use memory::{
     MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession,
     SQLiteSession, Session, SessionSettings, is_openai_responses_compaction_aware_session,
 };
 pub use model::{
-    Model, ModelProvider, ModelRequest, ModelResponse, get_default_model,
+    Model, ModelProvider, ModelRequest, ModelResponse, ModelTracing, get_default_model,
     get_default_model_settings, gpt_5_reasoning_settings_required, is_gpt_5_default,
 };
 pub use model_settings::{ModelSettings, ReasoningSettings};
@@ -122,15 +135,16 @@ pub use prompts::{
 };
 pub use repl::run_demo_loop;
 pub use result::RunResult;
-pub use result::RunResultStreaming;
+pub use result::{AgentToolInvocation, RunResultStreaming};
 pub use retry::{
     ModelRetryAdvice, ModelRetryAdviceRequest, ModelRetryBackoffSettings,
-    ModelRetryNormalizedError, ModelRetrySettings, RetryDecision, RetryPolicyContext,
+    ModelRetryNormalizedError, ModelRetrySettings, RetryDecision, RetryPolicy, RetryPolicyContext,
+    retry_policies,
 };
 pub use run::{Runner, run, run_with_session};
 pub use run_config::{
     CallModelData, DEFAULT_MAX_TURNS, ModelInputData, ReasoningItemIdPolicy, RunConfig, RunOptions,
-    ToolErrorFormatterArgs,
+    ToolErrorFormatter, ToolErrorFormatterArgs,
 };
 pub use run_context::{AgentHookContext, ApprovalRecord, RunContext, RunContextWrapper};
 pub use run_error_handlers::{
@@ -145,8 +159,19 @@ pub use stream_events::{
 };
 pub use strict_schema::ensure_strict_json_schema;
 pub use tool::{
-    FunctionTool, FunctionToolResult, StaticTool, Tool, ToolDefinition, ToolOutput,
-    ToolOutputFileContent, ToolOutputImage, ToolOutputText, function_tool,
+    ApplyPatchTool, ComputerProvider, ComputerTool, FunctionTool, FunctionToolResult,
+    HostedMCPTool, LocalShellCommandRequest, LocalShellExecutor, LocalShellTool,
+    MCPToolApprovalFunction, MCPToolApprovalFunctionResult, MCPToolApprovalRequest,
+    ShellActionRequest, ShellCallData, ShellCallOutcome, ShellCommandOutput, ShellCommandRequest,
+    ShellExecutor, ShellResult, ShellTool, ShellToolContainerAutoEnvironment,
+    ShellToolContainerNetworkPolicy, ShellToolContainerNetworkPolicyAllowlist,
+    ShellToolContainerNetworkPolicyDisabled, ShellToolContainerNetworkPolicyDomainSecret,
+    ShellToolContainerReferenceEnvironment, ShellToolContainerSkill, ShellToolEnvironment,
+    ShellToolHostedEnvironment, ShellToolInlineSkill, ShellToolInlineSkillSource,
+    ShellToolLocalEnvironment, ShellToolLocalSkill, ShellToolSkillReference, StaticTool, Tool,
+    ToolDefinition, ToolOutput, ToolOutputFileContent, ToolOutputImage, ToolOutputText,
+    default_tool_error_function, dispose_resolved_computers, function_tool, resolve_computer,
+    tool_namespace,
 };
 pub use tool_context::{ToolCall, ToolContext};
 pub use tool_guardrails::{
@@ -154,7 +179,15 @@ pub use tool_guardrails::{
     ToolInputGuardrailResult, ToolOutputGuardrail, ToolOutputGuardrailData,
     ToolOutputGuardrailResult, tool_input_guardrail, tool_output_guardrail,
 };
-pub use tracing::{Span, Trace};
+pub use tracing::{
+    AgentSpanData, CustomSpanData, FunctionSpanData, GenerationSpanData, GuardrailSpanData,
+    HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, Span, SpanData, SpanError,
+    SpeechGroupSpanData, SpeechSpanData, Trace, TracingProcessor, TranscriptionSpanData,
+    add_trace_processor, agent_span, custom_span, flush_traces, function_span, gen_group_id,
+    gen_span_id, gen_trace_id, generation_span, get_current_span, get_current_trace,
+    guardrail_span, handoff_span, mcp_tools_span, set_trace_processors, set_trace_provider,
+    set_tracing_disabled, speech_group_span, speech_span, trace, transcription_span,
+};
 pub use usage::Usage;
 pub use util::{
     MaybeAwaitable, attach_error_to_current_span, attach_error_to_span,

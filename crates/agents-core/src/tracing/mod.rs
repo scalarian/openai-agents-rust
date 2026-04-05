@@ -19,7 +19,8 @@ pub use config::TracingConfig;
 pub use context::{TraceCtxManager, create_trace_for_run};
 pub use create::{
     agent_span, custom_span, function_span, generation_span, get_current_span, get_current_trace,
-    guardrail_span, handoff_span, mcp_tools_span, response_span, trace,
+    guardrail_span, handoff_span, mcp_tools_span, response_span, speech_group_span, speech_span,
+    trace, transcription_span,
 };
 pub use model_tracing::get_model_tracing_impl;
 pub use processor_interface::{TracingExporter, TracingProcessor};
@@ -27,10 +28,15 @@ pub use processors::{
     BatchTraceProcessor, ConsoleSpanExporter, default_exporter, default_processor,
 };
 pub use provider::{DefaultTraceProvider, SynchronousMultiTracingProcessor, TraceProvider};
-pub use setup::{get_trace_provider, set_trace_provider};
+pub use setup::{
+    add_trace_processor, flush_traces, get_trace_provider, set_trace_processors,
+    set_trace_provider, set_tracing_disabled,
+};
 pub use span_data::{
     AgentSpanData, CustomSpanData, FunctionSpanData, GenerationSpanData, GuardrailSpanData,
-    HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, SpanData,
+    HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, SpanData, SpeechGroupSpanData,
+    SpeechSpanData, TranscriptionSpanData,
 };
 pub use spans::{Span, SpanError};
 pub use traces::Trace;
+pub use util::{gen_group_id, gen_span_id, gen_trace_id};

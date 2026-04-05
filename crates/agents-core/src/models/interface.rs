@@ -11,6 +11,25 @@ use crate::model_settings::ModelSettings;
 use crate::tool::ToolDefinition;
 use crate::usage::Usage;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTracing {
+    Disabled,
+    #[default]
+    Enabled,
+    EnabledWithoutData,
+}
+
+impl ModelTracing {
+    pub fn is_disabled(self) -> bool {
+        matches!(self, Self::Disabled)
+    }
+
+    pub fn include_data(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
 /// Model request shared across providers.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ModelRequest {

@@ -1,5 +1,11 @@
 use agents_core::StaticTool;
 
+pub type WebSearchTool = StaticTool;
+pub type FileSearchTool = StaticTool;
+pub type CodeInterpreterTool = StaticTool;
+pub type ToolSearchTool = StaticTool;
+pub type ImageGenerationTool = StaticTool;
+
 pub fn web_search_tool() -> StaticTool {
     StaticTool::new(
         "web_search",

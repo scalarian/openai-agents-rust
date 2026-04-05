@@ -5,7 +5,7 @@ use crate::items::{OutputItem, RunItem};
 use crate::run_config::RunConfig;
 use crate::run_context::RunContextWrapper;
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
-use crate::tool::{Tool, ToolOutput};
+use crate::tool::{FunctionToolResult, Tool, ToolOutput, default_tool_error_function};
 use crate::tool_context::{ToolCall, ToolContext};
 use crate::tool_guardrails::{
     ToolGuardrailBehavior, ToolInputGuardrailResult, ToolOutputGuardrailResult,
@@ -16,6 +16,7 @@ use super::approvals::append_approval_error_output;
 
 pub(crate) struct ToolExecutionOutcome {
     pub new_items: Vec<RunItem>,
+    pub tool_results: Vec<FunctionToolResult>,
     pub input_guardrail_results: Vec<ToolInputGuardrailResult>,
     pub output_guardrail_results: Vec<ToolOutputGuardrailResult>,
     pub interruptions: Vec<RunInterruption>,
@@ -28,6 +29,7 @@ pub(crate) async fn execute_local_function_tools(
     tool_calls: Vec<ToolCall>,
 ) -> Result<ToolExecutionOutcome> {
     let mut new_items = Vec::new();
+    let mut tool_results = Vec::new();
     let mut input_guardrail_results = Vec::new();
     let mut output_guardrail_results = Vec::new();
     let mut interruptions = Vec::new();
@@ -76,6 +78,19 @@ pub(crate) async fn execute_local_function_tools(
                     if let SpanData::Function(data) = &mut span.data {
                         data.output = Some("tool approval rejected".to_owned());
                     }
+                    tool_results.push(FunctionToolResult {
+                        tool_name: tool_call.name.clone(),
+                        qualified_name: Some(function_tool.qualified_name()),
+                        output: ToolOutput::from(
+                            approval
+                                .reason
+                                .as_deref()
+                                .unwrap_or(super::approvals::REJECTION_MESSAGE),
+                        ),
+                        run_item: new_items.last().cloned(),
+                        interruptions: Vec::new(),
+                        agent_run_result: None,
+                    });
                     provider.finish_span(&mut span, true);
                     continue;
                 }
@@ -117,9 +132,43 @@ pub(crate) async fn execute_local_function_tools(
         } else {
             let parsed_arguments = serde_json::from_str::<serde_json::Value>(&tool_call.arguments)
                 .unwrap_or(serde_json::Value::Null);
-            function_tool
+            match function_tool
                 .invoke(tool_context.clone(), parsed_arguments)
-                .await?
+                .await
+            {
+                Ok(output) => output,
+                Err(error) => {
+                    let default_message = error.to_string();
+                    let formatted = if let Some(formatter) = &run_config.tool_error_formatter {
+                        formatter(crate::run_config::ToolErrorFormatterArgs {
+                            kind: "invoke_error",
+                            tool_type: "function",
+                            tool_name: tool_call.name.clone(),
+                            call_id: tool_call.id.clone(),
+                            default_message: default_message.clone(),
+                            run_context: context.clone(),
+                        })
+                        .await?
+                    } else {
+                        Some(default_tool_error_function(
+                            &crate::run_config::ToolErrorFormatterArgs {
+                                kind: "invoke_error",
+                                tool_type: "function",
+                                tool_name: tool_call.name.clone(),
+                                call_id: tool_call.id.clone(),
+                                default_message: default_message.clone(),
+                                run_context: context.clone(),
+                            },
+                        ))
+                    };
+
+                    if let Some(message) = formatted {
+                        ToolOutput::from(message)
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
         };
 
         for guardrail in &function_tool.tool_output_guardrails {
@@ -154,11 +203,23 @@ pub(crate) async fn execute_local_function_tools(
             output_guardrail_results.push(result);
         }
 
-        new_items.push(RunItem::ToolCallOutput {
+        let run_item = RunItem::ToolCallOutput {
             tool_name: tool_call.name,
             output: output.to_output_item(),
             call_id: Some(tool_call.id),
             namespace: tool_call.namespace,
+        };
+        new_items.push(run_item.clone());
+        tool_results.push(FunctionToolResult {
+            tool_name: match &run_item {
+                RunItem::ToolCallOutput { tool_name, .. } => tool_name.clone(),
+                _ => String::new(),
+            },
+            qualified_name: Some(function_tool.qualified_name()),
+            output: output.clone(),
+            run_item: Some(run_item),
+            interruptions: Vec::new(),
+            agent_run_result: None,
         });
         if let SpanData::Function(data) = &mut span.data {
             data.output = serde_json::to_string(&output).ok();
@@ -168,6 +229,7 @@ pub(crate) async fn execute_local_function_tools(
 
     Ok(ToolExecutionOutcome {
         new_items,
+        tool_results,
         input_guardrail_results,
         output_guardrail_results,
         interruptions,

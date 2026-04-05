@@ -227,6 +227,24 @@ impl Runner {
                 tool_calls,
             )
             .await?;
+            if tool_outcome.interruptions.is_empty() {
+                let tool_final_output = current_agent
+                    .tool_use_behavior
+                    .evaluate(&context, &tool_outcome.tool_results)
+                    .await?;
+                if tool_final_output.is_final_output {
+                    if let Some(value) = tool_final_output.final_output {
+                        final_output =
+                            Some(internal_error_handlers::format_final_output_text(&value));
+                        final_output_items =
+                            vec![internal_error_handlers::create_message_output_item(&value)];
+                        generated_items.extend(tool_outcome.new_items);
+                        tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
+                        tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
+                        break;
+                    }
+                }
+            }
             tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
             tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
             generated_items.extend(tool_outcome.new_items);

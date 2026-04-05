@@ -26,6 +26,22 @@ pub fn register_processor(processor: Arc<dyn TracingProcessor>) {
     get_trace_provider().register_processor(processor);
 }
 
+pub fn add_trace_processor(processor: Arc<dyn TracingProcessor>) {
+    register_processor(processor);
+}
+
+pub fn set_trace_processors(processors: Vec<Arc<dyn TracingProcessor>>) {
+    get_trace_provider().set_processors(processors);
+}
+
+pub fn set_tracing_disabled(disabled: bool) {
+    get_trace_provider().set_disabled(disabled);
+}
+
+pub fn flush_traces() {
+    get_trace_provider().force_flush();
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -37,6 +53,8 @@ mod tests {
     #[derive(Default)]
     struct DummyProvider {
         shutdown_calls: Mutex<usize>,
+        force_flush_calls: Mutex<usize>,
+        disabled_values: Mutex<Vec<bool>>,
     }
 
     impl TraceProvider for DummyProvider {
@@ -48,7 +66,12 @@ mod tests {
         fn get_current_span(&self) -> Option<crate::tracing::Span> {
             None
         }
-        fn set_disabled(&self, _disabled: bool) {}
+        fn set_disabled(&self, disabled: bool) {
+            self.disabled_values
+                .lock()
+                .expect("disabled values lock")
+                .push(disabled);
+        }
         fn time_iso(&self) -> String {
             String::new()
         }
@@ -90,6 +113,10 @@ mod tests {
         fn shutdown(&self) {
             *self.shutdown_calls.lock().expect("shutdown lock") += 1;
         }
+
+        fn force_flush(&self) {
+            *self.force_flush_calls.lock().expect("force flush lock") += 1;
+        }
     }
 
     #[test]
@@ -102,5 +129,28 @@ mod tests {
         current.shutdown();
 
         assert_eq!(*provider.shutdown_calls.lock().expect("shutdown lock"), 1);
+    }
+
+    #[test]
+    fn forwards_disable_and_flush_to_provider() {
+        let provider = Arc::new(DummyProvider::default());
+        let provider_trait: Arc<dyn TraceProvider> = provider.clone();
+        set_trace_provider(provider_trait);
+
+        set_tracing_disabled(true);
+        flush_traces();
+
+        assert_eq!(
+            *provider.force_flush_calls.lock().expect("force flush lock"),
+            1
+        );
+        assert_eq!(
+            provider
+                .disabled_values
+                .lock()
+                .expect("disabled values lock")
+                .as_slice(),
+            &[true]
+        );
     }
 }

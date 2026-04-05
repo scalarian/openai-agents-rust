@@ -1,4 +1,6 @@
-pub use crate::models::interface::{Model, ModelProvider, ModelRequest, ModelResponse};
+pub use crate::models::interface::{
+    Model, ModelProvider, ModelRequest, ModelResponse, ModelTracing,
+};
 
 use std::env;
 

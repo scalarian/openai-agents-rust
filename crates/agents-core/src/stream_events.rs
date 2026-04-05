@@ -9,15 +9,33 @@ pub struct RawResponsesStreamEvent {
     pub data: serde_json::Value,
 }
 
+impl RawResponsesStreamEvent {
+    pub fn event_type(&self) -> &'static str {
+        "raw_response_event"
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunItemStreamEvent {
     pub name: String,
     pub item: RunItem,
 }
 
+impl RunItemStreamEvent {
+    pub fn event_type(&self) -> &'static str {
+        "run_item_stream_event"
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentUpdatedStreamEvent {
     pub new_agent: Agent,
+}
+
+impl AgentUpdatedStreamEvent {
+    pub fn event_type(&self) -> &'static str {
+        "agent_updated_stream_event"
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -174,3 +174,9 @@ Python source files mapped: **168**.
 | src/agents/voice/result.py | crates/agents-voice/src/result.rs | agents-voice | StreamedAudioResult | - | Voice subsystem maps to the voice crate. | direct |
 | src/agents/voice/utils.py | crates/agents-voice/src/utils.rs | agents-voice | get_sentence_based_splitter | - | Voice subsystem maps to the voice crate. | direct |
 | src/agents/voice/workflow.py | crates/agents-voice/src/workflow.rs | agents-voice | VoiceWorkflowBase, VoiceWorkflowHelper, SingleAgentWorkflowCallbacks, SingleAgentVoiceWorkflow | tests/voice/test_workflow.py | Voice subsystem maps to the voice crate. | direct |
+
+## Root Export Parity
+
+Root-export parity against Python `agents.__all__` is tracked separately in
+[ROOT_EXPORT_PARITY.md](/Users/staticpayload/Mainframe/openai-agents-rust/docs/ROOT_EXPORT_PARITY.md)
+and enforced by the `openai-agents` integration test suite.

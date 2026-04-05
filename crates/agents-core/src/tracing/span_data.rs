@@ -15,6 +15,9 @@ pub enum SpanData {
     Custom(CustomSpanData),
     Guardrail(GuardrailSpanData),
     MpcListTools(MCPListToolsSpanData),
+    SpeechGroup(SpeechGroupSpanData),
+    Speech(SpeechSpanData),
+    Transcription(TranscriptionSpanData),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -71,4 +74,22 @@ pub struct MCPListToolsSpanData {
     pub server: String,
     #[serde(default)]
     pub tools: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SpeechGroupSpanData {
+    pub name: String,
+    pub voice: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SpeechSpanData {
+    pub name: String,
+    pub transcript: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TranscriptionSpanData {
+    pub name: String,
+    pub language: Option<String>,
 }

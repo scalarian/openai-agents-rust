@@ -6,7 +6,8 @@ use crate::tracing::config::TracingConfig;
 use crate::tracing::setup::get_trace_provider;
 use crate::tracing::span_data::{
     AgentSpanData, CustomSpanData, FunctionSpanData, GenerationSpanData, GuardrailSpanData,
-    HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, SpanData,
+    HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, SpanData, SpeechGroupSpanData,
+    SpeechSpanData, TranscriptionSpanData,
 };
 use crate::tracing::{Span, Trace};
 
@@ -144,6 +145,48 @@ pub fn mcp_tools_span(server: &str, tools: Vec<String>) -> Span {
         SpanData::MpcListTools(MCPListToolsSpanData {
             server: server.to_owned(),
             tools,
+        }),
+        None,
+        None,
+        None,
+        false,
+    )
+}
+
+pub fn speech_group_span(name: &str, voice: Option<String>) -> Span {
+    get_trace_provider().create_span(
+        name,
+        SpanData::SpeechGroup(SpeechGroupSpanData {
+            name: name.to_owned(),
+            voice,
+        }),
+        None,
+        None,
+        None,
+        false,
+    )
+}
+
+pub fn speech_span(name: &str, transcript: Option<String>) -> Span {
+    get_trace_provider().create_span(
+        name,
+        SpanData::Speech(SpeechSpanData {
+            name: name.to_owned(),
+            transcript,
+        }),
+        None,
+        None,
+        None,
+        false,
+    )
+}
+
+pub fn transcription_span(name: &str, language: Option<String>) -> Span {
+    get_trace_provider().create_span(
+        name,
+        SpanData::Transcription(TranscriptionSpanData {
+            name: name.to_owned(),
+            language,
         }),
         None,
         None,

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::Agent;
@@ -39,6 +40,14 @@ pub struct ToolErrorFormatterArgs<TContext = RunContext> {
     pub run_context: RunContextWrapper<TContext>,
 }
 
+pub type ToolErrorFormatter = Arc<
+    dyn Fn(
+            ToolErrorFormatterArgs<RunContext>,
+        ) -> BoxFuture<'static, crate::errors::Result<Option<String>>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RunConfig {
     pub model: Option<String>,
@@ -54,6 +63,8 @@ pub struct RunConfig {
     pub reasoning_item_id_policy: ReasoningItemIdPolicy,
     #[serde(skip, default)]
     pub call_model_input_filter: Option<CallModelInputFilter>,
+    #[serde(skip, default)]
+    pub tool_error_formatter: Option<ToolErrorFormatter>,
     #[serde(skip, default)]
     pub run_error_handlers: RunErrorHandlers,
 }
@@ -79,6 +90,10 @@ impl std::fmt::Debug for RunConfig {
                 "call_model_input_filter",
                 &self.call_model_input_filter.as_ref().map(|_| "<filter>"),
             )
+            .field(
+                "tool_error_formatter",
+                &self.tool_error_formatter.as_ref().map(|_| "<formatter>"),
+            )
             .field("run_error_handlers", &self.run_error_handlers)
             .finish()
     }
@@ -102,6 +117,7 @@ impl Default for RunConfig {
             conversation_id: None,
             reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
             call_model_input_filter: None,
+            tool_error_formatter: None,
             run_error_handlers: RunErrorHandlers::default(),
         }
     }

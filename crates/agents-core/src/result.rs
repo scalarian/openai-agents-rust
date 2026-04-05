@@ -13,6 +13,14 @@ use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult
 use crate::tracing::Trace;
 use crate::usage::Usage;
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AgentToolInvocation {
+    pub tool_name: String,
+    pub qualified_name: Option<String>,
+    pub output: Option<Value>,
+    pub agent_name: Option<String>,
+}
+
 /// Result of an agent run.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunResult {

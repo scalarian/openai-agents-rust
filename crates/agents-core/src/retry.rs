@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -64,6 +67,7 @@ impl RetryDecision {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RetryPolicyContext {
+    pub error_message: Option<String>,
     pub attempt: usize,
     pub max_retries: usize,
     pub stream: bool,
@@ -71,8 +75,15 @@ pub struct RetryPolicyContext {
     pub provider_advice: Option<ModelRetryAdvice>,
 }
 
+pub type RetryPolicy =
+    Arc<dyn Fn(RetryPolicyContext) -> BoxFuture<'static, RetryDecision> + Send + Sync>;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelRetrySettings {
     pub max_retries: Option<usize>,
     pub backoff: Option<ModelRetryBackoffSettings>,
+}
+
+pub fn retry_policies() -> Vec<RetryPolicy> {
+    Vec::new()
 }

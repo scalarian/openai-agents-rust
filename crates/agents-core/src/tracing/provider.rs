@@ -78,6 +78,17 @@ impl SynchronousMultiTracingProcessor {
             processor.shutdown();
         }
     }
+
+    pub fn force_flush(&self) {
+        for processor in self
+            .processors
+            .read()
+            .expect("tracing processors lock")
+            .iter()
+        {
+            processor.force_flush();
+        }
+    }
 }
 
 pub trait TraceProvider: Send + Sync {
@@ -113,6 +124,7 @@ pub trait TraceProvider: Send + Sync {
     fn start_span(&self, span: &mut Span, mark_as_current: bool);
     fn finish_span(&self, span: &mut Span, reset_current: bool);
     fn shutdown(&self) {}
+    fn force_flush(&self) {}
 }
 
 pub struct DefaultTraceProvider {
@@ -251,5 +263,9 @@ impl TraceProvider for DefaultTraceProvider {
 
     fn shutdown(&self) {
         self.processors.shutdown();
+    }
+
+    fn force_flush(&self) {
+        self.processors.force_flush();
     }
 }
