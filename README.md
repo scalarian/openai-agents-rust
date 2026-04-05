@@ -2,7 +2,6 @@
 
 Rust-native agents runtime with a single ergonomic facade, async-first execution, OpenAI integrations, MCP, realtime sessions, voice workflows, and extension hooks.
 
-![Runtime overview](docs/assets/runtime-overview.svg)
 
 This repository is for teams that want to build agent systems in Rust without wrapping another SDK and without giving up typed runtime building blocks.
 
