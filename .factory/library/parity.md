@@ -41,3 +41,8 @@ How parity is evaluated and maintained in this mission.
 ## MCP manager parity notes
 
 - Python's MCP manager starts with the full configured server list in its active set before any connection attempts. For Rust parity, preserving the "prior active set" on strict failures when `drop_failed_servers = false` must therefore include the fresh-manager first-failure case, not just reconnect/retry flows.
+
+## Session callback provenance notes
+
+- `session_input_callback` operates on public `InputItem` values, so provenance bookkeeping must stay completely out of user-visible JSON value space.
+- Empty JSON object `{}` attribution may need internal identity during callback matching, but that identity must remain out-of-band: callbacks should observe the original `{}` payload, and legitimate user JSON must never be rewritten or stripped by provenance tracking.
