@@ -37,6 +37,18 @@ impl OpenAITTSModel {
             text: text.to_owned(),
         }
     }
+
+    fn render_audio_payload(&self, request: &OpenAITtsRequest) -> String {
+        let mut payload = request.text.clone();
+        if let Some(model) = &request.model {
+            payload.push_str(&format!("|model={model}"));
+        }
+        payload.push_str(&format!("|voice={}", request.voice));
+        if let Some(speed) = request.speed {
+            payload.push_str(&format!("|speed={speed}"));
+        }
+        payload
+    }
 }
 
 #[async_trait]
@@ -47,12 +59,13 @@ impl TTSModel for OpenAITTSModel {
         settings: &TTSModelSettings,
     ) -> Result<Vec<VoiceStreamEvent>> {
         let request = self.build_request(text, settings);
+        let audio_payload = self.render_audio_payload(&request);
         Ok(vec![
             VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
                 event: "turn_started".to_owned(),
             }),
             VoiceStreamEvent::Audio(VoiceStreamEventAudio {
-                data: Some(request.text.bytes().map(|b| b as f32).collect()),
+                data: Some(audio_payload.bytes().map(|b| b as f32).collect()),
             }),
             VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
                 event: "turn_ended".to_owned(),
@@ -64,7 +77,24 @@ impl TTSModel for OpenAITTSModel {
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_VOICE, OpenAITTSModel};
+    use crate::events::VoiceStreamEvent;
     use crate::model::{TTSModel, TTSModelSettings};
+
+    fn synthesized_audio_text(events: &[VoiceStreamEvent]) -> String {
+        let samples = events
+            .iter()
+            .find_map(|event| match event {
+                VoiceStreamEvent::Audio(audio) => audio.data.clone(),
+                _ => None,
+            })
+            .expect("synthesized output should include audio samples");
+
+        samples
+            .into_iter()
+            .map(|sample| sample as u8)
+            .map(char::from)
+            .collect()
+    }
 
     #[test]
     fn tts_request_defaults_to_ash_voice() {
@@ -77,18 +107,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tts_synthesize_keeps_custom_voice_and_speed_settings() {
+    async fn tts_synthesize_uses_default_voice_on_runtime_path() {
+        let model = OpenAITTSModel::new(Default::default());
+
+        let events = model
+            .synthesize("hi", &TTSModelSettings::default())
+            .await
+            .expect("tts synthesis should succeed");
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(synthesized_audio_text(&events), "hi|voice=ash");
+    }
+
+    #[tokio::test]
+    async fn tts_synthesize_forwards_model_voice_and_speed_on_runtime_path() {
         let model = OpenAITTSModel::new(Default::default());
         let settings = TTSModelSettings {
             model: Some("gpt-4o-mini-tts".to_owned()),
             voice: Some("fable".to_owned()),
             speed: Some(1.5),
         };
-        let request = model.build_request("hi", &settings);
-
-        assert_eq!(request.model.as_deref(), Some("gpt-4o-mini-tts"));
-        assert_eq!(request.voice, "fable");
-        assert_eq!(request.speed, Some(1.5));
 
         let events = model
             .synthesize("hi", &settings)
@@ -96,5 +134,9 @@ mod tests {
             .expect("tts synthesis should succeed");
 
         assert_eq!(events.len(), 3);
+        assert_eq!(
+            synthesized_audio_text(&events),
+            "hi|model=gpt-4o-mini-tts|voice=fable|speed=1.5"
+        );
     }
 }

@@ -5,6 +5,22 @@ use openai_agents::voice::{
     VoiceStreamEvent,
 };
 
+fn first_audio_text(events: &[VoiceStreamEvent]) -> String {
+    let samples = events
+        .iter()
+        .find_map(|event| match event {
+            VoiceStreamEvent::Audio(audio) => audio.data.clone(),
+            _ => None,
+        })
+        .expect("voice pipeline should emit audio");
+
+    samples
+        .into_iter()
+        .map(|sample| sample as u8)
+        .map(char::from)
+        .collect()
+}
+
 #[tokio::test]
 async fn voice_pipeline_returns_live_streamed_audio_result() {
     let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
@@ -187,5 +203,39 @@ async fn voice_pipeline_forwards_configured_stt_settings_to_runtime_models() {
     assert_eq!(
         completed.transcript,
         vec!["transcribed:audio/wav:3:model=whisper-1:language=en:prompt=be precise".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn voice_pipeline_forwards_configured_tts_settings_to_runtime_models() {
+    let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: true,
+        tts_settings: openai_agents::voice::TTSModelSettings {
+            model: Some("gpt-4o-mini-tts".to_owned()),
+            voice: Some("fable".to_owned()),
+            speed: Some(1.25),
+        },
+        ..VoicePipelineConfig::default()
+    });
+
+    let completed = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1, 2, 3],
+            },
+        )
+        .await
+        .expect("pipeline should start")
+        .wait_for_completion()
+        .await
+        .expect("pipeline should complete");
+
+    assert_eq!(completed.audio_chunks, 1);
+    assert_eq!(
+        first_audio_text(&completed.events),
+        "transcribed:audio/wav:3|model=gpt-4o-mini-tts|voice=fable|speed=1.25"
     );
 }
