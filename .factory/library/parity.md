@@ -33,3 +33,7 @@ How parity is evaluated and maintained in this mission.
 - README and parity docs must describe the current shipped runtime truthfully.
 - Do not leave machine-local absolute paths in committed docs.
 - Keep `docs/ROOT_EXPORT_PARITY.md` aligned with actual facade exports and intentional omissions.
+
+## Realtime transport parity notes
+
+- Cloudflare realtime transport parity includes the JS common realtime header bundle on fetch-upgrade requests, including both `User-Agent` and `X-OpenAI-Agents-SDK`.
