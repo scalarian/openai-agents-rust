@@ -1,6 +1,6 @@
 {
   "milestone": "audit-closure",
-  "round": 4,
+  "round": 5,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,34 +20,22 @@
     }
   },
   "reviewsSummary": {
-    "total": 2,
-    "passed": 1,
+    "total": 1,
+    "passed": 0,
     "failed": 1,
     "failedFeatures": [
-      "fix-session-provenance-without-public-inputitem-regression"
+      "fix-session-provenance-empty-json-object-identity"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-session-provenance-without-public-inputitem-regression",
+      "featureId": "fix-session-provenance-empty-json-object-identity",
       "severity": "blocking",
-      "description": "The rerun removes the public `InputItem` shape regression, but `json_value_identity` still leaves duplicate empty JSON objects `{}` without internal identity in `crates/agents-core/src/internal/session_persistence.rs`, so `session_input_callback` persistence can still misattribute a new-turn `{}` as history."
+      "description": "The follow-up fix preserves the public `InputItem` API, but `json_value_identity` in `crates/agents-core/src/internal/session_persistence.rs` still gives duplicate empty JSON objects `{}` no internal identity and instead relies on a new-first frequency fallback, so a callback that returns the history-side `{}` can still be misattributed as fresh input."
     }
   ],
   "appliedUpdates": [],
-  "suggestedGuidanceUpdates": [
-    {
-      "target": "skills",
-      "suggestion": "Clarify in worker startup guidance that `.factory/init.sh` must be executed as a shell script (for example `sh .factory/init.sh`), not via Python.",
-      "evidence": "The review for `fix-session-provenance-without-public-inputitem-regression` found `worker-transcripts.jsonl:16` running `python3 \"/Users/staticpayload/Mainframe/openai-agents-rust/.factory/init.sh\"` before retrying with `sh`, and the worker handoff explicitly requested that clarification in `handoff.skillFeedback.suggestedChanges[0]`.",
-      "isSystemic": false
-    }
-  ],
-  "rejectedObservations": [
-    {
-      "observation": "The mission's `contract-work/mcp-runtime.md` note still says Rust lacks `drop_failed_servers = false` coverage.",
-      "reason": "Rejected as already documented elsewhere and outside the validator's additive apply-now surfaces: `.factory/library/parity.md` already records the fresh-manager kept-active parity rule, and editing mission-local contract-work notes is not a services.yaml/library update."
-    }
-  ],
-  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round3.json"
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [],
+  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round4.json"
 }
