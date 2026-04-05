@@ -2191,6 +2191,136 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_rewrites_local_tool_outputs_via_tool_input_guardrails() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let seen_queries = invocations.clone();
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            move |_ctx, args: SearchArgs| {
+                let seen_queries = seen_queries.clone();
+                async move {
+                    seen_queries
+                        .lock()
+                        .expect("tool invocation tracker lock")
+                        .push(args.query.clone());
+                    Ok::<_, AgentsError>(format!("result:{}", args.query))
+                }
+            },
+        )
+        .expect("function tool should build")
+        .with_input_guardrail(crate::tool_guardrails::tool_input_guardrail(
+            "sanitize",
+            |_data| async move {
+                Ok(
+                    crate::tool_guardrails::ToolGuardrailFunctionOutput::reject_content(
+                        "guarded:search",
+                        Some(json!({"reason":"blocked"})),
+                    ),
+                )
+            },
+        ));
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(
+            invocations
+                .lock()
+                .expect("tool invocation tracker lock")
+                .len(),
+            0
+        );
+        assert_eq!(result.final_output.as_deref(), Some("final:guarded:search"));
+        assert_eq!(result.tool_input_guardrail_results.len(), 1);
+        assert_eq!(
+            result.tool_input_guardrail_results[0]
+                .output
+                .rejection_message(),
+            Some("guarded:search")
+        );
+        assert!(result.new_items.iter().any(|item| {
+            matches!(
+                item,
+                RunItem::ToolCallOutput {
+                    tool_name,
+                    output: OutputItem::Text { text },
+                    call_id,
+                    ..
+                } if tool_name == "search"
+                    && text == "guarded:search"
+                    && call_id.as_deref() == Some("call-1")
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn runner_surfaces_tool_output_guardrail_tripwire_failures() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let invocations = Arc::new(Mutex::new(0usize));
+        let invocation_count = invocations.clone();
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            move |_ctx, args: SearchArgs| {
+                let invocation_count = invocation_count.clone();
+                async move {
+                    *invocation_count
+                        .lock()
+                        .expect("tool invocation counter lock") += 1;
+                    Ok::<_, AgentsError>(format!("result:{}", args.query))
+                }
+            },
+        )
+        .expect("function tool should build")
+        .with_output_guardrail(crate::tool_guardrails::tool_output_guardrail(
+            "explode",
+            |_data| async move {
+                Ok(
+                    crate::tool_guardrails::ToolGuardrailFunctionOutput::raise_exception(Some(
+                        json!({"guardrail":"explode"}),
+                    )),
+                )
+            },
+        ));
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let error = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect_err("tripwire should fail");
+
+        assert_eq!(
+            *invocations.lock().expect("tool invocation counter lock"),
+            1
+        );
+        match error {
+            AgentsError::ToolOutputGuardrailTripwire(error) => {
+                assert_eq!(error.guardrail_name, "explode");
+                assert_eq!(
+                    error.output.output_info,
+                    Some(json!({"guardrail":"explode"}))
+                );
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
     async fn runner_propagates_input_tripwire() {
         let agent = Agent::builder("assistant")
             .input_guardrail(input_guardrail(

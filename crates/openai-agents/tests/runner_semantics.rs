@@ -1,9 +1,9 @@
 use std::sync::OnceLock;
 
 use openai_agents::{
-    Agent, AgentAsToolInput, AgentAsToolOptions, AgentRunner, RunConfig, RunContext,
-    RunContextWrapper, Runner, Tool, ToolContext, ToolOutput, drop_agent_tool_run_result,
-    get_default_agent_runner, run, run_sync, set_default_agent_runner,
+    Agent, AgentAsToolInput, AgentAsToolOptions, AgentRunner, LocalShellCommandRequest, RunConfig,
+    RunContext, RunContextWrapper, Runner, Tool, ToolContext, ToolOutput,
+    drop_agent_tool_run_result, get_default_agent_runner, run, run_sync, set_default_agent_runner,
 };
 use serde_json::json;
 
@@ -83,4 +83,47 @@ async fn facade_agent_as_tool_runs_nested_agent() {
         .expect("nested run result should be recorded");
     assert_eq!(stored.final_output.as_deref(), Some("hello"));
     drop_agent_tool_run_result(call_id, None);
+}
+
+#[tokio::test]
+async fn facade_agent_as_tool_preserves_nested_state_and_structured_input() {
+    let agent = Agent::builder("translator").build();
+    let tool = agent
+        .as_tool::<LocalShellCommandRequest>(
+            Some("translate"),
+            Some("Translate text"),
+            AgentAsToolOptions::default(),
+        )
+        .expect("agent tool should build");
+    let mut run_context = RunContextWrapper::new(RunContext::default());
+    openai_agents::set_agent_tool_state_scope(&mut run_context, Some("scope-facade".to_owned()));
+    run_context.tool_input = Some(json!({"stale": true}));
+
+    tool.invoke(
+        ToolContext::new(
+            run_context,
+            "translate",
+            "call-facade-translate",
+            "{\"command\":\"echo hola\",\"cwd\":\"/tmp\",\"env\":{\"LANG\":\"en_US.UTF-8\"}}",
+        ),
+        json!({"command":"echo hola","cwd":"/tmp","env":{"LANG":"en_US.UTF-8"}}),
+    )
+    .await
+    .expect("agent tool should execute");
+
+    let stored = openai_agents::peek_agent_tool_run_result(
+        "call-facade-translate",
+        Some("scope-facade".to_owned()),
+    )
+    .expect("structured nested run result should be recorded");
+    assert_eq!(
+        stored.context_snapshot.agent_tool_state_scope.as_deref(),
+        Some("scope-facade")
+    );
+    assert_eq!(
+        stored.context_snapshot.tool_input,
+        Some(json!({"command":"echo hola","cwd":"/tmp","env":{"LANG":"en_US.UTF-8"}}))
+    );
+
+    drop_agent_tool_run_result("call-facade-translate", Some("scope-facade".to_owned()));
 }
