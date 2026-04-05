@@ -45,4 +45,5 @@ Primary assertion surfaces:
 - Write flow reports under `.factory/validation/<milestone>/user-testing/flows/` and evidence under the assigned mission evidence directory only.
 - Do not edit Rust source, docs, or mission contract files during flow validation; only write validation artifacts.
 - Run the exact assertion commands assigned in the prompt and capture terminal evidence for the named assertions.
+- When `cargo test -q` only emits aggregate pass counts, add a companion `cargo test -- --list` capture so the evidence names the concrete test cases that support each assertion.
 - Because Cargo uses a shared workspace and can contend heavily on build state under current machine load, serialize validator execution for this run unless you are explicitly assigned an isolated `CARGO_TARGET_DIR`.
