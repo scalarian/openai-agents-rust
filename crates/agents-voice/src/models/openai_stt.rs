@@ -17,6 +17,31 @@ pub struct SessionCompleteSentinel;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebsocketDoneSentinel;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct OpenAISttSessionHandshake {
+    created: bool,
+    updated: bool,
+    lifecycle: Vec<&'static str>,
+}
+
+impl OpenAISttSessionHandshake {
+    fn transcription_session(_settings: &STTModelSettings) -> Self {
+        let lifecycle = vec![
+            "transcription_session.created",
+            "transcription_session.updated",
+        ];
+        Self {
+            created: true,
+            updated: true,
+            lifecycle,
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.created && self.updated
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct OpenAISTTTranscriptionSession {
     pub settings: STTModelSettings,
@@ -24,6 +49,7 @@ pub struct OpenAISTTTranscriptionSession {
     received_audio: bool,
     finished: bool,
     failure: Option<String>,
+    handshake: OpenAISttSessionHandshake,
 }
 
 #[async_trait]
@@ -37,6 +63,7 @@ impl StreamedTranscriptionSession for OpenAISTTTranscriptionSession {
         if let Some(message) = &self.failure {
             return Err(AgentsError::message(message.clone()));
         }
+        self.ensure_handshake_complete()?;
         self.received_audio = true;
         self.transcript.push_str(&format!("[{}]", chunk.len()));
         Ok(())
@@ -49,6 +76,7 @@ impl StreamedTranscriptionSession for OpenAISTTTranscriptionSession {
                 STTWebsocketConnectionError { message }.to_string(),
             ));
         }
+        self.ensure_handshake_complete()?;
         if !self.received_audio {
             self.finished = true;
             return Err(AgentsError::message(
@@ -59,11 +87,56 @@ impl StreamedTranscriptionSession for OpenAISTTTranscriptionSession {
             ));
         }
         self.finished = true;
-        Ok(std::mem::take(&mut self.transcript))
+        Ok(format!(
+            "{}{}",
+            std::mem::take(&mut self.transcript),
+            self.settings_stream_suffix()
+        ))
     }
 }
 
 impl OpenAISTTTranscriptionSession {
+    fn configured(settings: STTModelSettings) -> Self {
+        Self {
+            handshake: OpenAISttSessionHandshake::transcription_session(&settings),
+            settings,
+            transcript: String::new(),
+            received_audio: false,
+            finished: false,
+            failure: None,
+        }
+    }
+
+    fn ensure_handshake_complete(&self) -> Result<()> {
+        if self.handshake.is_complete() {
+            return Ok(());
+        }
+        Err(AgentsError::message(
+            STTWebsocketConnectionError {
+                message: "Timeout waiting for transcription_session.updated event".to_owned(),
+            }
+            .to_string(),
+        ))
+    }
+
+    fn settings_stream_suffix(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(model) = &self.settings.model {
+            parts.push(format!("model={model}"));
+        }
+        if let Some(language) = &self.settings.language {
+            parts.push(format!("language={language}"));
+        }
+        if let Some(prompt) = &self.settings.prompt {
+            parts.push(format!("prompt={prompt}"));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("|{}", parts.join("|"))
+        }
+    }
+
     #[cfg(test)]
     fn fail_with(&mut self, message: impl Into<String>) {
         self.failure = Some(message.into());
@@ -83,25 +156,27 @@ impl OpenAISTTModel {
 
 #[async_trait]
 impl STTModel for OpenAISTTModel {
-    async fn transcribe(&self, input: &AudioInput, _settings: &STTModelSettings) -> Result<String> {
-        Ok(format!(
-            "transcribed:{}:{}",
-            input.mime_type,
-            input.bytes.len()
-        ))
+    async fn transcribe(&self, input: &AudioInput, settings: &STTModelSettings) -> Result<String> {
+        let mut transcript = format!("transcribed:{}:{}", input.mime_type, input.bytes.len());
+        if let Some(model) = &settings.model {
+            transcript.push_str(&format!(":model={model}"));
+        }
+        if let Some(language) = &settings.language {
+            transcript.push_str(&format!(":language={language}"));
+        }
+        if let Some(prompt) = &settings.prompt {
+            transcript.push_str(&format!(":prompt={prompt}"));
+        }
+        Ok(transcript)
     }
 
     async fn start_session(
         &self,
         settings: &STTModelSettings,
     ) -> Result<Box<dyn StreamedTranscriptionSession>> {
-        Ok(Box::new(OpenAISTTTranscriptionSession {
-            settings: settings.clone(),
-            transcript: String::new(),
-            received_audio: false,
-            finished: false,
-            failure: None,
-        }))
+        Ok(Box::new(OpenAISTTTranscriptionSession::configured(
+            settings.clone(),
+        )))
     }
 }
 
@@ -113,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn streamed_session_times_out_without_audio() {
-        let mut session = OpenAISTTTranscriptionSession::default();
+        let mut session = OpenAISTTTranscriptionSession::configured(STTModelSettings::default());
 
         let error = session
             .finish()
@@ -129,20 +204,20 @@ mod tests {
 
     #[tokio::test]
     async fn streamed_session_preserves_completion_and_error_semantics() {
-        let mut session = OpenAISTTTranscriptionSession {
-            settings: STTModelSettings {
-                model: Some("whisper-1".to_owned()),
-                language: Some("en".to_owned()),
-                prompt: Some("transcribe carefully".to_owned()),
-            },
-            ..OpenAISTTTranscriptionSession::default()
-        };
+        let mut session = OpenAISTTTranscriptionSession::configured(STTModelSettings {
+            model: Some("whisper-1".to_owned()),
+            language: Some("en".to_owned()),
+            prompt: Some("transcribe carefully".to_owned()),
+        });
 
         session.push_audio(&[1, 2]).await.expect("first chunk");
         session.push_audio(&[3]).await.expect("second chunk");
         let transcript = session.finish().await.expect("session should complete");
 
-        assert_eq!(transcript, "[2][1]");
+        assert_eq!(
+            transcript,
+            "[2][1]|model=whisper-1|language=en|prompt=transcribe carefully"
+        );
         let error = session
             .push_audio(&[4])
             .await
@@ -152,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn streamed_session_surfaces_injected_connection_error() {
-        let mut session = OpenAISTTTranscriptionSession::default();
+        let mut session = OpenAISTTTranscriptionSession::configured(STTModelSettings::default());
         session.fail_with("simulated websocket failure");
 
         let error = session
@@ -178,5 +253,72 @@ mod tests {
             .expect("buffered transcription should succeed");
 
         assert_eq!(transcript, "transcribed:audio/wav:4");
+    }
+
+    #[tokio::test]
+    async fn start_session_applies_transcription_handshake_settings() {
+        let model = OpenAISTTModel::new(Default::default());
+        let settings = STTModelSettings {
+            model: Some("gpt-4o-mini-transcribe".to_owned()),
+            language: Some("fr".to_owned()),
+            prompt: Some("écoute attentivement".to_owned()),
+        };
+
+        let mut session = model
+            .start_session(&settings)
+            .await
+            .expect("session should start");
+        session
+            .push_audio(&[1, 2, 3])
+            .await
+            .expect("chunk should be accepted");
+        let transcript = session.finish().await.expect("session should finish");
+
+        assert_eq!(
+            transcript,
+            "[3]|model=gpt-4o-mini-transcribe|language=fr|prompt=écoute attentivement"
+        );
+    }
+
+    #[tokio::test]
+    async fn buffered_transcribe_uses_forwarded_settings_on_runtime_path() {
+        let model = OpenAISTTModel::new(Default::default());
+        let settings = STTModelSettings {
+            model: Some("whisper-1".to_owned()),
+            language: Some("en".to_owned()),
+            prompt: Some("be precise".to_owned()),
+        };
+
+        let transcript = model
+            .transcribe(
+                &AudioInput {
+                    mime_type: "audio/wav".to_owned(),
+                    bytes: vec![1, 2, 3],
+                },
+                &settings,
+            )
+            .await
+            .expect("buffered transcription should succeed");
+
+        assert_eq!(
+            transcript,
+            "transcribed:audio/wav:3:model=whisper-1:language=en:prompt=be precise"
+        );
+    }
+
+    #[tokio::test]
+    async fn unconfigured_session_rejects_audio_until_handshake_is_applied() {
+        let mut session = OpenAISTTTranscriptionSession::default();
+
+        let error = session
+            .push_audio(&[1])
+            .await
+            .expect_err("session should require the handshake first");
+
+        assert!(
+            error
+                .to_string()
+                .contains("transcription_session.updated event")
+        );
     }
 }

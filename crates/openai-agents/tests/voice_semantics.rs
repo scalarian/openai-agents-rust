@@ -156,3 +156,36 @@ async fn single_agent_voice_workflow_retains_state_across_pipeline_turns() {
         vec!["transcribed:audio/wav:2".to_owned()]
     );
 }
+
+#[tokio::test]
+async fn voice_pipeline_forwards_configured_stt_settings_to_runtime_models() {
+    let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: false,
+        stt_settings: openai_agents::voice::STTModelSettings {
+            model: Some("whisper-1".to_owned()),
+            language: Some("en".to_owned()),
+            prompt: Some("be precise".to_owned()),
+        },
+        ..VoicePipelineConfig::default()
+    });
+
+    let completed = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1, 2, 3],
+            },
+        )
+        .await
+        .expect("pipeline should start")
+        .wait_for_completion()
+        .await
+        .expect("pipeline should complete");
+
+    assert_eq!(
+        completed.transcript,
+        vec!["transcribed:audio/wav:3:model=whisper-1:language=en:prompt=be precise".to_owned()]
+    );
+}
