@@ -11,6 +11,10 @@ use crate::defaults::{
 use crate::models::{
     OpenAIChatCompletionsModel, OpenAIClientOptions, OpenAIResponsesModel, OpenAIResponsesWsModel,
 };
+use crate::{
+    get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
+    get_use_responses_websocket_by_default,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenAIResponsesTransport {
@@ -79,14 +83,11 @@ impl OpenAIProvider {
     pub fn client_options(&self) -> OpenAIClientOptions {
         OpenAIClientOptions {
             api_key: self.api_key.clone().or_else(default_openai_key),
-            base_url: self
-                .base_url
-                .clone()
-                .unwrap_or_else(|| default_openai_base_url().to_owned()),
+            base_url: self.base_url.clone().unwrap_or_else(get_openai_base_url),
             websocket_base_url: self
                 .websocket_base_url
                 .clone()
-                .unwrap_or_else(|| default_openai_websocket_base_url().to_owned()),
+                .unwrap_or_else(get_default_openai_websocket_base_url),
             organization: self.organization.clone(),
             project: self.project.clone(),
         }
@@ -99,13 +100,19 @@ impl OpenAIProvider {
             } else {
                 OpenAIApi::ChatCompletions
             }
+        } else if let Some(use_responses_by_default) = get_use_responses_by_default() {
+            if use_responses_by_default {
+                OpenAIApi::Responses
+            } else {
+                OpenAIApi::ChatCompletions
+            }
         } else {
             self.api.unwrap_or_else(default_openai_api)
         }
     }
 
     pub fn responses_transport(&self) -> OpenAIResponsesTransport {
-        if self.use_responses_websocket {
+        if self.use_responses_websocket || get_use_responses_websocket_by_default() == Some(true) {
             OpenAIResponsesTransport::WebSocket
         } else {
             OpenAIResponsesTransport::Http
@@ -153,6 +160,11 @@ impl ModelProvider for OpenAIProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
+        get_use_responses_websocket_by_default, set_default_openai_websocket_base_url,
+        set_openai_base_url, set_use_responses_by_default, set_use_responses_websocket_by_default,
+    };
 
     #[test]
     fn resolves_defaults_into_client_options() {
@@ -178,6 +190,53 @@ mod tests {
             provider.responses_transport(),
             OpenAIResponsesTransport::WebSocket
         );
+    }
+
+    #[test]
+    fn honors_shared_default_response_api_preference() {
+        set_use_responses_by_default(false);
+
+        let provider = OpenAIProvider::new();
+
+        assert_eq!(get_use_responses_by_default(), Some(false));
+        assert_eq!(provider.resolved_api(), OpenAIApi::ChatCompletions);
+
+        set_use_responses_by_default(true);
+    }
+
+    #[test]
+    fn honors_shared_default_websocket_transport_preference() {
+        set_use_responses_websocket_by_default(true);
+
+        let provider = OpenAIProvider::new().with_use_responses(true);
+
+        assert_eq!(get_use_responses_websocket_by_default(), Some(true));
+        assert_eq!(
+            provider.responses_transport(),
+            OpenAIResponsesTransport::WebSocket
+        );
+
+        set_use_responses_websocket_by_default(false);
+    }
+
+    #[test]
+    fn client_options_honor_shared_base_url_overrides() {
+        set_openai_base_url("https://shared-base.example/v1");
+        set_default_openai_websocket_base_url("wss://shared-ws.example/v1");
+
+        let provider = OpenAIProvider::new().with_api_key("sk-test");
+        let options = provider.client_options();
+
+        assert_eq!(get_openai_base_url(), "https://shared-base.example/v1");
+        assert_eq!(
+            get_default_openai_websocket_base_url(),
+            "wss://shared-ws.example/v1"
+        );
+        assert_eq!(options.base_url, "https://shared-base.example/v1");
+        assert_eq!(options.websocket_base_url, "wss://shared-ws.example/v1");
+
+        set_openai_base_url(crate::defaults::OPENAI_DEFAULT_BASE_URL);
+        set_default_openai_websocket_base_url(crate::defaults::OPENAI_DEFAULT_WEBSOCKET_BASE_URL);
     }
 
     #[test]

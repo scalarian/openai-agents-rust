@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 agents-core = { path = "../agents-core" }
 async-trait.workspace = true
+futures.workspace = true
 once_cell.workspace = true
 reqwest.workspace = true
 serde.workspace = true

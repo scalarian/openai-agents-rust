@@ -3,10 +3,15 @@ use agents_core::{
     Usage,
 };
 use async_trait::async_trait;
+use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, client::IntoClientRequest, http::HeaderName},
+};
 
 use crate::defaults::{OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_WEBSOCKET_BASE_URL};
 use crate::websocket::ResponsesWebSocketSession;
@@ -121,11 +126,13 @@ impl OpenAIResponsesModel {
                 Value::String(instructions.clone()),
             );
         }
-        if let Some(previous_response_id) = &request.previous_response_id {
-            payload.insert(
-                "previous_response_id".to_owned(),
-                Value::String(previous_response_id.clone()),
-            );
+        if request.conversation_id.is_none() {
+            if let Some(previous_response_id) = &request.previous_response_id {
+                payload.insert(
+                    "previous_response_id".to_owned(),
+                    Value::String(previous_response_id.clone()),
+                );
+            }
         }
         if let Some(conversation_id) = &request.conversation_id {
             payload.insert(
@@ -248,7 +255,96 @@ impl OpenAIResponsesWsModel {
 #[async_trait]
 impl Model for OpenAIResponsesWsModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
-        self.inner.generate(request).await
+        let session = self.websocket_session();
+        let mut request_handle = session
+            .websocket_url_with_query(
+                request
+                    .settings
+                    .extra_query
+                    .iter()
+                    .map(|(key, value)| (key.clone(), json_value_to_string(value))),
+            )?
+            .into_client_request()
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+        {
+            let headers = request_handle.headers_mut();
+            for (name, value) in session.headers()? {
+                if let Some(name) = name {
+                    headers.insert(name, value);
+                }
+            }
+            for (name, value) in &request.settings.extra_headers {
+                headers.insert(
+                    HeaderName::from_bytes(name.as_bytes())
+                        .map_err(|error| AgentsError::message(error.to_string()))?,
+                    HeaderValue::from_str(&json_value_to_string(value))
+                        .map_err(|error| AgentsError::message(error.to_string()))?,
+                );
+            }
+        }
+
+        let (mut websocket, _) = connect_async(request_handle)
+            .await
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+        websocket
+            .send(Message::Text(
+                session.request_frame(&request).to_string().into(),
+            ))
+            .await
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+
+        while let Some(frame) = websocket.next().await {
+            let frame = frame.map_err(|error| AgentsError::message(error.to_string()))?;
+            let payload = match frame {
+                Message::Text(text) => serde_json::from_str::<Value>(&text)
+                    .map_err(|error| AgentsError::message(error.to_string()))?,
+                Message::Binary(bytes) => serde_json::from_slice::<Value>(&bytes)
+                    .map_err(|error| AgentsError::message(error.to_string()))?,
+                Message::Close(_) => {
+                    return Err(AgentsError::message(
+                        "responses websocket connection closed before a terminal response event",
+                    ));
+                }
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+            };
+
+            match payload.get("type").and_then(Value::as_str) {
+                Some("error") | Some("response.error") => {
+                    return Err(AgentsError::message(format!(
+                        "responses websocket error: {}",
+                        payload
+                    )));
+                }
+                Some("response.completed")
+                | Some("response.failed")
+                | Some("response.incomplete") => {
+                    let response_payload = payload.get("response").ok_or_else(|| {
+                        AgentsError::message(
+                            "responses websocket terminal event omitted response payload",
+                        )
+                    })?;
+                    let request_id = payload
+                        .get("request_id")
+                        .or_else(|| {
+                            payload
+                                .get("error")
+                                .and_then(|error| error.get("request_id"))
+                        })
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned);
+                    return Ok(parse_responses_response(
+                        &self.inner.model,
+                        response_payload,
+                        request_id,
+                    ));
+                }
+                _ => continue,
+            }
+        }
+
+        Err(AgentsError::message(
+            "responses websocket stream ended without a terminal response event",
+        ))
     }
 }
 
@@ -804,7 +900,18 @@ fn tool_output_to_chat_content(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use futures::{SinkExt, StreamExt};
     use serde_json::json;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{
+        accept_hdr_async,
+        tungstenite::{
+            Message,
+            handshake::server::{Request, Response},
+        },
+    };
 
     use super::*;
 
@@ -952,8 +1059,29 @@ mod tests {
             trace_id: None,
         });
 
-        assert_eq!(payload["previous_response_id"], "resp_123");
         assert_eq!(payload["conversation"], "conv_123");
+        assert!(payload.get("previous_response_id").is_none());
+    }
+
+    #[test]
+    fn responses_payload_includes_previous_response_id_without_conversation() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model.build_payload(&ModelRequest {
+            model: Some("gpt-5".to_owned()),
+            instructions: None,
+            previous_response_id: Some("resp_123".to_owned()),
+            conversation_id: None,
+            settings: Default::default(),
+            input: vec![InputItem::from("hello")],
+            tools: Vec::new(),
+            trace_id: None,
+        });
+
+        assert_eq!(payload["previous_response_id"], "resp_123");
+        assert!(payload.get("conversation").is_none());
     }
 
     #[test]
@@ -1038,5 +1166,145 @@ mod tests {
         );
 
         assert!(matches!(parsed.output[0], OutputItem::Json { .. }));
+    }
+
+    #[tokio::test]
+    async fn websocket_model_uses_websocket_transport_for_generate() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let captured_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let captured_headers_for_server = captured_headers.clone();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("socket should accept");
+            let mut ws_stream =
+                accept_hdr_async(stream, move |request: &Request, response: Response| {
+                    let mut headers = captured_headers_for_server
+                        .lock()
+                        .expect("captured headers lock");
+                    headers.extend(request.headers().iter().map(|(name, value)| {
+                        (
+                            name.as_str().to_owned(),
+                            value.to_str().unwrap_or_default().to_owned(),
+                        )
+                    }));
+                    Ok(response)
+                })
+                .await
+                .expect("websocket handshake should succeed");
+
+            let request_frame = ws_stream
+                .next()
+                .await
+                .expect("request frame should arrive")
+                .expect("request frame should be readable");
+            let request_text = request_frame.into_text().expect("request should be text");
+            let request_payload: serde_json::Value =
+                serde_json::from_str(&request_text).expect("request should be valid json");
+
+            ws_stream
+                .send(Message::Text(
+                    json!({
+                        "type": "response.created",
+                        "response": {"id": "resp_created"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("created event should send");
+            ws_stream
+                .send(Message::Text(
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_ws_123",
+                            "output": [{
+                                "type": "message",
+                                "content": [{"type": "output_text", "text": "done"}]
+                            }],
+                            "usage": {"input_tokens": 2, "output_tokens": 3}
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("completed event should send");
+
+            request_payload
+        });
+
+        let model = OpenAIResponsesWsModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned()))
+                .with_base_url("http://127.0.0.1:1")
+                .with_websocket_base_url(format!("ws://{address}"))
+                .with_organization("org-test")
+                .with_project("proj-test"),
+        );
+
+        let response = model
+            .generate(ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: Some("Be precise".to_owned()),
+                previous_response_id: Some("resp_request".to_owned()),
+                conversation_id: Some("conv_123".to_owned()),
+                settings: agents_core::ModelSettings {
+                    metadata: std::collections::BTreeMap::from([(
+                        "transport".to_owned(),
+                        json!("ws"),
+                    )]),
+                    extra_headers: std::collections::BTreeMap::from([(
+                        "X-Test-Header".to_owned(),
+                        json!("present"),
+                    )]),
+                    extra_query: std::collections::BTreeMap::from([(
+                        "tenant".to_owned(),
+                        json!("acme"),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                trace_id: None,
+            })
+            .await
+            .expect("websocket generate should succeed");
+
+        let request_payload = server.await.expect("server task should finish");
+        let headers = captured_headers.lock().expect("captured headers lock");
+
+        assert_eq!(request_payload["type"], "response.create");
+        assert_eq!(request_payload["stream"], true);
+        assert_eq!(request_payload["conversation"], "conv_123");
+        assert_eq!(request_payload["metadata"]["transport"], "ws");
+        assert!(request_payload.get("previous_response_id").is_none());
+        assert_eq!(response.response_id.as_deref(), Some("resp_ws_123"));
+        assert_eq!(response.request_id, None);
+        assert_eq!(response.usage.input_tokens, 2);
+        assert_eq!(response.usage.output_tokens, 3);
+        assert!(
+            matches!(response.output.first(), Some(OutputItem::Text { text }) if text == "done")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                    && value == "Bearer sk-test")
+        );
+        assert!(headers.iter().any(
+            |(name, value)| name.eq_ignore_ascii_case("openai-organization") && value == "org-test"
+        ));
+        assert!(headers.iter().any(
+            |(name, value)| name.eq_ignore_ascii_case("openai-project") && value == "proj-test"
+        ));
+        assert!(
+            headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("x-test-header")
+                    && value == "present")
+        );
     }
 }

@@ -60,8 +60,11 @@ impl ResponsesWebSocketSession {
 
         let mut url =
             Url::parse(&normalized).map_err(|error| AgentsError::message(error.to_string()))?;
-        let path = format!("{}/responses", url.path().trim_end_matches('/'));
-        url.set_path(&path);
+        let current_path = url.path().trim_end_matches('/');
+        if !current_path.ends_with("/responses") {
+            let path = format!("{current_path}/responses");
+            url.set_path(&path);
+        }
         let query = query
             .into_iter()
             .map(|(key, value)| (key.as_ref().to_owned(), value.as_ref().to_owned()))
@@ -89,10 +92,14 @@ impl ResponsesWebSocketSession {
         if let (Some(response_id), Value::Object(payload_object)) =
             (&self.response_id, &mut payload)
         {
-            payload_object.insert(
-                "previous_response_id".to_owned(),
-                Value::String(response_id.clone()),
-            );
+            if !payload_object.contains_key("conversation") {
+                payload_object.insert(
+                    "previous_response_id".to_owned(),
+                    Value::String(response_id.clone()),
+                );
+            } else {
+                payload_object.remove("previous_response_id");
+            }
         }
         payload
     }
@@ -182,5 +189,47 @@ mod tests {
 
         assert!(url.contains("foo=bar"));
         assert!(url.contains("baz=1"));
+    }
+
+    #[test]
+    fn avoids_duplicate_responses_suffix_in_websocket_url() {
+        let session = ResponsesWebSocketSession::new(
+            Some("gpt-5".to_owned()),
+            OpenAIClientOptions {
+                api_key: Some("sk-test".to_owned()),
+                base_url: "https://api.openai.com/v1".to_owned(),
+                websocket_base_url: "https://api.openai.com/v1/responses".to_owned(),
+                organization: None,
+                project: None,
+            },
+        );
+
+        assert_eq!(
+            session.websocket_url().expect("url should build"),
+            "wss://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn omits_previous_response_id_when_conversation_is_present() {
+        let session = ResponsesWebSocketSession::new(
+            Some("gpt-5".to_owned()),
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        )
+        .with_response_id("resp_123");
+
+        let payload = session.request_frame(&ModelRequest {
+            trace_id: None,
+            model: Some("gpt-5".to_owned()),
+            instructions: None,
+            previous_response_id: Some("resp_request".to_owned()),
+            conversation_id: Some("conv_123".to_owned()),
+            settings: Default::default(),
+            input: vec![InputItem::from("hello")],
+            tools: Vec::new(),
+        });
+
+        assert_eq!(payload["conversation"], "conv_123");
+        assert!(payload.get("previous_response_id").is_none());
     }
 }
