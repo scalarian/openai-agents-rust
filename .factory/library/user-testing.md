@@ -38,3 +38,11 @@ Primary assertion surfaces:
 
 - Dry run already confirmed that `cargo fmt --all -- --check`, targeted parity tests, and `cargo test -q --workspace --no-run` are executable in this environment.
 - No browser setup, auth bootstrap, or long-running app services are required.
+
+## Flow Validator Guidance: Cargo semantic validation
+
+- Treat the repository at `/Users/staticpayload/Mainframe/openai-agents-rust` as the only valid code surface.
+- Write flow reports under `.factory/validation/<milestone>/user-testing/flows/` and evidence under the assigned mission evidence directory only.
+- Do not edit Rust source, docs, or mission contract files during flow validation; only write validation artifacts.
+- Run the exact assertion commands assigned in the prompt and capture terminal evidence for the named assertions.
+- Because Cargo uses a shared workspace and can contend heavily on build state under current machine load, serialize validator execution for this run unless you are explicitly assigned an isolated `CARGO_TARGET_DIR`.
