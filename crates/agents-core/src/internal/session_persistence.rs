@@ -6,6 +6,10 @@ use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_EMPTY_JSON_OBJECT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn prepare_input_with_session(
     input: &[InputItem],
@@ -32,8 +36,10 @@ pub(crate) async fn prepare_input_with_session(
     let original_input = input.to_vec();
     let (mut prepared, mut session_input_items) =
         if let Some(callback) = &config.session_input_callback {
-            let history_for_callback = history.clone();
-            let new_items_for_callback = original_input.clone();
+            let mut history_for_callback = history.clone();
+            let mut new_items_for_callback = original_input.clone();
+            seed_empty_json_object_identity(&mut history_for_callback);
+            seed_empty_json_object_identity(&mut new_items_for_callback);
             let mut history_refs = build_reference_map(&history_for_callback);
             let mut new_refs = build_reference_map(&new_items_for_callback);
             let mut history_counts = build_frequency_map(&history_for_callback);
@@ -194,6 +200,7 @@ enum InputItemIdentity {
     Text(usize),
     JsonString(usize),
     JsonArray(usize),
+    EmptyJsonObject(u64),
     JsonObject { first_key: usize, len: usize },
 }
 
@@ -213,6 +220,11 @@ fn json_value_identity(value: &serde_json::Value) -> Option<InputItemIdentity> {
             Some(InputItemIdentity::JsonArray(values.as_ptr() as usize))
         }
         serde_json::Value::Object(map) => {
+            if map.is_empty() {
+                return Some(InputItemIdentity::EmptyJsonObject(
+                    empty_json_object_identity(map),
+                ));
+            }
             map.iter()
                 .next()
                 .map(|(key, _)| InputItemIdentity::JsonObject {
@@ -222,6 +234,41 @@ fn json_value_identity(value: &serde_json::Value) -> Option<InputItemIdentity> {
         }
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => None,
     }
+}
+
+fn seed_empty_json_object_identity(items: &mut [InputItem]) {
+    for item in items {
+        let InputItem::Json {
+            value: serde_json::Value::Object(map),
+        } = item
+        else {
+            continue;
+        };
+        if !map.is_empty() {
+            continue;
+        }
+
+        let sentinel_key = format!(
+            "__agents_internal_empty_object_identity_{}__",
+            NEXT_EMPTY_JSON_OBJECT_IDENTITY.fetch_add(1, Ordering::Relaxed)
+        );
+        map.insert(sentinel_key.clone(), serde_json::Value::Null);
+        map.remove(&sentinel_key);
+    }
+}
+
+fn empty_json_object_identity(map: &serde_json::Map<String, serde_json::Value>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let map_bytes = unsafe {
+        // Internal-only: callback-owned empty objects are "touched" before the callback runs,
+        // which seeds stable backing state that survives moves while remaining semantically `{}`.
+        std::slice::from_raw_parts(
+            (map as *const serde_json::Map<String, serde_json::Value>).cast::<u8>(),
+            std::mem::size_of::<serde_json::Map<String, serde_json::Value>>(),
+        )
+    };
+    map_bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn prefers_new_frequency_match(item: &InputItem) -> bool {
@@ -341,6 +388,34 @@ mod tests {
                 .expect("prepared input should build");
 
         assert_eq!(prepared, vec![InputItem::from("same")]);
+        assert!(session_items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_input_callback_preserves_history_side_empty_json_object_provenance() {
+        let session = MemorySession::new("session");
+        session
+            .add_items(vec![InputItem::Json { value: json!({}) }])
+            .await
+            .expect("history should be added");
+        let config = RunConfig {
+            session_input_callback: Some(std::sync::Arc::new(|mut history, mut new_items| {
+                async move {
+                    let history_item = history.remove(0);
+                    let _dropped_new_item = new_items.remove(0);
+                    Ok(vec![history_item])
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        };
+
+        let (prepared, _original_input, session_items) =
+            prepare_input_with_session(&[InputItem::Json { value: json!({}) }], &config, &session)
+                .await
+                .expect("prepared input should build");
+
+        assert_eq!(prepared, vec![InputItem::Json { value: json!({}) }]);
         assert!(session_items.is_empty());
     }
 
