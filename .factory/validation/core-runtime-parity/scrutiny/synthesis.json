@@ -1,6 +1,6 @@
 {
   "milestone": "core-runtime-parity",
-  "round": 3,
+  "round": 4,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,28 +20,22 @@
     }
   },
   "reviewsSummary": {
-    "total": 4,
-    "passed": 3,
+    "total": 1,
+    "passed": 0,
     "failed": 1,
     "failedFeatures": [
-      "fix-openai-delta-tracking-drop-reorder-identity"
+      "fix-openai-explicit-filtered-source-provenance"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-openai-delta-tracking-drop-reorder-identity",
+      "featureId": "fix-openai-explicit-filtered-source-provenance",
       "severity": "blocking",
-      "description": "`register_filtered_input_sources()` still guesses source identity when a filtered rewrite is emitted as a fresh replacement item after sibling drops/reorders, so sent-state can still drift and replay an already-delivered server-conversation delta later."
+      "description": "`derive_filtered_input_source_indices()` still reconstructs filtered-item provenance after `call_model_input_filter` returns using identity, fingerprint, sibling-order, and last-remaining fallbacks, so multi-item fresh replacements after drops/reorders can still mark the wrong prepared source as sent and replay a delivered delta later."
     }
   ],
-  "appliedUpdates": [
-    {
-      "target": "library",
-      "description": "Added `.factory/library/openai-filtered-input-provenance.md` documenting the Rust/JS filtered-input provenance mismatch (`ModelInputData` lacks JS-style `sourceItems`/`filterApplied`) behind recurring server-conversation sent-state bugs.",
-      "sourceFeature": "fix-openai-delta-tracking-drop-reorder-identity"
-    }
-  ],
+  "appliedUpdates": [],
   "suggestedGuidanceUpdates": [],
   "rejectedObservations": [],
-  "previousRound": ".factory/validation/core-runtime-parity/scrutiny/synthesis.round2.json"
+  "previousRound": ".factory/validation/core-runtime-parity/scrutiny/synthesis.round3.json"
 }
