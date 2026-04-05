@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,47 +37,93 @@ fn parse_family_rows(source: &str) -> BTreeMap<String, (String, Vec<String>)> {
         .collect()
 }
 
+fn collect_files(root: &Path, files: &mut Vec<PathBuf>) {
+    let mut entries = fs::read_dir(root)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", root.display()))
+        .map(|entry| entry.expect("directory entry").path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            collect_files(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
+}
+
+fn upstream_python_families(root: &Path) -> BTreeSet<String> {
+    let tests_root = root.join("reference/openai-agents-python/tests");
+    let mut files = Vec::new();
+    collect_files(&tests_root, &mut files);
+    files
+        .into_iter()
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("py"))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("test_"))
+        })
+        .map(|path| {
+            path.strip_prefix(&tests_root)
+                .expect("python test relative path")
+                .with_extension("")
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect()
+}
+
+fn upstream_js_families(root: &Path) -> BTreeSet<String> {
+    let packages_root = root.join("reference/openai-agents-js/packages");
+    let mut files = Vec::new();
+    collect_files(&packages_root, &mut files);
+    files
+        .into_iter()
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("ts"))
+        .filter_map(|path| {
+            let relative = path.strip_prefix(&packages_root).ok()?;
+            let relative_text = relative.to_string_lossy().replace('\\', "/");
+            let (package, rest) = relative_text.split_once('/')?;
+            let test_prefix = "test/";
+            let rest = rest.strip_prefix(test_prefix)?;
+            let suffix = ".test.ts";
+            let family = rest.strip_suffix(suffix)?;
+            Some(format!("js/{package}/{family}"))
+        })
+        .collect()
+}
+
 #[test]
-fn behavior_parity_doc_covers_required_python_families() {
+fn behavior_parity_doc_covers_upstream_family_inventory() {
     let root = workspace_root();
     let parity_doc =
         fs::read_to_string(root.join("docs/BEHAVIOR_PARITY.md")).expect("behavior parity doc");
     let families = parse_family_rows(&parity_doc);
+    let documented = families.keys().cloned().collect::<BTreeSet<_>>();
+    let expected = upstream_python_families(&root)
+        .into_iter()
+        .chain(upstream_js_families(&root))
+        .collect::<BTreeSet<_>>();
 
-    let required = [
-        "test_agent_runner",
-        "test_agent_runner_streamed",
-        "test_agent_runner_sync",
-        "test_max_turns",
-        "test_openai_conversations_session",
-        "memory/test_openai_responses_compaction_session",
-        "test_openai_responses",
-        "test_openai_chatcompletions",
-        "mcp/test_runner_calls_mcp",
-        "mcp/test_mcp_server_manager",
-        "mcp/test_mcp_resources",
-        "realtime/test_runner",
-        "realtime/test_session",
-        "realtime/test_openai_realtime",
-        "voice/test_pipeline",
-        "voice/test_workflow",
-        "test_responses_websocket_session",
-        "js/agents-core/run_and_streaming",
-        "js/agents-core/mcp",
-        "js/agents-openai/responses_and_sessions",
-        "js/agents-realtime/session",
-        "js/agents-extensions/realtime_transports",
-    ];
-
-    let missing = required
-        .iter()
-        .filter(|family| !families.contains_key(**family))
-        .copied()
+    let missing = expected
+        .difference(&documented)
+        .cloned()
         .collect::<Vec<_>>();
+    let unexpected = documented
+        .difference(&expected)
+        .cloned()
+        .collect::<Vec<_>>();
+
     assert!(
         missing.is_empty(),
         "Missing behavior parity families: {}",
         missing.join(", ")
+    );
+    assert!(
+        unexpected.is_empty(),
+        "Behavior parity doc contains unexpected families: {}",
+        unexpected.join(", ")
     );
 }
 

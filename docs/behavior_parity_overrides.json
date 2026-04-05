@@ -1,0 +1,268 @@
+{
+  "test_agent_runner": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs",
+      "crates/openai-agents/tests/runner_semantics.rs"
+    ],
+    "notes": "Core non-streamed runner, nested tools, resume paths, and default-runner behavior are exercised."
+  },
+  "test_agent_runner_streamed": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs",
+      "crates/openai-agents/tests/runner_semantics.rs"
+    ],
+    "notes": "Live streamed runs, event ordering, and completion state are exercised."
+  },
+  "test_agent_runner_sync": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs",
+      "crates/openai-agents/tests/runner_semantics.rs"
+    ],
+    "notes": "Tokio bridging and runtime rejection are covered."
+  },
+  "test_max_turns": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs"
+    ],
+    "notes": "Max-turn termination and handler behavior are covered in crate tests."
+  },
+  "test_openai_conversations_session": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/memory.rs",
+      "crates/openai-agents/tests/openai_session_semantics.rs"
+    ],
+    "notes": "Session state load/save, clear behavior, remote bootstrap, and runner continuity are covered."
+  },
+  "memory/test_openai_responses_compaction_session": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/memory.rs",
+      "crates/openai-agents/tests/openai_session_semantics.rs"
+    ],
+    "notes": "Candidate selection, sanitization, threshold-aware compaction, previous-response-id mode, and runner-triggered compaction are covered."
+  },
+  "test_openai_responses": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/models.rs",
+      "crates/agents-openai/src/websocket.rs",
+      "crates/openai-agents/tests/openai_session_semantics.rs"
+    ],
+    "notes": "Responses payload shaping, output conversion, conversation tracking, websocket framing, and response parsing are covered."
+  },
+  "test_openai_chatcompletions": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/models.rs"
+    ],
+    "notes": "Chat Completions payload shaping, tool choice defaults, logprobs, and response parsing are covered."
+  },
+  "test_responses_websocket_session": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/websocket.rs"
+    ],
+    "notes": "Responses websocket URL building, headers, query handling, and request framing are covered."
+  },
+  "mcp/test_runner_calls_mcp": {
+    "status": "covered",
+    "coverage": [
+      "crates/openai-agents/tests/mcp_semantics.rs"
+    ],
+    "notes": "Non-streamed and streamed MCP tool execution through the runner are covered."
+  },
+  "mcp/test_mcp_server_manager": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/manager.rs",
+      "crates/openai-agents/tests/mcp_semantics.rs"
+    ],
+    "notes": "Connect, reconnect, deduplicated failures, active tool listing, and cleanup state are covered."
+  },
+  "mcp/test_mcp_resources": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/server.rs",
+      "crates/openai-agents/tests/mcp_semantics.rs"
+    ],
+    "notes": "Connection-gated resource listing, template listing, and resource reads are covered."
+  },
+  "realtime/test_runner": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/runner.rs",
+      "crates/openai-agents/tests/realtime_semantics.rs"
+    ],
+    "notes": "Session creation, run-config model settings, and live session commands are covered."
+  },
+  "realtime/test_session": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/session.rs",
+      "crates/openai-agents/tests/realtime_semantics.rs"
+    ],
+    "notes": "Live event streaming, lifecycle transitions, model-setting state, playback state, interrupts, and shutdown are covered."
+  },
+  "realtime/test_openai_realtime": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/openai_realtime.rs",
+      "crates/openai-agents/tests/realtime_semantics.rs"
+    ],
+    "notes": "Websocket and SIP model behavior, event-type normalization, and session updates are covered."
+  },
+  "realtime/test_audio_formats_unit": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/audio_formats.rs"
+    ],
+    "notes": "Realtime audio-format normalization covers known and custom format values."
+  },
+  "realtime/test_playback_tracker": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/_default_tracker.rs"
+    ],
+    "notes": "Playback sample accumulation, derived duration, and reset behavior are covered."
+  },
+  "realtime/test_playback_tracker_manual_unit": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/_default_tracker.rs"
+    ],
+    "notes": "Manual playback tracker state transitions are covered alongside the core tracker unit tests."
+  },
+  "voice/test_pipeline": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-voice/src/pipeline.rs",
+      "crates/agents-voice/src/result.rs",
+      "crates/openai-agents/tests/voice_semantics.rs"
+    ],
+    "notes": "Live streamed audio results, transcript events, session lifecycle events, and streamed audio input are covered."
+  },
+  "voice/test_workflow": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-voice/src/workflow.rs",
+      "crates/openai-agents/tests/voice_semantics.rs"
+    ],
+    "notes": "Single-agent workflow state, streamed core-runner output, and transcript extraction are covered."
+  },
+  "extensions/test_tool_output_trimmer": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-extensions/src/extensions/tool_output_trimmer.rs"
+    ],
+    "notes": "Old tool outputs are trimmed while recent turns remain intact."
+  },
+  "test_visualization": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-extensions/src/extensions/visualization.rs"
+    ],
+    "notes": "DOT graph generation for tools and handoffs is covered."
+  },
+  "js/agents-core/run": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs",
+      "crates/openai-agents/tests/runner_semantics.rs"
+    ],
+    "notes": "JS core run behavior maps to the shared Rust runner."
+  },
+  "js/agents-core/run.stream": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs",
+      "crates/openai-agents/tests/runner_semantics.rs"
+    ],
+    "notes": "JS streamed-run behavior maps to the shared Rust runner."
+  },
+  "js/agents-core/mcp": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/manager.rs",
+      "crates/agents-core/src/mcp/util.rs",
+      "crates/openai-agents/tests/mcp_semantics.rs"
+    ],
+    "notes": "JS MCP server, filter, and runner integration behavior maps to the Rust MCP runtime."
+  },
+  "js/agents-openai/openaiConversationsSession": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/memory.rs",
+      "crates/openai-agents/tests/openai_session_semantics.rs"
+    ],
+    "notes": "Conversation-backed session bootstrap and continuity are covered."
+  },
+  "js/agents-openai/openaiResponsesCompactionSession": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/memory.rs",
+      "crates/openai-agents/tests/openai_session_semantics.rs"
+    ],
+    "notes": "Compaction sessions and threshold-aware previous-response behavior are covered."
+  },
+  "js/agents-openai/openaiResponsesModel": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/models.rs",
+      "crates/openai-agents/tests/openai_session_semantics.rs"
+    ],
+    "notes": "Responses model request/response shaping and continuity are covered."
+  },
+  "js/agents-openai/responsesWebSocketSession": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/websocket.rs"
+    ],
+    "notes": "Responses websocket session shaping and framing are covered."
+  },
+  "js/agents-realtime/realtimeSession": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/runner.rs",
+      "crates/agents-realtime/src/session.rs",
+      "crates/openai-agents/tests/realtime_semantics.rs"
+    ],
+    "notes": "JS realtime session behavior maps to the Rust realtime session runtime."
+  },
+  "js/agents-realtime/openaiRealtimeWebsocket": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/openai_realtime.rs",
+      "crates/openai-agents/tests/realtime_semantics.rs"
+    ],
+    "notes": "Realtime websocket session updates and event normalization are covered."
+  },
+  "js/agents-realtime/openaiRealtimeSip": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/openai_realtime.rs",
+      "crates/openai-agents/tests/realtime_semantics.rs"
+    ],
+    "notes": "Realtime SIP model behavior maps to the Rust realtime transport model."
+  },
+  "js/agents-extensions/CloudflareRealtimeTransport": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-extensions/src/extensions/realtime_transports.rs",
+      "crates/openai-agents/tests/extensions_semantics.rs"
+    ],
+    "notes": "Cloudflare Workers websocket-upgrade request shaping and accept flow are covered."
+  },
+  "js/agents-extensions/TwilioRealtimeTransport": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-extensions/src/extensions/realtime_transports.rs",
+      "crates/openai-agents/tests/extensions_semantics.rs"
+    ],
+    "notes": "Twilio media-stream normalization, interruption timing, and outbound mark generation are covered."
+  }
+}

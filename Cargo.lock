@@ -24,7 +24,9 @@ version = "0.1.0"
 dependencies = [
  "agents-core",
  "agents-openai",
+ "agents-realtime",
  "async-trait",
+ "base64",
  "redis",
  "reqwest",
  "schemars",

@@ -23,3 +23,28 @@ pub fn to_realtime_audio_format(value: impl AsRef<str>) -> RealtimeAudioFormat {
         other => RealtimeAudioFormat::Custom(other.to_owned()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn converts_known_and_custom_formats() {
+        assert_eq!(
+            to_realtime_audio_format("pcm16"),
+            RealtimeAudioFormat::Pcm16
+        );
+        assert_eq!(
+            to_realtime_audio_format("g711_ulaw"),
+            RealtimeAudioFormat::G711Ulaw
+        );
+        assert_eq!(
+            to_realtime_audio_format("g711_alaw"),
+            RealtimeAudioFormat::G711Alaw
+        );
+        assert_eq!(
+            to_realtime_audio_format("opus"),
+            RealtimeAudioFormat::Custom("opus".to_owned())
+        );
+    }
+}

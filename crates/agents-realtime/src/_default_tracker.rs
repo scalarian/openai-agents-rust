@@ -45,3 +45,20 @@ impl ModelAudioTracker {
         &self.state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_sample_length_and_reset() {
+        let mut tracker = ModelAudioTracker::new(16_000);
+        tracker.push_samples(16_000);
+        assert!(tracker.state().playing);
+        assert_eq!(tracker.state().length_ms(), 1_000);
+
+        tracker.reset();
+        assert!(!tracker.state().playing);
+        assert_eq!(tracker.state().length_ms(), 0);
+    }
+}

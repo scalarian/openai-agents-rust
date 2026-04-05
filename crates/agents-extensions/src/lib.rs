@@ -8,8 +8,11 @@ pub mod memory;
 pub mod providers;
 
 pub use extensions::{
-    ToolOutputTrimmer, draw_graph, experimental, get_all_edges, get_all_nodes, get_main_graph,
-    prompt_with_handoff_instructions, remove_all_tools, remove_tool_types_from_input,
+    CloudflareRealtimeSocket, CloudflareRealtimeTransportLayer, CloudflareUpgradeRequest,
+    ToolOutputTrimmer, TwilioInterruptDecision, TwilioOutboundMessage,
+    TwilioRealtimeTransportAction, TwilioRealtimeTransportLayer, draw_graph, experimental,
+    get_all_edges, get_all_nodes, get_main_graph, prompt_with_handoff_instructions,
+    remove_all_tools, remove_tool_types_from_input,
 };
 pub use memory::{
     AdvancedSQLiteSession, AsyncSQLiteSession, DaprSession, DatabaseSession, EncryptedEnvelope,
