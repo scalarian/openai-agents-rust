@@ -545,10 +545,6 @@ fn final_release_gate_rows_capture_latest_coverage_and_accepted_omissions() {
             "realtime/test_session_payload_and_formats",
             "crates/agents-realtime/src/openai_realtime.rs",
         ),
-        (
-            "test_openai_chatcompletions_stream",
-            "crates/agents-openai/src/models/chatcmpl_stream_handler.rs",
-        ),
     ] {
         let row = families
             .get(family)
@@ -558,6 +554,26 @@ fn final_release_gate_rows_capture_latest_coverage_and_accepted_omissions() {
             row.coverage.iter().any(|path| path == coverage_path),
             "{family} should point at executable coverage path {coverage_path}, got {:?}",
             row.coverage
+        );
+    }
+
+    let streaming_row = families
+        .get("test_openai_chatcompletions_stream")
+        .expect("missing behavior parity row for test_openai_chatcompletions_stream");
+    assert_eq!(
+        streaming_row.status, "omitted-with-rationale",
+        "test_openai_chatcompletions_stream should remain an explicit accepted omission"
+    );
+    for required_phrase in [
+        "broader upstream streaming family",
+        "helper-level",
+        "chatcmpl_stream_handler",
+        "not sufficient parity evidence",
+    ] {
+        assert!(
+            streaming_row.notes.contains(required_phrase),
+            "test_openai_chatcompletions_stream omission rationale should mention `{required_phrase}`, got: {}",
+            streaming_row.notes
         );
     }
 

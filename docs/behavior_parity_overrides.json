@@ -303,11 +303,11 @@
     "notes": "Session-owned persistence rejects conflicting explicit conversation-tracking settings."
   },
   "test_openai_chatcompletions_stream": {
-    "status": "covered",
+    "status": "omitted-with-rationale",
     "coverage": [
-      "crates/agents-openai/src/models/chatcmpl_stream_handler.rs"
+      "n/a"
     ],
-    "notes": "Chat Completions streaming delta ordering and final assembly are covered."
+    "notes": "Rust has helper-level `chatcmpl_stream_handler` coverage for single-chunk delta parsing, but the broader upstream streaming family still lacks executable end-to-end streaming coverage for event ordering and final assembly; that helper-level test is not sufficient parity evidence."
   },
   "test_server_conversation_tracker": {
     "status": "omitted-with-rationale",
