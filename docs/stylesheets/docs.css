@@ -1,0 +1,47 @@
+:root {
+  --docs-bg: #0b1220;
+  --docs-surface: #111827;
+  --docs-surface-2: #1f2937;
+  --docs-border: #334155;
+  --docs-text: #e5e7eb;
+  --docs-muted: #94a3b8;
+  --docs-accent: #60a5fa;
+  --docs-accent-2: #22c55e;
+  --docs-code-bg: #0f172a;
+  --docs-radius: 16px;
+  --docs-max-width: 860px;
+}
+
+body {
+  background: radial-gradient(circle at top, #12203a 0%, var(--docs-bg) 42%);
+  color: var(--docs-text);
+  font-family: "IBM Plex Sans", "Inter", "Segoe UI", sans-serif;
+  line-height: 1.65;
+}
+
+main {
+  margin: 0 auto;
+  max-width: var(--docs-max-width);
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+}
+
+pre,
+code {
+  background: var(--docs-code-bg);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border: 1px solid var(--docs-border);
+  padding: 12px 14px;
+}

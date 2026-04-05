@@ -1,36 +1,41 @@
 # openai-agents-rust
 
-Native Rust agents runtime with a clean top-level facade, OpenAI integrations, realtime sessions, voice workflows, MCP support, and extension hooks.
+Rust-native agents runtime with a single ergonomic facade, async-first execution, OpenAI integrations, MCP, realtime sessions, voice workflows, and extension hooks.
 
-This project is built as a real Rust implementation, not a thin wrapper over another SDK.
+![Runtime overview](docs/assets/runtime-overview.svg)
 
-## Why This Exists
+This repository is for teams that want to build agent systems in Rust without wrapping another SDK and without giving up typed runtime building blocks.
 
-- Rust teams should be able to build agent systems without crossing an FFI boundary.
-- Realtime, tool use, sessions, and streaming should feel native in async Rust.
-- The public API should stay small at the top and deep when you need to drop into subsystem crates.
+## Start Here
 
-## What You Get
+- New to the library: [docs/index.md](docs/index.md)
+- Want a first working program: [docs/quickstart.md](docs/quickstart.md)
+- Need runnable code: [docs/examples.md](docs/examples.md)
+- Want the public API map: [docs/ref/README.md](docs/ref/README.md)
+- Contributing to the workspace: [CONTRIBUTING.md](CONTRIBUTING.md)
 
-- `run`, `run_streamed`, `run_with_session`, and `run_sync` entry points
-- agent composition, nested agents as tools, handoffs, guardrails, and replayable run results
+## What You Can Build
+
+- one-shot runs with `run` and `run_sync`
+- live incremental runs with `run_streamed`
+- session-aware conversations with `Runner::run_with_session`
+- nested agents as tools
+- handoffs, approvals, guardrails, and replayable run results
 - OpenAI Responses and Chat Completions integrations
-- session-aware runs with memory and OpenAI conversation state
-- MCP servers, approvals, resources, and runtime tool discovery
-- realtime agents and live session control
-- voice workflows and pipelines on top of streamed runs
-- optional extensions for extra providers, memory backends, visualization, Codex flows, and transport adapters
+- MCP-backed tool discovery and resource access
+- realtime agents with long-lived sessions
+- voice workflows and STT -> workflow -> TTS pipelines
+- optional integrations through the extensions namespace
 
-## Workspace
+## Install
 
-- `crates/openai-agents`: public facade crate
-- `crates/agents-core`: runner, agents, tools, sessions, tracing, results
-- `crates/agents-openai`: OpenAI provider, models, hosted tools, OpenAI-specific sessions
-- `crates/agents-realtime`: realtime agents, sessions, events, model adapters
-- `crates/agents-voice`: voice workflow and pipeline runtime
-- `crates/agents-extensions`: optional integrations and experimental surfaces
+```toml
+[dependencies]
+openai-agents = { git = "https://github.com/scalarian/openai-agents-rust", package = "openai-agents" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
 
-## Quick Start
+## Smallest Useful Example
 
 ```rust
 use openai_agents::{run, Agent};
@@ -42,65 +47,83 @@ async fn main() -> Result<(), openai_agents::AgentsError> {
         .build();
 
     let result = run(&agent, "Give me three production readiness checks.").await?;
-
     println!("{}", result.final_output.unwrap_or_default());
     Ok(())
 }
 ```
 
-## Session-Aware Runs
+For a fuller walkthrough, open [docs/quickstart.md](docs/quickstart.md).
 
-```rust
-use openai_agents::{Agent, MemorySession, Runner};
+## Choose A Path
 
-#[tokio::main]
-async fn main() -> Result<(), openai_agents::AgentsError> {
-    let agent = Agent::builder("assistant")
-        .instructions("Track the conversation and answer briefly.")
-        .build();
+| I want to... | Read this |
+| --- | --- |
+| build a first agent | [docs/quickstart.md](docs/quickstart.md) |
+| understand agents, tools, and handoffs | [docs/agents.md](docs/agents.md), [docs/tools.md](docs/tools.md), [docs/handoffs.md](docs/handoffs.md) |
+| run with sessions and replay state | [docs/sessions/README.md](docs/sessions/README.md), [docs/results.md](docs/results.md) |
+| stream events live | [docs/streaming.md](docs/streaming.md) |
+| integrate OpenAI-specific behavior | [docs/models/openai.md](docs/models/openai.md), [docs/sessions/openai.md](docs/sessions/openai.md) |
+| use MCP servers and resources | [docs/mcp.md](docs/mcp.md) |
+| build realtime or voice flows | [docs/realtime/README.md](docs/realtime/README.md), [docs/voice/README.md](docs/voice/README.md) |
+| debug traces and runtime behavior | [docs/tracing.md](docs/tracing.md) |
 
-    let session = MemorySession::new("demo");
-    let runner = Runner::new();
+## Public Surface
 
-    runner.run_with_session(&agent, "My name is Ada.", &session).await?;
-    let result = runner
-        .run_with_session(&agent, "What is my name?", &session)
-        .await?;
+The top-level `openai-agents` crate is the normal entry point.
 
-    println!("{}", result.final_output.unwrap_or_default());
-    Ok(())
-}
-```
+- runtime: `Agent`, `Runner`, `RunConfig`, `RunOptions`, `RunResult`, `RunResultStreaming`
+- OpenAI: `OpenAIProvider`, `OpenAIResponsesModel`, `OpenAIChatCompletionsModel`
+- sessions: `MemorySession`, `SQLiteSession`, `OpenAIConversationsSession`, `OpenAIResponsesCompactionSession`
+- namespaces:
+  - `openai_agents::realtime`
+  - `openai_agents::voice`
+  - `openai_agents::extensions`
 
-## Realtime And Voice
+The curated API map lives in [docs/ref/README.md](docs/ref/README.md).
 
-The facade also exposes:
+## Examples
 
-- `openai_agents::realtime` for long-lived realtime sessions, events, interrupts, agent updates, and transport-backed model adapters
-- `openai_agents::voice` for STT -> workflow -> TTS pipelines and streamed audio results
-- `openai_agents::extensions` for optional transports, provider adapters, memory backends, graph rendering, and experimental integrations
+Runnable examples live in `crates/openai-agents/examples`.
 
-## Design Goals
+- [basic_run.rs](crates/openai-agents/examples/basic_run.rs)
+- [memory_session.rs](crates/openai-agents/examples/memory_session.rs)
+- [realtime_session.rs](crates/openai-agents/examples/realtime_session.rs)
 
-- Rust-first ergonomics
-- explicit async flows
-- small top-level API, deeper subsystem modules when needed
-- production-quality typed surfaces instead of loosely-shaped blobs
-- composable runners, providers, sessions, and tools
+The full example index is in [docs/examples.md](docs/examples.md).
 
-## Project Status
+## Workspace Layout
 
-The codebase is pre-1.0. The runtime surface is large and usable, but APIs may still evolve as the implementation is tightened and simplified.
+- `crates/openai-agents`: public facade crate
+- `crates/agents-core`: shared runtime primitives
+- `crates/agents-openai`: OpenAI-specific implementation
+- `crates/agents-realtime`: realtime runtime
+- `crates/agents-voice`: voice runtime
+- `crates/agents-extensions`: optional and experimental integrations
+- `docs/`: product docs, guides, and curated reference
+- `examples/`: example landing page
 
-## Development
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Short version:
 
 ```bash
 cargo fmt --all
 cargo test --workspace
 ```
 
-Pinned upstream references used during development live under `reference/`.
+If you change docs, also run:
+
+```bash
+docs/scripts/check_links.sh
+docs/scripts/generate_llms_exports.sh
+```
+
+## Status
+
+The project is pre-1.0. The runtime is already broad, but APIs may still tighten as the library gets simpler and more stable.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

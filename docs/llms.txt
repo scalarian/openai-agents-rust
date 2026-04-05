@@ -1,0 +1,84 @@
+# openai-agents-rust docs summary
+
+Compact export of the markdown docs tree.
+
+- README.md: Documentation
+  The canonical docs home is [index.md](index.md).
+- agents.md: Agents
+  Use this page when you want to understand what an `Agent` is, how to build one, and which pieces belong on the agent versus on the runner.
+- config.md: Configuration
+  Use this page when you need to understand what is configured on `RunConfig`, what is configured on `RunOptions`, and how overrides should be layered.
+- context.md: Context
+  Use this page when your runs or tools need application state such as user identity, tenancy, feature flags, or service handles.
+- examples.md: Examples
+  Use this page when you want runnable starting points instead of longer conceptual guides.
+- guardrails.md: Guardrails
+  Use this page when you need runtime checks that can stop or rewrite unsafe inputs, outputs, or tool traffic.
+- handoffs.md: Handoffs
+  Use this page when you want control to move from one agent to another instead of staying inside one agent’s tool call.
+- human_in_the_loop.md: Human In The Loop
+  Use this page when a tool, shell action, MCP call, or workflow step should require operator review before it executes or before its result is accepted.
+- index.md: openai-agents-rust docs
+  This is the product docs home for the Rust agents runtime. Start here if you want to build with the library, understand the runtime model, or find the right subsystem to extend.
+- mcp.md: MCP
+  Use this page when you want to discover tools and resources from Model Context Protocol servers instead of baking every tool into the process.
+- models/README.md: Models
+  Use this section when you want to understand how model selection works, what the default OpenAI path does, and where model-level settings belong.
+- models/openai.md: OpenAI Models
+  Use this page when you want the OpenAI-specific runtime behavior: default provider resolution, hosted tools, Responses, Chat Completions, and conversation-aware sessions.
+- models/providers.md: Model Providers
+  Use this page when you need to decide where model resolution should live and how provider selection interacts with the runner.
+- models/settings.md: Model Settings
+  Use this page when you need to shape provider requests without hardcoding those choices inside the agent instructions.
+- multi_agent.md: Multi-Agent Patterns
+  Use this page when a single agent stops being enough and you need delegation, specialization, or routing.
+- quickstart.md: Quickstart
+  Use this page when you want the fastest path from an empty Rust project to a working agent run.
+- realtime/README.md: Realtime
+  Use this section when you need a long-lived session that can send and receive incremental events instead of waiting for one final result.
+- realtime/audio.md: Realtime Audio
+  Use this page when your realtime flow includes audio input, audio output, or playback state tracking.
+- realtime/events.md: Realtime Events
+  Use this page when you want to understand what flows through a realtime session as it runs.
+- realtime/transports.md: Realtime Transports
+  Use this page when you need to choose or understand the transport beneath a realtime session.
+- ref/README.md: Curated Reference
+  Use this section when you already know what you want to do and need the fastest map to the public surface.
+- ref/openai.md: OpenAI Reference
+  Use this page when you need the OpenAI-specific public surface without rereading the conceptual guides first.
+- ref/realtime.md: Realtime Reference
+  Use this page when you want the realtime session API map: runner, session, event, and transport-facing types.
+- ref/runtime.md: Runtime Reference
+  Use this page when you already know the concept you need and want the shortest path to the relevant runtime type or function.
+- ref/voice.md: Voice Reference
+  Use this page when you need the voice workflow and pipeline surface at a glance.
+- release.md: Release
+  Use this page when you are preparing a release or making a change that affects the public docs surface.
+- repl.md: REPL
+  Use this page when you want to poke the runtime interactively without building a whole application first.
+- results.md: Results
+  Use this page when you need to inspect what actually happened during a run, continue a conversation, or replay the output as the next input.
+- running_agents.md: Running Agents
+  Use this page when you want to choose the right execution entry point and understand how the runtime moves through turns.
+- sessions/README.md: Sessions
+  Use this section when you want state to survive across turns, runs, or process boundaries.
+- sessions/memory.md: Memory And SQLite Sessions
+  Use this page when you need a local session backend without OpenAI-specific conversation semantics.
+- sessions/openai.md: OpenAI Sessions
+  Use this page when you want sessions that preserve OpenAI conversation behavior rather than only storing local item history.
+- streaming.md: Streaming
+  Use this page when you need visibility into the run before the final output is ready.
+- tools.md: Tools
+  Use this page when you want the model to trigger typed behavior instead of only returning text.
+- tracing.md: Tracing
+  Use this page when you need to understand what happened during a run and you want that story in spans instead of only in logs.
+- usage.md: Usage
+  Use this page when you care about turns, usage, replay growth, and the operational shape of your agent runs.
+- visualization.md: Visualization
+  Use this page when you want diagrams or graph-shaped representations of an agent system.
+- voice/README.md: Voice
+  Use this section when you want STT -> workflow -> TTS orchestration on top of the shared agents runtime.
+- voice/pipeline.md: Voice Pipeline
+  Use this page when you need the full STT -> workflow -> TTS loop.
+- voice/workflow.md: Voice Workflow
+  Use this page when you want to understand how voice uses the shared runner rather than bypassing it.

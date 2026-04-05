@@ -1,0 +1,1881 @@
+# openai-agents-rust docs full export
+
+
+## README.md
+
+# Documentation
+
+The canonical docs home is [index.md](index.md).
+
+Open this directory when you want guides, curated reference, examples, or subsystem-specific docs.
+
+- first program: [quickstart.md](quickstart.md)
+- runtime guides: [agents.md](agents.md), [running_agents.md](running_agents.md), [tools.md](tools.md)
+- sessions and replay: [sessions/README.md](sessions/README.md), [results.md](results.md)
+- realtime and voice: [realtime/README.md](realtime/README.md), [voice/README.md](voice/README.md)
+- curated API map: [ref/README.md](ref/README.md)
+
+
+## agents.md
+
+# Agents
+
+Use this page when you want to understand what an `Agent` is, how to build one, and which pieces belong on the agent versus on the runner.
+
+## Smallest Agent
+
+```rust
+use openai_agents::Agent;
+
+let agent = Agent::builder("assistant")
+    .instructions("Be concise, practical, and structured.")
+    .build();
+```
+
+An agent is the runtime definition of:
+
+- its name and instructions
+- its tools
+- its output schema
+- its handoffs
+- its hooks and optional runtime helpers
+
+## What Usually Belongs On The Agent
+
+| Put it on the agent when... | Examples |
+| --- | --- |
+| it defines stable behavior for that role | instructions, tools, handoffs |
+| it should travel with the agent anywhere it runs | output schema, hooks |
+| it is part of the agent identity | handoff description, tool set |
+
+## What Usually Belongs On The Runner
+
+| Put it on the runner or run config when... | Examples |
+| --- | --- |
+| it is request-specific | `max_turns`, `conversation_id`, `trace_metadata` |
+| it depends on the caller environment | model provider, sessions, tracing processors |
+| it changes from run to run | run hooks, session callbacks, runtime overrides |
+
+## Common Agent Builder Features
+
+- `instructions(...)`
+- `function_tool(...)`
+- `handoff(...)`
+- `output_schema(...)`
+- `hooks(...)`
+
+## Structured Output
+
+If you need a strict shape back from the model, attach an output schema to the agent instead of parsing untrusted text after the run.
+
+Use structured outputs when:
+
+- the result feeds another service
+- you need stable keys and types
+- you want retries or max-turn logic to stay in the runtime
+
+## Agents As Tools
+
+An agent can be wrapped as a tool and invoked from another agent. This is the main primitive for “router + specialist” setups.
+
+Use `Agent::as_tool()` when:
+
+- the specialist should keep its own instructions and state
+- you want nested runs to show up as tool executions
+- the parent should decide when to delegate
+
+Read [multi_agent.md](multi_agent.md) and [handoffs.md](handoffs.md) before building large delegating systems.
+
+## A Practical Rule
+
+Start with one agent and one runner. Add extra agents only when a role needs genuinely different instructions, output constraints, or tools.
+
+## Read Next
+
+- [running_agents.md](running_agents.md)
+- [tools.md](tools.md)
+- [multi_agent.md](multi_agent.md)
+- [ref/runtime.md](ref/runtime.md)
+
+
+## config.md
+
+# Configuration
+
+Use this page when you need to understand what is configured on `RunConfig`, what is configured on `RunOptions`, and how overrides should be layered.
+
+## The Short Version
+
+- `RunConfig` describes the runtime behavior for a run
+- `RunOptions` is the call-time wrapper that can carry context, sessions, hooks, and config overrides together
+- `Runner` is where you usually keep defaults you want to reuse
+
+## `RunConfig`
+
+`RunConfig` carries the runtime knobs that shape behavior:
+
+- model selection
+- max turns
+- tracing settings and trace metadata
+- previous response and conversation identifiers
+- model settings
+- session settings
+- handoff filters and history mapping
+- input and output guardrails
+- session input callbacks
+- tool error formatting
+- run hooks and error handlers
+
+## `RunOptions`
+
+`RunOptions` is the outer execution wrapper. Use it when you need to pass:
+
+- `context`
+- `hooks`
+- `error_handlers`
+- `run_config`
+- `session`
+- `previous_response_id`
+- `conversation_id`
+- `model_provider`
+
+## Recommended Layering
+
+| Layer | What belongs there |
+| --- | --- |
+| agent | stable role definition |
+| runner defaults | shared application defaults |
+| run config | request-specific runtime behavior |
+| run options | concrete call-time wrapper state |
+
+## Practical Precedence
+
+The safe working assumption is:
+
+1. start from runner defaults
+2. apply agent-specific behavior
+3. overlay the provided `RunConfig`
+4. finish with `RunOptions` call-time state such as session, context, and explicit identifiers
+
+## A Good Default Pattern
+
+```rust,no_run
+use openai_agents::{RunConfig, RunOptions, Runner};
+
+let runner = Runner::new().with_config(RunConfig {
+    max_turns: 8,
+    ..RunConfig::default()
+});
+
+let _options = RunOptions {
+    run_config: Some(RunConfig {
+        workflow_name: "checkout-support".to_owned(),
+        ..RunConfig::default()
+    }),
+    ..RunOptions::default()
+};
+```
+
+## When Config Gets Too Large
+
+If your `RunConfig` starts carrying many request-specific closures or callbacks, move that assembly into your own application builder instead of inlining it at the call site.
+
+## Read Next
+
+- [context.md](context.md)
+- [sessions/README.md](sessions/README.md)
+- [tracing.md](tracing.md)
+- [ref/runtime.md](ref/runtime.md)
+
+
+## context.md
+
+# Context
+
+Use this page when your runs or tools need application state such as user identity, tenancy, feature flags, or service handles.
+
+## Why Context Exists
+
+The runtime separates:
+
+- the agent definition
+- the execution configuration
+- the per-call context
+
+That lets you reuse the same agent safely across requests while still passing request-local state into tools, hooks, and runtime callbacks.
+
+## The Main Types
+
+- `RunContext`
+- `RunContextWrapper`
+- `ToolContext`
+- `RunOptions<TContext>`
+
+## The Pattern
+
+```rust,no_run
+use openai_agents::{RunOptions, Runner};
+
+#[derive(Clone)]
+struct AppContext {
+    user_id: String,
+}
+
+let options = RunOptions {
+    context: Some(AppContext {
+        user_id: "user_123".to_owned(),
+    }),
+    ..RunOptions::default()
+};
+
+let _runner = Runner::new();
+```
+
+## Where Context Is Visible
+
+- tool handlers
+- run hooks
+- tracing helpers
+- handoff and approval flows that depend on caller state
+
+## What Not To Put In Context
+
+- durable conversational history
+- replay state
+- conversation identifiers
+- anything already modeled by sessions or results
+
+That data belongs in sessions or in the run result, not in your app context object.
+
+## Read Next
+
+- [tools.md](tools.md)
+- [human_in_the_loop.md](human_in_the_loop.md)
+- [results.md](results.md)
+
+
+## examples.md
+
+# Examples
+
+Use this page when you want runnable starting points instead of longer conceptual guides.
+
+## Runnable Examples
+
+All runnable examples live in `crates/openai-agents/examples`.
+
+| Example | What it covers | File |
+| --- | --- | --- |
+| basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
+| memory session | session-backed follow-up turns | [memory_session.rs](../crates/openai-agents/examples/memory_session.rs) |
+| streamed run | live events and completion | [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) |
+| realtime session | long-lived realtime interaction | [realtime_session.rs](../crates/openai-agents/examples/realtime_session.rs) |
+| voice pipeline | STT -> workflow -> TTS flow | [voice_pipeline.rs](../crates/openai-agents/examples/voice_pipeline.rs) |
+
+## Read By Goal
+
+- first program: [quickstart.md](quickstart.md)
+- tools: [tools.md](tools.md)
+- sessions: [sessions/README.md](sessions/README.md)
+- streaming: [streaming.md](streaming.md)
+- realtime: [realtime/README.md](realtime/README.md)
+- voice: [voice/README.md](voice/README.md)
+
+## Example Design Rules
+
+Good examples in this repo should:
+
+- compile
+- stay short
+- focus on one capability
+- link back to the canonical docs page
+
+If an example needs five unrelated setup steps, it should probably become a guide instead.
+
+
+## guardrails.md
+
+# Guardrails
+
+Use this page when you need runtime checks that can stop or rewrite unsafe inputs, outputs, or tool traffic.
+
+## Guardrail Families
+
+| Guardrail | Runs against |
+| --- | --- |
+| input guardrail | user input and prepared model input |
+| output guardrail | final model output |
+| tool input guardrail | tool arguments before execution |
+| tool output guardrail | tool result before it becomes model-visible |
+
+## What Guardrails Are Good At
+
+- blocking unsafe requests
+- sanitizing tool input
+- stopping sensitive outputs
+- enforcing business or compliance checks
+- turning policy into reusable runtime code
+
+## What Guardrails Are Not
+
+Guardrails are not a substitute for:
+
+- secure tool implementations
+- proper authorization
+- application-level validation
+- model-independent business rules that belong before the runtime
+
+## Tripwires
+
+Guardrail failures surface as explicit runtime results and errors rather than being hidden inside free-form model text.
+
+That makes them suitable for:
+
+- audit trails
+- test assertions
+- operator intervention
+- retry or fallback logic
+
+## Read Next
+
+- [tools.md](tools.md)
+- [human_in_the_loop.md](human_in_the_loop.md)
+- [tracing.md](tracing.md)
+
+
+## handoffs.md
+
+# Handoffs
+
+Use this page when you want control to move from one agent to another instead of staying inside one agent’s tool call.
+
+## What A Handoff Does
+
+A handoff transfers control from one agent to another while preserving the runtime’s understanding of:
+
+- history
+- run state
+- tracing
+- session continuity
+
+## Why Handoffs Exist
+
+Use a handoff when:
+
+- the next agent should become the active agent
+- the new agent should answer directly
+- the history shape needs explicit filtering or nesting
+
+Use an agent-as-tool instead when the parent agent should remain the one in charge.
+
+## History Control
+
+The handoff path supports:
+
+- handoff input filters
+- nested handoff history
+- handoff history mappers
+- default handoff history mapping helpers
+
+That matters when you want to avoid blindly forwarding the entire transcript into every downstream specialist.
+
+## A Healthy Default
+
+Start with explicit handoffs only when ownership of the conversation truly changes. Otherwise prefer a specialist tool.
+
+## Read Next
+
+- [multi_agent.md](multi_agent.md)
+- [config.md](config.md)
+- [sessions/README.md](sessions/README.md)
+
+
+## human_in_the_loop.md
+
+# Human In The Loop
+
+Use this page when a tool, shell action, MCP call, or workflow step should require operator review before it executes or before its result is accepted.
+
+## The Main Runtime Primitives
+
+- approval-required tools
+- MCP approval request and response items
+- interruptions
+- run hooks and error handlers
+
+## Typical Uses
+
+- approving destructive shell commands
+- reviewing external tool usage
+- pausing before sensitive data leaves the system
+- requiring confirmation before handoffs or escalations
+
+## Approval Design Rules
+
+Keep approval prompts:
+
+- specific
+- reviewable
+- bound to one concrete action
+- traceable to a tool name and call id
+
+The runtime already carries the call identity. Use that instead of inventing your own ad-hoc approval bookkeeping.
+
+## Interruptions
+
+Interruptions let you stop or branch a run without losing the run state model. That is the right surface for:
+
+- user cancellations
+- operator pauses
+- “approval required” workflows
+
+## Read Next
+
+- [tools.md](tools.md)
+- [mcp.md](mcp.md)
+- [results.md](results.md)
+
+
+## index.md
+
+# openai-agents-rust docs
+
+This is the product docs home for the Rust agents runtime. Start here if you want to build with the library, understand the runtime model, or find the right subsystem to extend.
+
+![Runtime overview](assets/runtime-overview.svg)
+
+## Start With A Working Path
+
+| Goal | Read this first | Then read |
+| --- | --- | --- |
+| build a first agent | [quickstart.md](quickstart.md) | [agents.md](agents.md), [running_agents.md](running_agents.md) |
+| run with tools | [tools.md](tools.md) | [guardrails.md](guardrails.md), [human_in_the_loop.md](human_in_the_loop.md) |
+| keep conversational state | [sessions/README.md](sessions/README.md) | [results.md](results.md), [context.md](context.md) |
+| stream events live | [streaming.md](streaming.md) | [tracing.md](tracing.md), [usage.md](usage.md) |
+| work with MCP | [mcp.md](mcp.md) | [tools.md](tools.md), [human_in_the_loop.md](human_in_the_loop.md) |
+| build realtime flows | [realtime/README.md](realtime/README.md) | [realtime/events.md](realtime/events.md), [realtime/audio.md](realtime/audio.md) |
+| build voice workflows | [voice/README.md](voice/README.md) | [voice/workflow.md](voice/workflow.md), [voice/pipeline.md](voice/pipeline.md) |
+| find the public API | [ref/README.md](ref/README.md) | [examples.md](examples.md) |
+
+## What The Runtime Looks Like
+
+```mermaid
+flowchart LR
+    A["Agent"] --> B["Runner"]
+    B --> C["Model Provider"]
+    B --> D["Tools"]
+    B --> E["Sessions"]
+    B --> F["Guardrails"]
+    B --> G["Tracing"]
+    D --> H["MCP"]
+    B --> I["RunResult / RunResultStreaming"]
+    B --> J["Realtime / Voice"]
+```
+
+## Read By Topic
+
+- [quickstart.md](quickstart.md): install the crate and ship your first run
+- [agents.md](agents.md): define agents, output schemas, tools, and handoffs
+- [running_agents.md](running_agents.md): choose between `run`, `run_sync`, `Runner`, and streamed execution
+- [config.md](config.md): understand `RunConfig`, `RunOptions`, precedence, and runtime knobs
+- [context.md](context.md): thread application state through runs, tools, and hooks
+- [multi_agent.md](multi_agent.md): compose routers, specialists, and nested agent tools
+- [tools.md](tools.md): add function tools, shell/computer tools, hosted tools, and approvals
+- [guardrails.md](guardrails.md): stop bad inputs, outputs, and tool traffic before it leaks
+- [handoffs.md](handoffs.md): route between agents with explicit history control
+- [human_in_the_loop.md](human_in_the_loop.md): approvals, interruptions, and operator review
+- [mcp.md](mcp.md): attach MCP servers, tools, resources, and filtering
+- [streaming.md](streaming.md): consume `StreamEvent` values as a run happens
+- [results.md](results.md): replay, normalize, and continue runs
+- [usage.md](usage.md): reason about usage, turns, and operational cost
+- [tracing.md](tracing.md): instrument runs with traces, spans, and processors
+- [visualization.md](visualization.md): generate graphs and visual artifacts from agent systems
+- [repl.md](repl.md): drive the runtime interactively
+- [examples.md](examples.md): find runnable programs by goal
+- [release.md](release.md): release and docs maintenance workflow
+
+## Subsystem Guides
+
+- [models/README.md](models/README.md)
+- [sessions/README.md](sessions/README.md)
+- [realtime/README.md](realtime/README.md)
+- [voice/README.md](voice/README.md)
+- [ref/README.md](ref/README.md)
+
+## What To Expect From These Docs
+
+Every page is written to answer four questions quickly:
+
+1. what the feature is for
+2. what the smallest working example looks like
+3. which types and entrypoints actually matter
+4. what to read next
+
+If you find duplicate explanations for the same feature, that is a bug in the docs.
+
+
+## mcp.md
+
+# MCP
+
+Use this page when you want to discover tools and resources from Model Context Protocol servers instead of baking every tool into the process.
+
+## What The Runtime Supports
+
+- server lifecycle management
+- dynamic tool discovery
+- tool filtering
+- approval-aware execution
+- MCP resources and resource templates
+- normalized tool/resource outputs
+
+## Main Types
+
+- `MCPServer`
+- `MCPServerManager`
+- `MCPServerStdio`
+- `MCPServerSse`
+- `MCPServerStreamableHttp`
+- `MCPTool`
+- `MCPResource`
+
+## How To Think About MCP
+
+MCP is not just “more tools.” It is a runtime boundary with its own lifecycle:
+
+1. connect to servers
+2. discover tools and resources
+3. filter and approve what is visible
+4. execute or read through normalized runtime items
+5. clean up connections
+
+## Resource Support
+
+The runtime exposes resources and templates in addition to callable tools. That matters when a server is better treated as a structured information source than as an imperative tool executor.
+
+## Server Selection
+
+Use:
+
+- stdio when the server is local and process-backed
+- SSE or streamable HTTP when the server is remote
+
+## Read Next
+
+- [tools.md](tools.md)
+- [human_in_the_loop.md](human_in_the_loop.md)
+- [ref/runtime.md](ref/runtime.md)
+
+
+## models/README.md
+
+# Models
+
+Use this section when you want to understand how model selection works, what the default OpenAI path does, and where model-level settings belong.
+
+## In This Section
+
+- [providers.md](providers.md): provider selection and shared runtime model routing
+- [settings.md](settings.md): `ModelSettings`, defaults, and overrides
+- [openai.md](openai.md): OpenAI-specific model behavior, including Responses vs Chat Completions
+
+## The Big Idea
+
+The runtime separates:
+
+- the agent definition
+- the model provider
+- model settings
+- session and continuation state
+
+That separation lets you keep agents stable while swapping providers, request settings, and conversation-aware session behavior.
+
+## Read Next
+
+- [providers.md](providers.md)
+- [settings.md](settings.md)
+- [../config.md](../config.md)
+
+
+## models/openai.md
+
+# OpenAI Models
+
+Use this page when you want the OpenAI-specific runtime behavior: default provider resolution, hosted tools, Responses, Chat Completions, and conversation-aware sessions.
+
+## The Two Main Paths
+
+| Path | Use it when |
+| --- | --- |
+| Responses | you want the conversation-aware modern path |
+| Chat Completions | you need compatibility with that API shape |
+
+## What The OpenAI Layer Adds
+
+- default provider behavior
+- hosted tool constructors
+- conversation-aware session helpers
+- compaction-aware sessions
+- Responses websocket support
+- request shaping helpers
+
+## Practical Guidance
+
+- prefer Responses for new work
+- use Chat Completions when you have a real compatibility reason
+- keep OpenAI-specific request shaping in config, not in app-level string prompts
+
+## Read Next
+
+- [../sessions/openai.md](../sessions/openai.md)
+- [../tools.md](../tools.md)
+- [../ref/openai.md](../ref/openai.md)
+
+
+## models/providers.md
+
+# Model Providers
+
+Use this page when you need to decide where model resolution should live and how provider selection interacts with the runner.
+
+## Main Types
+
+- `ModelProvider`
+- `OpenAIProvider`
+- `MultiProvider`
+
+## Default Pattern
+
+Use one provider for the application and pass it into a shared `Runner` unless you have a real need for per-request provider switching.
+
+## When `MultiProvider` Helps
+
+`MultiProvider` is useful when:
+
+- different model name prefixes map to different providers
+- you want one facade with several model backends
+- you want migration room without rewriting agents
+
+## Read Next
+
+- [settings.md](settings.md)
+- [openai.md](openai.md)
+
+
+## models/settings.md
+
+# Model Settings
+
+Use this page when you need to shape provider requests without hardcoding those choices inside the agent instructions.
+
+## What `ModelSettings` Is For
+
+`ModelSettings` carries model request knobs such as:
+
+- reasoning settings
+- verbosity
+- tool-choice-related behavior
+- truncation and retry settings
+- provider request extras such as headers, query params, and body fields
+
+## Good Defaults
+
+- keep stable defaults on the runner
+- add request-specific overrides in `RunConfig`
+- avoid storing provider request details in your agent instructions
+
+## Read Next
+
+- [providers.md](providers.md)
+- [openai.md](openai.md)
+- [../config.md](../config.md)
+
+
+## multi_agent.md
+
+# Multi-Agent Patterns
+
+Use this page when a single agent stops being enough and you need delegation, specialization, or routing.
+
+## The Three Main Patterns
+
+| Pattern | Use it when |
+| --- | --- |
+| nested agent as tool | the parent should decide when to delegate |
+| explicit handoff | control should move from one agent to another |
+| router and specialists | one agent chooses between several domain roles |
+
+## Start Simple
+
+Do not begin with five agents because the architecture diagram looks impressive. Start with:
+
+1. one agent
+2. a small tool set
+3. clear output expectations
+
+Add another agent only when a role genuinely needs:
+
+- different instructions
+- different tool visibility
+- different output constraints
+- different approval or session behavior
+
+## Nested Agent Tools
+
+`Agent::as_tool()` is the cleanest option when the parent agent should stay in charge and simply call a specialist as one tool in its toolkit.
+
+This is usually the right choice for:
+
+- code review specialists
+- search or retrieval specialists
+- translation or formatting specialists
+
+## Handoffs
+
+Use a handoff when control should actually move to another agent instead of appearing as a tool call in the parent run.
+
+Read [handoffs.md](handoffs.md) for history filtering and handoff-specific settings.
+
+## Session Guidance
+
+If multiple agents participate in one broader workflow, decide early whether they should share session history or keep independent state. This affects:
+
+- replay
+- conversation continuity
+- auditability
+- prompt size over time
+
+## Read Next
+
+- [agents.md](agents.md)
+- [handoffs.md](handoffs.md)
+- [tools.md](tools.md)
+
+
+## quickstart.md
+
+# Quickstart
+
+Use this page when you want the fastest path from an empty Rust project to a working agent run.
+
+## Install
+
+Add the facade crate and Tokio:
+
+```toml
+[dependencies]
+openai-agents = { git = "https://github.com/scalarian/openai-agents-rust", package = "openai-agents" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+## First Run
+
+```rust
+use openai_agents::{run, Agent};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let agent = Agent::builder("assistant")
+        .instructions("Be concise, practical, and structured.")
+        .build();
+
+    let result = run(&agent, "Give me three release checks.").await?;
+    println!("{}", result.final_output.unwrap_or_default());
+    Ok(())
+}
+```
+
+Runnable version: [basic_run.rs](../crates/openai-agents/examples/basic_run.rs)
+
+## When To Use Which Entry Point
+
+| Need | Entry point |
+| --- | --- |
+| one-shot async call | `run` |
+| one-shot sync call | `run_sync` |
+| reusable configured runner | `Runner` |
+| session-backed conversations | `Runner::run_with_session` |
+| live streamed events | `run_streamed` or `Runner::run_streamed` |
+
+## Add A Session
+
+```rust
+use openai_agents::{Agent, MemorySession, Runner};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let agent = Agent::builder("assistant")
+        .instructions("Track the conversation and answer briefly.")
+        .build();
+
+    let session = MemorySession::new("demo");
+    let runner = Runner::new();
+
+    runner.run_with_session(&agent, "My name is Ada.", &session).await?;
+    let result = runner
+        .run_with_session(&agent, "What is my name?", &session)
+        .await?;
+
+    println!("{}", result.final_output.unwrap_or_default());
+    Ok(())
+}
+```
+
+Runnable version: [memory_session.rs](../crates/openai-agents/examples/memory_session.rs)
+
+## Add Streaming
+
+```rust,no_run
+use futures::StreamExt;
+use openai_agents::{Agent, run_streamed};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let agent = Agent::builder("assistant")
+        .instructions("Be concise.")
+        .build();
+
+    let streamed = run_streamed(&agent, "Stream a deployment checklist.").await?;
+    let events = streamed.stream_events().collect::<Vec<_>>().await;
+    let result = streamed.wait_for_completion().await?;
+
+    println!("events={}", events.len());
+    println!("{}", result.final_output.unwrap_or_default());
+    Ok(())
+}
+```
+
+Runnable version: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs)
+
+## What You Should Read Next
+
+- [agents.md](agents.md): how to shape an agent beyond name and instructions
+- [running_agents.md](running_agents.md): how runners, options, and resume paths work
+- [tools.md](tools.md): how to attach runtime behavior
+- [sessions/README.md](sessions/README.md): how state and continuation work
+
+
+## realtime/README.md
+
+# Realtime
+
+Use this section when you need a long-lived session that can send and receive incremental events instead of waiting for one final result.
+
+## Main Types
+
+- `RealtimeRunner`
+- `RealtimeSession`
+- `RealtimeAgent`
+- `RealtimeEvent`
+
+## Minimal Example
+
+```rust
+use openai_agents::realtime::{RealtimeAgent, RealtimeRunner};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let runner = RealtimeRunner::new(RealtimeAgent::new("assistant"));
+    let session = runner.run().await?;
+
+    let events = session.send_text("hello from realtime").await?;
+    for event in events {
+        println!("{event:?}");
+    }
+
+    session.close().await?;
+    Ok(())
+}
+```
+
+Runnable version: [realtime_session.rs](../../crates/openai-agents/examples/realtime_session.rs)
+
+## In This Section
+
+- [events.md](events.md)
+- [audio.md](audio.md)
+- [transports.md](transports.md)
+
+## Read Next
+
+- [events.md](events.md)
+- [audio.md](audio.md)
+- [../voice/README.md](../voice/README.md)
+
+
+## realtime/audio.md
+
+# Realtime Audio
+
+Use this page when your realtime flow includes audio input, audio output, or playback state tracking.
+
+![Voice pipeline](../assets/voice-pipeline.svg)
+
+## What The Runtime Covers
+
+- audio format normalization
+- playback tracking
+- input and output audio settings
+- transport-backed audio message handling
+
+## Practical Guidance
+
+- normalize formats at the edges
+- keep playback tracking in the session, not in scattered UI code
+- use the runtime audio config types instead of inventing custom ad-hoc payload objects
+
+## Read Next
+
+- [transports.md](transports.md)
+- [../voice/README.md](../voice/README.md)
+
+
+## realtime/events.md
+
+# Realtime Events
+
+Use this page when you want to understand what flows through a realtime session as it runs.
+
+## Event Families
+
+- transcript deltas
+- raw model events
+- tool lifecycle events
+- handoff events
+- interruption events
+- session updates and close events
+
+## Design Rule
+
+Treat realtime events as the live operational contract of the session. Do not rebuild your own second event taxonomy on top of them unless you have a product-specific reason.
+
+## Read Next
+
+- [README.md](README.md)
+- [audio.md](audio.md)
+- [../tracing.md](../tracing.md)
+
+
+## realtime/transports.md
+
+# Realtime Transports
+
+Use this page when you need to choose or understand the transport beneath a realtime session.
+
+## Main Runtime Surfaces
+
+- OpenAI realtime websocket model
+- OpenAI realtime SIP model
+- extensions transports such as Cloudflare and Twilio adapters
+
+## Transport Guidance
+
+- use websocket when you want direct model session traffic
+- use SIP when your environment already speaks telephony-style session control
+- use extension adapters when you need a bridge between a platform transport and the runtime session model
+
+## Read Next
+
+- [README.md](README.md)
+- [../ref/realtime.md](../ref/realtime.md)
+
+
+## ref/README.md
+
+# Curated Reference
+
+Use this section when you already know what you want to do and need the fastest map to the public surface.
+
+## Reference Pages
+
+- [runtime.md](runtime.md): agent, runner, config, results, tools, sessions, tracing
+- [openai.md](openai.md): OpenAI provider, models, hosted tools, sessions
+- [realtime.md](realtime.md): realtime runner, session, events, audio, transport state
+- [voice.md](voice.md): voice workflow, pipeline, result, STT/TTS types
+
+## How To Use This Reference
+
+The pages here are intentionally curated. They point you to:
+
+- the important public types
+- the relevant guides
+- the runnable examples
+
+They are not meant to replace rustdoc. They are meant to get you to the right rustdoc or example quickly.
+
+
+## ref/openai.md
+
+# OpenAI Reference
+
+Use this page when you need the OpenAI-specific public surface without rereading the conceptual guides first.
+
+## Providers And Models
+
+- `OpenAIProvider`
+- `OpenAIResponsesModel`
+- `OpenAIChatCompletionsModel`
+- `OpenAIResponsesWSModel`
+
+## Sessions
+
+- `OpenAIConversationsSession`
+- `OpenAIResponsesCompactionSession`
+- `OpenAIConversationSessionState`
+
+## Hosted Tools
+
+- `code_interpreter_tool`
+- `file_search_tool`
+- `image_generation_tool`
+- `tool_search_tool`
+- `web_search_tool`
+
+## Supporting Helpers
+
+- default OpenAI key and base URL setters/getters
+- default transport configuration helpers
+- retry advice helpers
+- compaction helper functions
+
+## Good Companion Pages
+
+- [../models/openai.md](../models/openai.md)
+- [../sessions/openai.md](../sessions/openai.md)
+- [../tools.md](../tools.md)
+
+
+## ref/realtime.md
+
+# Realtime Reference
+
+Use this page when you want the realtime session API map: runner, session, event, and transport-facing types.
+
+## Main Types
+
+- `RealtimeRunner`
+- `RealtimeSession`
+- `RealtimeAgent`
+- `RealtimeRunConfig`
+- `RealtimeEvent`
+
+## Event Families
+
+- transcript delta
+- agent lifecycle
+- tool lifecycle
+- handoff
+- interruption
+- session updated / closed
+
+## Transport And Audio
+
+- `OpenAIRealtimeWebSocketModel`
+- `OpenAIRealtimeSIPModel`
+- `RealtimeAudioFormat`
+- `RealtimePlaybackTracker`
+
+## Good Companion Pages
+
+- [../realtime/README.md](../realtime/README.md)
+- [../realtime/events.md](../realtime/events.md)
+- [../realtime/audio.md](../realtime/audio.md)
+
+
+## ref/runtime.md
+
+# Runtime Reference
+
+Use this page when you already know the concept you need and want the shortest path to the relevant runtime type or function.
+
+## Core Entry Points
+
+| Need | Type or function |
+| --- | --- |
+| one-shot async run | `run` |
+| one-shot sync run | `run_sync` |
+| configured reusable runner | `Runner` |
+| live incremental run | `run_streamed`, `RunResultStreaming` |
+
+## Agent Surfaces
+
+- `Agent`
+- `AgentBuilder`
+- `AgentHooks`
+- `AgentOutputSchema`
+- `Agent::as_tool()`
+
+## Run Surfaces
+
+- `RunConfig`
+- `RunOptions`
+- `RunResult`
+- `RunResultStreaming`
+- `RunState`
+
+## Tooling Surfaces
+
+- `function_tool`
+- `FunctionTool`
+- `ToolOutput`
+- `ToolErrorFormatter`
+- shell and computer tool types
+- approval and guardrail types
+
+## Session Surfaces
+
+- `Session`
+- `MemorySession`
+- `SQLiteSession`
+- `SessionSettings`
+
+## Tracing Surfaces
+
+- `Trace`
+- `Span`
+- `TracingProcessor`
+- `add_trace_processor`
+- `flush_traces`
+- `set_tracing_disabled`
+
+## Good Companion Pages
+
+- [../agents.md](../agents.md)
+- [../running_agents.md](../running_agents.md)
+- [../tools.md](../tools.md)
+- [../sessions/README.md](../sessions/README.md)
+
+
+## ref/voice.md
+
+# Voice Reference
+
+Use this page when you need the voice workflow and pipeline surface at a glance.
+
+## Main Types
+
+- `SingleAgentVoiceWorkflow`
+- `VoicePipeline`
+- `VoicePipelineConfig`
+- `StreamedAudioResult`
+- `AudioInput`
+- `StreamedAudioInput`
+- `STTModelSettings`
+- `TTSModelSettings`
+
+## Good Companion Pages
+
+- [../voice/README.md](../voice/README.md)
+- [../voice/workflow.md](../voice/workflow.md)
+- [../voice/pipeline.md](../voice/pipeline.md)
+
+
+## release.md
+
+# Release
+
+Use this page when you are preparing a release or making a change that affects the public docs surface.
+
+## Release Checklist
+
+1. update code and tests
+2. update the affected docs pages
+3. run docs maintenance scripts
+4. run `cargo fmt --all`
+5. run `cargo test --workspace`
+6. confirm the README still points at the right docs entrypoints
+
+## Docs Maintenance
+
+After docs changes:
+
+```bash
+docs/scripts/check_links.sh
+docs/scripts/generate_llms_exports.sh
+```
+
+## What To Update When Public API Changes
+
+- `README.md`
+- the relevant guide page under `docs/`
+- the curated reference page under `docs/ref/`
+- runnable examples if the change affects user-facing flow
+
+## Read Next
+
+- [ref/README.md](ref/README.md)
+- [examples.md](examples.md)
+
+
+## repl.md
+
+# REPL
+
+Use this page when you want to poke the runtime interactively without building a whole application first.
+
+## Main Entry Point
+
+The facade re-exports `run_demo_loop`, which is the quickest way to wire an agent into an interactive loop.
+
+## When The REPL Is Useful
+
+- testing instructions
+- trying tool visibility changes
+- validating handoffs
+- smoke-testing session behavior
+
+## What It Is Not
+
+The REPL is a development tool. It is not the production orchestration surface for your application.
+
+## Read Next
+
+- [quickstart.md](quickstart.md)
+- [examples.md](examples.md)
+
+
+## results.md
+
+# Results
+
+Use this page when you need to inspect what actually happened during a run, continue a conversation, or replay the output as the next input.
+
+## The Two Result Shapes
+
+| Type | When you see it |
+| --- | --- |
+| `RunResult` | after a completed run |
+| `RunResultStreaming` | while a streamed run is still live |
+
+## What `RunResult` Carries
+
+- agent identity
+- input and normalized input
+- output items and new items
+- raw model responses
+- final output text
+- guardrail results
+- interruptions
+- usage
+- trace
+- conversation and previous-response ids
+- replayable run state
+
+## Replay
+
+Use:
+
+- `to_input_list()` when you want full replay including preserved history
+- `to_input_list_mode(ToInputListMode::Normalized)` when you want the normalized continuation shape
+
+That replay machinery is the foundation for:
+
+- follow-up turns
+- resume flows
+- session persistence
+- debugging and tests
+
+## Last Response Helpers
+
+Both `RunResult` and `RunResultStreaming` expose last-response helpers so you can inspect the latest provider response without digging through internal item lists manually.
+
+## Agent Tool Invocation
+
+Nested agent-tool runs are captured as structured invocation metadata, not just free-form strings. That makes them suitable for:
+
+- debugging
+- operator review
+- replayable workflows
+
+## Read Next
+
+- [sessions/README.md](sessions/README.md)
+- [streaming.md](streaming.md)
+- [usage.md](usage.md)
+
+
+## running_agents.md
+
+# Running Agents
+
+Use this page when you want to choose the right execution entry point and understand how the runtime moves through turns.
+
+## The Three Main Shapes
+
+| Shape | Use it when | Entry point |
+| --- | --- | --- |
+| one-shot async | your app is already async | `run` |
+| reusable configured runner | you want shared config and sessions | `Runner` |
+| live event stream | you need events before the run completes | `run_streamed` |
+
+## One-Shot Run
+
+```rust
+use openai_agents::{Agent, run};
+
+# async fn demo() -> Result<(), openai_agents::AgentsError> {
+let agent = Agent::builder("assistant").build();
+let result = run(&agent, "hello").await?;
+assert_eq!(result.agent_name, "assistant");
+assert_eq!(result.final_output.as_deref(), Some("hello"));
+# Ok(())
+# }
+```
+
+## Reusable Runner
+
+```rust
+use openai_agents::{Agent, RunConfig, Runner};
+
+# async fn demo() -> Result<(), openai_agents::AgentsError> {
+let agent = Agent::builder("assistant").build();
+let runner = Runner::new().with_config(RunConfig {
+    max_turns: 5,
+    ..RunConfig::default()
+});
+
+let result = runner.run(&agent, "hello").await?;
+assert_eq!(result.agent_name, "assistant");
+# Ok(())
+# }
+```
+
+## Streamed Run
+
+```rust,no_run
+use futures::StreamExt;
+use openai_agents::{Agent, run_streamed};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let agent = Agent::builder("assistant").build();
+    let streamed = run_streamed(&agent, "hello").await?;
+
+    while let Some(event) = streamed.stream_events().next().await {
+        println!("{event:?}");
+    }
+
+    let result = streamed.wait_for_completion().await?;
+    println!("{:?}", result.final_output);
+    Ok(())
+}
+```
+
+## What The Runner Owns
+
+The runner is the execution coordinator. It is the place where:
+
+- model provider selection happens
+- sessions are loaded and persisted
+- guardrails run
+- tools are invoked
+- handoffs occur
+- traces and usage are recorded
+
+## What A Run Produces
+
+Every completed run gives you a `RunResult`. Every streamed run gives you a `RunResultStreaming`, which can produce a final `RunResult`.
+
+Read [results.md](results.md) to understand replay and continuation.
+
+## Resume And Continuation
+
+Continuation data lives in the result state and session state, not in ad-hoc application bookkeeping.
+
+Use the built-in result/session machinery when you want:
+
+- conversation continuity
+- replay input generation
+- persisted `previous_response_id`
+- persisted `conversation_id`
+
+## Read Next
+
+- [config.md](config.md)
+- [streaming.md](streaming.md)
+- [results.md](results.md)
+- [sessions/README.md](sessions/README.md)
+
+
+## sessions/README.md
+
+# Sessions
+
+Use this section when you want state to survive across turns, runs, or process boundaries.
+
+## In This Section
+
+- [memory.md](memory.md): in-memory and SQLite-backed session basics
+- [openai.md](openai.md): OpenAI conversation-aware sessions and compaction
+
+## What Sessions Are For
+
+Sessions own durable conversation state such as:
+
+- prior input items
+- continuation history
+- conversation identifiers
+- provider-specific continuation metadata
+
+## What Sessions Are Not For
+
+Do not use sessions as a grab bag for arbitrary application state. Put application state in your own context object and keep sessions focused on runtime conversation state.
+
+## Read Next
+
+- [memory.md](memory.md)
+- [openai.md](openai.md)
+- [../results.md](../results.md)
+
+
+## sessions/memory.md
+
+# Memory And SQLite Sessions
+
+Use this page when you need a local session backend without OpenAI-specific conversation semantics.
+
+## Main Types
+
+- `MemorySession`
+- `SQLiteSession`
+- `SessionSettings`
+
+## When To Use Which
+
+| Session type | Good for |
+| --- | --- |
+| `MemorySession` | tests, demos, short-lived app state |
+| `SQLiteSession` | local persistence, desktop apps, prototypes that need durability |
+
+## Session Settings
+
+Use `SessionSettings` when you need bounds such as history limits. That is the right layer for controlling replay growth without rewriting session storage code.
+
+## Read Next
+
+- [openai.md](openai.md)
+- [../quickstart.md](../quickstart.md)
+- [../results.md](../results.md)
+
+
+## sessions/openai.md
+
+# OpenAI Sessions
+
+Use this page when you want sessions that preserve OpenAI conversation behavior rather than only storing local item history.
+
+## Main Types
+
+- `OpenAIConversationsSession`
+- `OpenAIResponsesCompactionSession`
+
+## What They Add
+
+- conversation identifiers
+- previous-response identifiers
+- provider-aware continuation behavior
+- compaction decisions tied to Responses-style history management
+
+## When To Use Them
+
+Use an OpenAI-specific session when:
+
+- you want OpenAI-managed conversation continuity
+- you want compaction-aware long-lived sessions
+- you need runtime continuity across normal runs, streamed runs, and resumes
+
+## Compaction
+
+Compaction exists to keep long-lived conversations usable. Treat it as part of the runtime state model, not as ad-hoc string trimming.
+
+## Read Next
+
+- [../models/openai.md](../models/openai.md)
+- [../results.md](../results.md)
+- [../usage.md](../usage.md)
+
+
+## streaming.md
+
+# Streaming
+
+Use this page when you need visibility into the run before the final output is ready.
+
+## What You Get
+
+`RunResultStreaming` is a live run handle. It lets you:
+
+- read events as they happen
+- wait for the final `RunResult`
+- inspect last-response and replay state
+- preserve normalized and full replay input
+
+## Minimal Example
+
+```rust,no_run
+use futures::StreamExt;
+use openai_agents::{Agent, run_streamed};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let agent = Agent::builder("assistant").build();
+    let streamed = run_streamed(&agent, "hello").await?;
+
+    let events = streamed.stream_events().collect::<Vec<_>>().await;
+    let result = streamed.wait_for_completion().await?;
+
+    println!("events={}", events.len());
+    println!("{:?}", result.final_output);
+    Ok(())
+}
+```
+
+Runnable version: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs)
+
+## Event Families
+
+The stream can include:
+
+- agent lifecycle events
+- raw model events
+- run item events
+- tool lifecycle events
+- handoff events
+- interruption events
+
+## Replay Matters
+
+The streamed handle is not just an event feed. It also preserves the state needed to continue or replay the run after completion.
+
+Use:
+
+- `wait_for_completion()` for the durable result
+- `to_input_list()` or `to_input_list_mode(...)` for replay
+
+## Read Next
+
+- [results.md](results.md)
+- [running_agents.md](running_agents.md)
+- [tracing.md](tracing.md)
+
+
+## tools.md
+
+# Tools
+
+Use this page when you want the model to trigger typed behavior instead of only returning text.
+
+## The Main Tool Families
+
+| Tool family | When to use it |
+| --- | --- |
+| function tools | normal Rust functions with typed arguments |
+| shell and computer tools | local or hosted execution environments |
+| hosted OpenAI tools | code interpreter, file search, web search, image generation |
+| MCP tools | external tools discovered from MCP servers |
+
+## Function Tool Example
+
+```rust,no_run
+use schemars::JsonSchema;
+use serde::Deserialize;
+use openai_agents::{Agent, AgentsError, function_tool};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SearchArgs {
+    query: String,
+}
+
+let search = function_tool(
+    "search",
+    "Search internal docs",
+    |_ctx, args: SearchArgs| async move {
+        Ok::<_, AgentsError>(format!("search-result: {}", args.query))
+    },
+)?;
+
+let agent = Agent::builder("assistant")
+    .instructions("Use tools when helpful.")
+    .function_tool(search)
+    .build();
+# Ok::<(), AgentsError>(())
+```
+
+## Tool Runtime Features
+
+The runtime supports more than “call this function”:
+
+- input guardrails
+- output guardrails
+- approval requirements
+- timeout settings
+- defer-loading behavior
+- tool namespaces and identity
+- error formatting
+
+## A Good Tool Design Rule
+
+Keep tools small and explicit. If a tool needs a whole page of hidden logic to be safe, split it into several tools or move the control flow into your application.
+
+## Local Shell And Computer Tools
+
+The core runtime exposes shell and computer abstractions for controlled execution. Use them when:
+
+- the model needs bounded local actions
+- you need approval-aware execution
+- you want structured call and result objects instead of hand-rolled subprocess prompts
+
+## Hosted And MCP Tools
+
+- OpenAI-hosted tools live in the facade re-exports and the OpenAI crate
+- MCP tools are discovered dynamically from configured servers
+
+Read [mcp.md](mcp.md) for MCP-specific lifecycle behavior.
+
+## Read Next
+
+- [guardrails.md](guardrails.md)
+- [human_in_the_loop.md](human_in_the_loop.md)
+- [mcp.md](mcp.md)
+- [ref/runtime.md](ref/runtime.md)
+
+
+## tracing.md
+
+# Tracing
+
+Use this page when you need to understand what happened during a run and you want that story in spans instead of only in logs.
+
+## What The Runtime Traces
+
+- run start and end
+- model calls
+- tool execution
+- handoffs
+- guardrails
+- session persistence
+- speech and transcription flows
+
+## Main Surfaces
+
+- `Trace`
+- `Span`
+- `SpanData`
+- tracing processors
+- tracing setup helpers such as `add_trace_processor`, `flush_traces`, and `set_tracing_disabled`
+
+## A Good Default Workflow
+
+1. attach a tracing processor in application startup
+2. add trace metadata on high-value workflows
+3. flush on shutdown or in tests
+
+## Why Tracing Beats Free-Form Logging
+
+Tracing keeps causality intact across:
+
+- nested tools
+- handoffs
+- streamed runs
+- voice pipelines
+- realtime sessions
+
+## Read Next
+
+- [running_agents.md](running_agents.md)
+- [streaming.md](streaming.md)
+- [voice/README.md](voice/README.md)
+
+
+## usage.md
+
+# Usage
+
+Use this page when you care about turns, usage, replay growth, and the operational shape of your agent runs.
+
+## What To Measure
+
+- number of turns
+- tool usage frequency
+- guardrail trip frequency
+- replay growth over time
+- session size and compaction behavior
+- trace coverage
+
+## Runtime Surfaces That Help
+
+- `Usage`
+- `RunResult`
+- `RunResultStreaming`
+- tracing processors
+- session settings and compaction-aware sessions
+
+## Practical Production Guidance
+
+- set `max_turns` intentionally
+- inspect replay size when long-lived sessions are involved
+- keep tool outputs structured and bounded
+- trace high-value runs, not every experiment forever
+- add compaction before prompts become unbounded
+
+## Why This Page Exists
+
+Agent runtimes get expensive and hard to debug when usage and replay are treated as invisible byproducts. In this runtime, they are first-class outputs.
+
+## Read Next
+
+- [results.md](results.md)
+- [tracing.md](tracing.md)
+- [sessions/openai.md](sessions/openai.md)
+
+
+## visualization.md
+
+# Visualization
+
+Use this page when you want diagrams or graph-shaped representations of an agent system.
+
+## What Lives Here
+
+Visualization is exposed through the extensions surface. Use it when you want to:
+
+- render agent graphs
+- explain a multi-agent topology to teammates
+- capture architecture artifacts in docs
+
+## When Visualization Helps
+
+- router and specialist systems
+- handoff-heavy workflows
+- docs and design reviews
+- debugging runtime shape rather than one specific bug
+
+## Practical Rule
+
+Generate diagrams from the real runtime model when possible. Do not maintain a beautiful but stale hand-drawn graph that no longer matches the code.
+
+## Read Next
+
+- [multi_agent.md](multi_agent.md)
+- [ref/README.md](ref/README.md)
+
+
+## voice/README.md
+
+# Voice
+
+Use this section when you want STT -> workflow -> TTS orchestration on top of the shared agents runtime.
+
+## Main Types
+
+- `SingleAgentVoiceWorkflow`
+- `VoicePipeline`
+- `VoicePipelineConfig`
+- `StreamedAudioResult`
+- `AudioInput`
+- `StreamedAudioInput`
+
+## Minimal Example
+
+```rust
+use openai_agents::Agent;
+use openai_agents::voice::{AudioInput, SingleAgentVoiceWorkflow, VoicePipeline, VoicePipelineConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let workflow = SingleAgentVoiceWorkflow::new(
+        Agent::builder("assistant")
+            .instructions("Be concise.")
+            .build(),
+    );
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: false,
+        ..VoicePipelineConfig::default()
+    });
+
+    let result = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1, 2, 3],
+            },
+        )
+        .await?;
+
+    let completed = result.wait_for_completion().await?;
+    println!("{:?}", completed.transcript);
+    Ok(())
+}
+```
+
+Runnable version: [voice_pipeline.rs](../../crates/openai-agents/examples/voice_pipeline.rs)
+
+## In This Section
+
+- [workflow.md](workflow.md)
+- [pipeline.md](pipeline.md)
+
+## Read Next
+
+- [workflow.md](workflow.md)
+- [pipeline.md](pipeline.md)
+- [../realtime/README.md](../realtime/README.md)
+
+
+## voice/pipeline.md
+
+# Voice Pipeline
+
+Use this page when you need the full STT -> workflow -> TTS loop.
+
+## What The Pipeline Does
+
+1. accepts buffered or streamed audio input
+2. transcribes it
+3. runs the workflow
+4. emits transcript and audio events
+5. exposes completion state through `StreamedAudioResult`
+
+## Why `StreamedAudioResult` Matters
+
+The result is live, not just a static summary. It owns:
+
+- transcript events
+- audio events
+- lifecycle events
+- completion and error state
+
+## Read Next
+
+- [README.md](README.md)
+- [../streaming.md](../streaming.md)
+- [../tracing.md](../tracing.md)
+
+
+## voice/workflow.md
+
+# Voice Workflow
+
+Use this page when you want to understand how voice uses the shared runner rather than bypassing it.
+
+## Main Idea
+
+`SingleAgentVoiceWorkflow` turns streamed core run output into text chunks that the voice pipeline can speak or further process.
+
+That means voice stays aligned with:
+
+- the shared runner
+- shared sessions
+- shared tracing
+- shared tool and handoff behavior
+
+## Why This Matters
+
+A separate “voice-only agent system” would drift. Keeping voice on top of the main runner means text, tools, sessions, and traces stay compatible.
+
+## Read Next
+
+- [pipeline.md](pipeline.md)
+- [../streaming.md](../streaming.md)
+
