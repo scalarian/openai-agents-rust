@@ -42,6 +42,13 @@
     }
   ],
   "suggestedGuidanceUpdates": [],
-  "rejectedObservations": [],
+  "rejectedObservations": [
+    {
+      "type": "override",
+      "featureId": "scrutiny-validator-audit-closure",
+      "summary": "Accepted narrow omission for duplicate empty JSON object provenance inside session_input_callback.",
+      "justification": "Full Python-style object-identity parity for duplicate empty JSON objects is not safely achievable under the current Rust by-value SessionInputCallback API without either an in-band marker or a public API change. The mission preserves the clean public API and will document this narrow omission explicitly in the final parity ledger refresh."
+    }
+  ],
   "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round7.json"
 }
