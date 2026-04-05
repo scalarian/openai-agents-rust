@@ -5,10 +5,16 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+description = "Voice workflow, STT, and TTS pipeline primitives for openai-agents-rust."
+repository = "https://github.com/scalarian/openai-agents-rust"
+homepage = "https://github.com/scalarian/openai-agents-rust"
+readme = "../../README.md"
+keywords = ["agents", "openai", "voice", "stt", "tts"]
+categories = ["asynchronous", "api-bindings", "development-tools"]
 
 [dependencies]
-agents-core = { path = "../agents-core" }
-agents-openai = { path = "../agents-openai" }
+agents-core = { version = "0.1.2", path = "../agents-core" }
+agents-openai = { version = "0.1.2", path = "../agents-openai" }
 async-trait.workspace = true
 futures.workspace = true
 reqwest.workspace = true

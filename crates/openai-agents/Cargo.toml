@@ -13,11 +13,11 @@ keywords = ["agents", "openai", "llm", "realtime", "mcp"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 
 [dependencies]
-agents-core = { path = "../agents-core" }
-agents-extensions = { path = "../agents-extensions" }
-agents-openai = { path = "../agents-openai" }
-agents-realtime = { path = "../agents-realtime" }
-agents-voice = { path = "../agents-voice" }
+agents-core = { version = "0.1.2", path = "../agents-core" }
+agents-extensions = { version = "0.1.2", path = "../agents-extensions" }
+agents-openai = { version = "0.1.2", path = "../agents-openai" }
+agents-realtime = { version = "0.1.2", path = "../agents-realtime" }
+agents-voice = { version = "0.1.2", path = "../agents-voice" }
 tokio.workspace = true
 
 [dev-dependencies]
