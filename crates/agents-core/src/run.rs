@@ -520,6 +520,7 @@ impl Runner {
         let mut interruptions = Vec::new();
         let mut final_output = None;
         let mut final_output_items = Vec::new();
+        let mut normalized_input_override = None;
         let mut conversation_tracker =
             internal_oai_conversation::OpenAIServerConversationTracker::new(&self.config);
         if let Some(session_state) = &session_conversation_state {
@@ -548,11 +549,14 @@ impl Runner {
                 &current_agent,
                 &context,
                 ModelInputData {
-                    input: prepared_input,
+                    input: prepared_input.clone(),
                     instructions: current_agent.instructions.clone(),
                 },
             )
             .await?;
+            if normalized_generated_items.is_empty() && model_data.input != prepared_input {
+                normalized_input_override = Some(model_data.input.clone());
+            }
 
             let response = self
                 .call_model_with_retry(
@@ -872,8 +876,9 @@ impl Runner {
         run_state.set_trace(trace.clone());
         conversation_tracker.apply_to_state(&mut run_state);
         run_state.persisted_item_count = persisted_item_count;
-        run_state.normalized_input =
-            (current_input_history != original_input).then_some(current_input_history.clone());
+        run_state.normalized_input = normalized_input_override.or_else(|| {
+            (current_input_history != original_input).then_some(current_input_history.clone())
+        });
         run_state.extend_generated_items(normalized_generated_items.clone());
         run_state.extend_session_items(session_generated_items.clone());
         for result in input_guardrail_results.iter().cloned() {
@@ -1620,6 +1625,8 @@ mod tests {
     use crate::guardrail::{GuardrailFunctionOutput, input_guardrail, output_guardrail};
     use crate::lifecycle::{AgentHooks, RunHooks};
     use crate::model::Model;
+    use crate::run_config::ReasoningItemIdPolicy;
+    use crate::run_context::{RunContext, RunContextWrapper};
     use crate::session::MemorySession;
     use crate::tool::function_tool;
 
@@ -1743,6 +1750,41 @@ mod tests {
     }
 
     impl ModelProvider for RequestCaptureProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ResumeCaptureModel {
+        seen_inputs: Arc<Mutex<Vec<Vec<InputItem>>>>,
+    }
+
+    #[async_trait]
+    impl Model for ResumeCaptureModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.seen_inputs
+                .lock()
+                .expect("resume capture inputs lock")
+                .push(request.input.clone());
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "resumed".to_owned(),
+                }],
+                usage: Usage::default(),
+                response_id: None,
+                request_id: None,
+            })
+        }
+    }
+
+    struct ResumeCaptureProvider {
+        model: Arc<ResumeCaptureModel>,
+    }
+
+    impl ModelProvider for ResumeCaptureProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
         }
@@ -2609,6 +2651,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_surfaces_call_model_input_filter_errors_in_plain_and_streamed_runs() {
+        let runner = Runner::new().with_config(RunConfig {
+            call_model_input_filter: Some(Arc::new(|_| {
+                async move {
+                    Err::<ModelInputData, _>(
+                        UserError {
+                            message: "filter exploded".to_owned(),
+                        }
+                        .into(),
+                    )
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        });
+        let agent = Agent::builder("assistant").build();
+
+        let error = runner
+            .run(&agent, "hello")
+            .await
+            .expect_err("plain run should surface filter errors");
+        assert!(error.to_string().contains("filter exploded"));
+
+        let streamed = runner
+            .run_streamed(&agent, "hello")
+            .await
+            .expect("streamed run should start");
+        let error = streamed
+            .wait_for_completion()
+            .await
+            .expect_err("streamed run should surface filter errors");
+        assert!(error.to_string().contains("filter exploded"));
+    }
+
+    #[tokio::test]
+    async fn runner_resume_omits_reasoning_replay_after_state_roundtrip_when_policy_is_omit() {
+        let model = Arc::new(ResumeCaptureModel::default());
+        let provider = Arc::new(ResumeCaptureProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant").build();
+        let context = RunContextWrapper::new(RunContext::default());
+        let mut state = RunState::new(&context, vec![InputItem::from("start")], agent.clone(), 2)
+            .expect("run state should build");
+        state.normalized_input = Some(vec![InputItem::from("normalized-start")]);
+        state.reasoning_item_id_policy = ReasoningItemIdPolicy::Omit;
+        state.push_generated_item(RunItem::Reasoning {
+            text: "internal".to_owned(),
+        });
+
+        let serialized = state
+            .to_json_string()
+            .expect("run state should serialize with the omit policy");
+        let restored = RunState::from_json_str(&serialized)
+            .expect("run state should deserialize with the omit policy");
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .resume(&restored)
+            .await
+            .expect("resume should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("resumed"));
+        assert_eq!(result.reasoning_item_id_policy, ReasoningItemIdPolicy::Omit);
+        assert_eq!(
+            model
+                .seen_inputs
+                .lock()
+                .expect("resume capture inputs lock")
+                .as_slice(),
+            &[vec![InputItem::from("normalized-start")]]
+        );
+        assert_eq!(
+            result.to_input_list_mode(crate::result::ToInputListMode::Normalized),
+            vec![
+                InputItem::from("normalized-start"),
+                InputItem::from("resumed")
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn runner_nests_handoff_history_for_next_agent_turn() {
         let model = Arc::new(HandoffCaptureModel::default());
         let provider = Arc::new(HandoffCaptureProvider {
@@ -3191,5 +3315,46 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, OutputItem::Json { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn runner_errors_when_max_turns_are_exhausted_in_plain_and_streamed_runs() {
+        let provider = Arc::new(LoopingToolProvider {
+            model: Arc::new(LoopingToolModel),
+        });
+        let search_tool =
+            function_tool(
+                "search",
+                "Search documents",
+                |_ctx, args: SearchArgs| async move {
+                    Ok::<_, AgentsError>(format!("loop:{}", args.query))
+                },
+            )
+            .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                max_turns: 2,
+                ..RunConfig::default()
+            });
+
+        let error = runner
+            .run(&agent, "hello")
+            .await
+            .expect_err("plain run should exhaust max turns");
+        assert!(error.to_string().contains("max_turns (2)"));
+
+        let streamed = runner
+            .run_streamed(&agent, "hello")
+            .await
+            .expect("streamed run should start");
+        let error = streamed
+            .wait_for_completion()
+            .await
+            .expect_err("streamed run should exhaust max turns");
+        assert!(error.to_string().contains("max_turns (2)"));
     }
 }

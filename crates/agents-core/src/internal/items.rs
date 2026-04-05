@@ -7,8 +7,14 @@ pub(crate) fn copy_input_items(items: &[InputItem]) -> Vec<InputItem> {
 
 pub(crate) fn run_item_to_input_item(
     run_item: &RunItem,
-    _reasoning_item_id_policy: ReasoningItemIdPolicy,
+    reasoning_item_id_policy: ReasoningItemIdPolicy,
 ) -> Option<InputItem> {
+    if matches!(
+        (run_item, reasoning_item_id_policy),
+        (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit)
+    ) {
+        return None;
+    }
     run_item.to_input_item()
 }
 
@@ -76,6 +82,45 @@ mod tests {
         );
         assert_eq!(
             prepared[2],
+            InputItem::Json {
+                value: json!({
+                    "type": "tool_call_output",
+                    "tool_name": "search",
+                    "output": {
+                        "type": "text",
+                        "text": "found"
+                    },
+                    "call_id": "call-1",
+                    "namespace": null
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn omits_reasoning_items_when_policy_requests_it() {
+        let prepared = prepare_model_input_items(
+            &[InputItem::from("hello")],
+            &[
+                RunItem::Reasoning {
+                    text: "thinking".to_owned(),
+                },
+                RunItem::ToolCallOutput {
+                    tool_name: "search".to_owned(),
+                    output: OutputItem::Text {
+                        text: "found".to_owned(),
+                    },
+                    call_id: Some("call-1".to_owned()),
+                    namespace: None,
+                },
+            ],
+            ReasoningItemIdPolicy::Omit,
+        );
+
+        assert_eq!(prepared.len(), 2);
+        assert_eq!(prepared[0].as_text(), Some("hello"));
+        assert_eq!(
+            prepared[1],
             InputItem::Json {
                 value: json!({
                     "type": "tool_call_output",

@@ -285,9 +285,15 @@ fn run_items_to_input_items(
 ) -> Vec<InputItem> {
     run_items
         .iter()
-        .filter_map(|run_item| match (run_item, reasoning_item_id_policy) {
-            (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit) => run_item.to_input_item(),
-            _ => run_item.to_input_item(),
+        .filter_map(|run_item| {
+            if matches!(
+                (run_item, reasoning_item_id_policy),
+                (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit)
+            ) {
+                None
+            } else {
+                run_item.to_input_item()
+            }
         })
         .collect()
 }

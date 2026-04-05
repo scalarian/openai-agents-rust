@@ -1,3 +1,5 @@
+use agents_core::ModelInputData;
+use futures::FutureExt;
 use std::sync::OnceLock;
 
 use openai_agents::{
@@ -126,4 +128,61 @@ async fn facade_agent_as_tool_preserves_nested_state_and_structured_input() {
     );
 
     drop_agent_tool_run_result("call-facade-translate", Some("scope-facade".to_owned()));
+}
+
+#[tokio::test]
+async fn facade_call_model_input_filter_rewrites_non_streamed_history() {
+    let agent = Agent::builder("assistant").build();
+    let result = Runner::new()
+        .with_config(RunConfig {
+            call_model_input_filter: Some(std::sync::Arc::new(|mut data| {
+                async move {
+                    data.model_data.input = vec![openai_agents::InputItem::from("filtered")];
+                    Ok::<_, openai_agents::AgentsError>(data.model_data)
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        })
+        .run(&agent, "hello")
+        .await
+        .expect("filtered run should succeed");
+
+    assert_eq!(result.final_output.as_deref(), Some("filtered"));
+    assert_eq!(
+        result.normalized_input,
+        Some(vec![openai_agents::InputItem::from("filtered")])
+    );
+}
+
+#[tokio::test]
+async fn facade_call_model_input_filter_rewrites_streamed_history() {
+    let agent = Agent::builder("assistant").build();
+    let streamed = Runner::new()
+        .with_config(RunConfig {
+            call_model_input_filter: Some(std::sync::Arc::new(|_data| {
+                async move {
+                    Ok::<_, openai_agents::AgentsError>(ModelInputData {
+                        input: vec![openai_agents::InputItem::from("stream-filtered")],
+                        instructions: None,
+                    })
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        })
+        .run_streamed(&agent, "hello")
+        .await
+        .expect("filtered streamed run should start");
+
+    let result = streamed
+        .wait_for_completion()
+        .await
+        .expect("filtered streamed run should complete");
+
+    assert_eq!(result.final_output.as_deref(), Some("stream-filtered"));
+    assert_eq!(
+        result.normalized_input,
+        Some(vec![openai_agents::InputItem::from("stream-filtered")])
+    );
 }

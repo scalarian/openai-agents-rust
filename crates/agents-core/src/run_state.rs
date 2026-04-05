@@ -269,11 +269,16 @@ impl RunState {
             .normalized_input
             .clone()
             .unwrap_or_else(|| self.original_input.clone());
-        input.extend(
-            self.generated_items
-                .iter()
-                .filter_map(RunItem::to_input_item),
-        );
+        input.extend(self.generated_items.iter().filter_map(|item| {
+            if matches!(
+                (item, self.reasoning_item_id_policy),
+                (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit)
+            ) {
+                None
+            } else {
+                item.to_input_item()
+            }
+        }));
         input
     }
 
