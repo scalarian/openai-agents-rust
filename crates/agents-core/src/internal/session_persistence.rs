@@ -1,12 +1,14 @@
 use crate::errors::Result;
 use crate::exceptions::UserError;
-use crate::items::{InputItem, RunItem};
+use crate::items::{InputItem, InputItemProvenance, RunItem};
 use crate::memory::resolve_session_limit;
 use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
-use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_INPUT_ITEM_PROVENANCE: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn prepare_input_with_session(
     input: &[InputItem],
@@ -33,8 +35,16 @@ pub(crate) async fn prepare_input_with_session(
     let original_input = input.to_vec();
     let (mut prepared, mut session_input_items) =
         if let Some(callback) = &config.session_input_callback {
-            let history_for_callback = history.clone();
-            let new_items_for_callback = original_input.clone();
+            let history_for_callback = history
+                .clone()
+                .into_iter()
+                .map(assign_input_item_provenance)
+                .collect::<Vec<_>>();
+            let new_items_for_callback = original_input
+                .clone()
+                .into_iter()
+                .map(assign_input_item_provenance)
+                .collect::<Vec<_>>();
             let mut history_refs = build_reference_map(&history_for_callback);
             let mut new_refs = build_reference_map(&new_items_for_callback);
             let mut history_counts = build_frequency_map(&history_for_callback);
@@ -159,6 +169,12 @@ fn consume_reference(refs: &mut HashMap<String, Vec<InputItemIdentity>>, item: &
     true
 }
 
+fn assign_input_item_provenance(item: InputItem) -> InputItem {
+    item.with_provenance(Some(
+        NEXT_INPUT_ITEM_PROVENANCE.fetch_add(1, Ordering::Relaxed) as InputItemProvenance,
+    ))
+}
+
 fn build_frequency_map(items: &[InputItem]) -> HashMap<String, usize> {
     let mut counts = HashMap::new();
     for item in items {
@@ -180,43 +196,12 @@ fn session_item_key(item: &InputItem) -> String {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputItemIdentity {
-    kind: InputItemIdentityKind,
-    ptr: usize,
-    len: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InputItemIdentityKind {
-    Text,
-    JsonString,
-    JsonArray,
+    provenance: InputItemProvenance,
 }
 
 fn input_item_identity(item: &InputItem) -> Option<InputItemIdentity> {
-    match item {
-        InputItem::Text { text } => Some(InputItemIdentity {
-            kind: InputItemIdentityKind::Text,
-            ptr: text.as_ptr() as usize,
-            len: text.len(),
-        }),
-        InputItem::Json { value } => json_value_identity(value),
-    }
-}
-
-fn json_value_identity(value: &Value) -> Option<InputItemIdentity> {
-    match value {
-        Value::String(text) => Some(InputItemIdentity {
-            kind: InputItemIdentityKind::JsonString,
-            ptr: text.as_ptr() as usize,
-            len: text.len(),
-        }),
-        Value::Array(items) => Some(InputItemIdentity {
-            kind: InputItemIdentityKind::JsonArray,
-            ptr: items.as_ptr() as usize,
-            len: items.len(),
-        }),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => None,
-    }
+    item.provenance()
+        .map(|provenance| InputItemIdentity { provenance })
 }
 
 #[cfg(test)]
@@ -224,6 +209,7 @@ mod tests {
     use super::*;
     use crate::session::MemorySession;
     use futures::FutureExt;
+    use serde_json::{Value, json};
 
     #[tokio::test]
     async fn prepares_input_by_prefixing_session_history() {
@@ -323,5 +309,72 @@ mod tests {
 
         assert_eq!(prepared, vec![InputItem::from("same")]);
         assert!(session_items.is_empty());
+    }
+
+    async fn assert_session_input_callback_preserves_duplicate_json_value_provenance(value: Value) {
+        let session = MemorySession::new("session");
+        session
+            .add_items(vec![InputItem::Json {
+                value: value.clone(),
+                provenance: None,
+            }])
+            .await
+            .expect("history should be added");
+        let config = RunConfig {
+            session_input_callback: Some(std::sync::Arc::new(move |_history, mut new_items| {
+                async move { Ok(vec![new_items.remove(0)]) }.boxed()
+            })),
+            ..RunConfig::default()
+        };
+
+        let (prepared, _original_input, session_items) = prepare_input_with_session(
+            &[InputItem::Json {
+                value: value.clone(),
+                provenance: None,
+            }],
+            &config,
+            &session,
+        )
+        .await
+        .expect("prepared input should build");
+
+        assert_eq!(
+            prepared,
+            vec![InputItem::Json {
+                value: value.clone(),
+                provenance: None,
+            }]
+        );
+        assert_eq!(
+            session_items,
+            vec![InputItem::Json {
+                value,
+                provenance: None,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn session_input_callback_preserves_duplicate_json_object_provenance() {
+        assert_session_input_callback_preserves_duplicate_json_value_provenance(json!({
+            "type": "message",
+            "content": "same"
+        }))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn session_input_callback_preserves_duplicate_json_number_provenance() {
+        assert_session_input_callback_preserves_duplicate_json_value_provenance(json!(42)).await;
+    }
+
+    #[tokio::test]
+    async fn session_input_callback_preserves_duplicate_json_bool_provenance() {
+        assert_session_input_callback_preserves_duplicate_json_value_provenance(json!(true)).await;
+    }
+
+    #[tokio::test]
+    async fn session_input_callback_preserves_duplicate_json_null_provenance() {
+        assert_session_input_callback_preserves_duplicate_json_value_provenance(Value::Null).await;
     }
 }

@@ -340,6 +340,7 @@ impl OpenAIResponsesCompactionSession {
                 "previous_response_id": previous_response_id,
                 "summary": format!("Compacted {} candidate item(s)", candidates.len()),
             }),
+            provenance: None,
         });
 
         self.inner.clear().await?;
@@ -490,7 +491,7 @@ fn sanitize_compaction_items(items: &[InputItem]) -> Vec<InputItem> {
 fn sanitize_compaction_item(item: &InputItem) -> InputItem {
     match item {
         InputItem::Text { .. } => item.clone(),
-        InputItem::Json { value } => {
+        InputItem::Json { value, .. } => {
             let Some(object) = value.as_object() else {
                 return item.clone();
             };
@@ -499,6 +500,7 @@ fn sanitize_compaction_item(item: &InputItem) -> InputItem {
             sanitized.remove(TOOL_CALL_SESSION_TITLE_KEY);
             InputItem::Json {
                 value: Value::Object(sanitized),
+                provenance: None,
             }
         }
     }
@@ -507,7 +509,7 @@ fn sanitize_compaction_item(item: &InputItem) -> InputItem {
 fn is_user_like_item(item: &InputItem) -> bool {
     match item {
         InputItem::Text { .. } => true,
-        InputItem::Json { value } => value
+        InputItem::Json { value, .. } => value
             .get("role")
             .and_then(serde_json::Value::as_str)
             .map(|role| role == "user")
@@ -518,7 +520,7 @@ fn is_user_like_item(item: &InputItem) -> bool {
 fn is_compaction_marker(item: &InputItem) -> bool {
     match item {
         InputItem::Text { .. } => false,
-        InputItem::Json { value } => value
+        InputItem::Json { value, .. } => value
             .get("type")
             .and_then(serde_json::Value::as_str)
             .map(|kind| kind == "compaction")
@@ -569,18 +571,23 @@ mod tests {
                 InputItem::from("1"),
                 InputItem::Json {
                     value: serde_json::json!({"type": "tool_call_output", "call_id": "call-1"}),
+                    provenance: None,
                 },
                 InputItem::Json {
                     value: serde_json::json!({"type": "tool_call_output", "call_id": "call-2"}),
+                    provenance: None,
                 },
                 InputItem::Json {
                     value: serde_json::json!({"type": "tool_call_output", "call_id": "call-3"}),
+                    provenance: None,
                 },
                 InputItem::Json {
                     value: serde_json::json!({"type": "tool_call_output", "call_id": "call-4"}),
+                    provenance: None,
                 },
                 InputItem::Json {
                     value: serde_json::json!({"type": "tool_call_output", "call_id": "call-5"}),
+                    provenance: None,
                 },
             ])
             .await
@@ -686,9 +693,11 @@ mod tests {
                 InputItem::from("hello"),
                 InputItem::Json {
                     value: serde_json::json!({"type":"tool_call_output","call_id":"call-1"}),
+                    provenance: None,
                 },
                 InputItem::Json {
                     value: serde_json::json!({"type":"reasoning","text":"thinking"}),
+                    provenance: None,
                 },
             ])
             .await
@@ -716,6 +725,7 @@ mod tests {
                     "previous_response_id": "resp-prev",
                     "summary": "Compacted 2 candidate item(s)",
                 }),
+                provenance: None,
             }
         );
     }
@@ -735,6 +745,7 @@ mod tests {
                     TOOL_CALL_SESSION_DESCRIPTION_KEY: "Lookup customer records.",
                     TOOL_CALL_SESSION_TITLE_KEY: "Lookup Account",
                 }),
+                provenance: None,
             }])
             .await
             .expect("items should be stored");
@@ -750,7 +761,7 @@ mod tests {
 
         let items = session.get_items().await.expect("items should load");
         let json = match &items[0] {
-            InputItem::Json { value } => value,
+            InputItem::Json { value, .. } => value,
             InputItem::Text { .. } => panic!("expected json item"),
         };
         assert!(json.get(TOOL_CALL_SESSION_DESCRIPTION_KEY).is_none());
@@ -767,6 +778,7 @@ mod tests {
                 InputItem::from("hello"),
                 InputItem::Json {
                     value: serde_json::json!({"type":"tool_call_output","call_id":"call-1"}),
+                    provenance: None,
                 },
             ])
             .await
@@ -784,7 +796,7 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].as_text(), Some("hello"));
         match &items[1] {
-            InputItem::Json { value } => {
+            InputItem::Json { value, .. } => {
                 assert_eq!(value["type"], "compaction");
                 assert_eq!(value["previous_response_id"], "resp-next");
             }
@@ -832,12 +844,15 @@ mod tests {
             InputItem::from("hello"),
             InputItem::Json {
                 value: serde_json::json!({"type":"tool_call_output","call_id":"1"}),
+                provenance: None,
             },
             InputItem::Json {
                 value: serde_json::json!({"type":"compaction","summary":"done"}),
+                provenance: None,
             },
             InputItem::Json {
                 value: serde_json::json!({"type":"reasoning","text":"thinking"}),
+                provenance: None,
             },
         ];
 
@@ -851,6 +866,8 @@ mod tests {
         );
         assert!(default_should_trigger_compaction(&vec![InputItem::Json {
             value: serde_json::json!({"type":"tool_call_output"})
+            ,
+            provenance: None
         }; DEFAULT_COMPACTION_THRESHOLD]));
     }
 }

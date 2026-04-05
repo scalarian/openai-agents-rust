@@ -34,6 +34,7 @@ pub async fn run_demo_loop(agent: &Agent, stream: bool, max_turns: usize) -> Res
                 "role": "user",
                 "content": user_input,
             }),
+            provenance: None,
         });
 
         if stream {

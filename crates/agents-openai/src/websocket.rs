@@ -154,6 +154,7 @@ mod tests {
                 InputItem::from("hello"),
                 InputItem::Json {
                     value: json!({"type":"tool_call_output"}),
+                    provenance: None,
                 },
             ],
             tools: Vec::new(),

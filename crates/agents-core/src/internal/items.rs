@@ -71,7 +71,8 @@ mod tests {
                 value: json!({
                     "type": "reasoning",
                     "text": "thinking"
-                })
+                }),
+                provenance: None
             }
         );
         assert_eq!(
@@ -86,7 +87,8 @@ mod tests {
                     },
                     "call_id": "call-1",
                     "namespace": null
-                })
+                }),
+                provenance: None
             }
         );
     }

@@ -128,6 +128,7 @@ async fn runner_triggers_auto_compaction_for_compaction_sessions() {
                 "type": "tool_call_output",
                 "call_id": "call-1",
             }),
+            provenance: None,
         }])
         .await
         .expect("seed items should be stored");
@@ -146,7 +147,7 @@ async fn runner_triggers_auto_compaction_for_compaction_sessions() {
         .expect("session items should load");
     assert!(items.iter().any(|item| matches!(
         item,
-        openai_agents::InputItem::Json { value }
+        openai_agents::InputItem::Json { value, .. }
             if value.get("type").and_then(serde_json::Value::as_str) == Some("compaction")
     )));
 }
