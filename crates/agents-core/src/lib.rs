@@ -70,8 +70,10 @@ pub use _tool_identity::{
     validate_function_tool_namespace_shape,
 };
 pub use agent::{
-    Agent, AgentBase, AgentBuilder, AgentToolStreamEvent, StopAtTools, ToolUseBehavior,
-    ToolsToFinalOutputFunction, ToolsToFinalOutputResult,
+    Agent, AgentAsToolOptions, AgentBase, AgentBuilder, AgentToolFailureFormatter,
+    AgentToolOutputExtractor, AgentToolRunResult, AgentToolStreamEvent, AgentToolStreamHandler,
+    StopAtTools, StructuredToolInputBuilder, ToolUseBehavior, ToolsToFinalOutputFunction,
+    ToolsToFinalOutputResult,
 };
 pub use agent_output::{AgentOutputSchema, AgentOutputSchemaBase};
 pub use agent_tool_input::{
@@ -110,7 +112,7 @@ pub use items::{
     MCPApprovalRequestItem, MCPApprovalResponseItem, MessageOutputItem, OutputItem, ReasoningItem,
     RunItem, TResponseInputItem, ToolApprovalItem, ToolCallItem, ToolCallOutputItem,
 };
-pub use lifecycle::{AgentHooks, RunHooks};
+pub use lifecycle::{AgentHooks, RunHooks, SharedAgentHooks, SharedRunHooks};
 pub use logger::{LOGGER_TARGET, enable_verbose_stdout_logging};
 pub use mcp::{
     MCPServer, MCPServerManager, MCPTool, MCPToolAnnotations, MCPToolMetaContext,
@@ -141,10 +143,13 @@ pub use retry::{
     ModelRetryNormalizedError, ModelRetrySettings, RetryDecision, RetryPolicy, RetryPolicyContext,
     retry_policies,
 };
-pub use run::{Runner, run, run_with_session};
+pub use run::{
+    AgentRunner, Runner, get_default_agent_runner, run, run_streamed, run_sync, run_with_session,
+    set_default_agent_runner,
+};
 pub use run_config::{
     CallModelData, DEFAULT_MAX_TURNS, ModelInputData, ReasoningItemIdPolicy, RunConfig, RunOptions,
-    ToolErrorFormatter, ToolErrorFormatterArgs,
+    SessionInputCallback, ToolErrorFormatter, ToolErrorFormatterArgs,
 };
 pub use run_context::{AgentHookContext, ApprovalRecord, RunContext, RunContextWrapper};
 pub use run_error_handlers::{

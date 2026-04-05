@@ -13,3 +13,6 @@ agents-openai = { path = "../agents-openai" }
 agents-realtime = { path = "../agents-realtime" }
 agents-voice = { path = "../agents-voice" }
 tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

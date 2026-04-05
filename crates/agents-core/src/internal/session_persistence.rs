@@ -1,12 +1,14 @@
 use crate::errors::Result;
 use crate::exceptions::UserError;
 use crate::items::{InputItem, RunItem};
+use crate::memory::resolve_session_limit;
 use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
 
 pub(crate) async fn prepare_input_with_session(
     input: &[InputItem],
+    config: &RunConfig,
     session: &(dyn Session + Sync),
 ) -> Result<(Vec<InputItem>, Vec<InputItem>)> {
     let provider = get_trace_provider();
@@ -18,9 +20,25 @@ pub(crate) async fn prepare_input_with_session(
         )]),
     );
     provider.start_span(&mut span, true);
-    let mut prepared = session.get_items().await?;
+    let resolved_settings = session
+        .session_settings()
+        .cloned()
+        .unwrap_or_default()
+        .resolve(config.session_settings.as_ref());
+    let history = session
+        .get_items_with_limit(resolve_session_limit(None, Some(&resolved_settings)))
+        .await?;
     let original_input = input.to_vec();
-    prepared.extend(original_input.clone());
+    let mut prepared = if let Some(callback) = &config.session_input_callback {
+        callback(history, original_input.clone()).await?
+    } else {
+        let mut prepared = history;
+        prepared.extend(original_input.clone());
+        prepared
+    };
+    if prepared.is_empty() {
+        prepared = original_input.clone();
+    }
     provider.finish_span(&mut span, true);
     Ok((prepared, original_input))
 }
@@ -77,7 +95,7 @@ mod tests {
             .expect("history should be added");
 
         let (prepared, original_input) =
-            prepare_input_with_session(&[InputItem::from("new")], &session)
+            prepare_input_with_session(&[InputItem::from("new")], &RunConfig::default(), &session)
                 .await
                 .expect("prepared input should build");
 

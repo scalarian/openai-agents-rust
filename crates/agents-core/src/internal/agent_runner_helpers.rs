@@ -32,8 +32,9 @@ pub(crate) fn build_generated_items_details(items: &[RunItem]) -> Vec<InputItem>
 }
 
 pub(crate) async fn prepare_input_with_session(
+    config: &RunConfig,
     input: &[InputItem],
     session: &(dyn Session + Sync),
 ) -> crate::errors::Result<(Vec<InputItem>, Vec<InputItem>)> {
-    crate::internal::session_persistence::prepare_input_with_session(input, session).await
+    crate::internal::session_persistence::prepare_input_with_session(input, config, session).await
 }

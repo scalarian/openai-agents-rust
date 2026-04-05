@@ -1,8 +1,31 @@
 use crate::tracing::setup::get_trace_provider;
 use crate::tracing::{Trace, trace};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use uuid::Uuid;
 
 pub fn create_trace_for_run(workflow_name: &str) -> Trace {
     let mut trace = trace(workflow_name, None, None, None, None, false);
+    get_trace_provider().start_trace(&mut trace, true);
+    trace
+}
+
+pub fn create_trace_for_run_with_options(
+    workflow_name: &str,
+    trace_id: Option<Uuid>,
+    group_id: Option<String>,
+    metadata: Option<BTreeMap<String, Value>>,
+    tracing: Option<&crate::tracing::TracingConfig>,
+    disabled: bool,
+) -> Trace {
+    let mut trace = trace(
+        workflow_name,
+        trace_id,
+        group_id,
+        metadata,
+        tracing,
+        disabled,
+    );
     get_trace_provider().start_trace(&mut trace, true);
     trace
 }
@@ -16,6 +39,26 @@ impl TraceCtxManager {
     pub fn new(workflow_name: &str) -> Self {
         Self {
             trace: Some(create_trace_for_run(workflow_name)),
+        }
+    }
+
+    pub fn with_options(
+        workflow_name: &str,
+        trace_id: Option<Uuid>,
+        group_id: Option<String>,
+        metadata: Option<BTreeMap<String, Value>>,
+        tracing: Option<&crate::tracing::TracingConfig>,
+        disabled: bool,
+    ) -> Self {
+        Self {
+            trace: Some(create_trace_for_run_with_options(
+                workflow_name,
+                trace_id,
+                group_id,
+                metadata,
+                tracing,
+                disabled,
+            )),
         }
     }
 

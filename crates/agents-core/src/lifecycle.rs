@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::agent::Agent;
 use crate::items::InputItem;
@@ -97,4 +98,24 @@ pub trait AgentHooks<TContext = RunContext>: Send + Sync {
         _result: &str,
     ) {
     }
+
+    async fn on_llm_start(
+        &self,
+        _context: &RunContextWrapper<TContext>,
+        _agent: &Agent,
+        _system_prompt: Option<&str>,
+        _input_items: &[InputItem],
+    ) {
+    }
+
+    async fn on_llm_end(
+        &self,
+        _context: &RunContextWrapper<TContext>,
+        _agent: &Agent,
+        _response: &ModelResponse,
+    ) {
+    }
 }
+
+pub type SharedRunHooks = Arc<dyn RunHooks<RunContext>>;
+pub type SharedAgentHooks = Arc<dyn AgentHooks<RunContext>>;

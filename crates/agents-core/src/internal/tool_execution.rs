@@ -28,6 +28,7 @@ pub(crate) async fn execute_local_function_tools(
     context: &RunContextWrapper,
     tool_calls: Vec<ToolCall>,
 ) -> Result<ToolExecutionOutcome> {
+    let runtime_tools = agent.get_all_function_tools(context).await?;
     let mut new_items = Vec::new();
     let mut tool_results = Vec::new();
     let mut input_guardrail_results = Vec::new();
@@ -35,8 +36,12 @@ pub(crate) async fn execute_local_function_tools(
     let mut interruptions = Vec::new();
 
     for tool_call in tool_calls {
-        let function_tool = agent
-            .find_function_tool(&tool_call.name, tool_call.namespace.as_deref())
+        let function_tool = runtime_tools
+            .iter()
+            .find(|tool| {
+                tool.definition.name == tool_call.name
+                    && tool.definition.namespace.as_deref() == tool_call.namespace.as_deref()
+            })
             .ok_or_else(|| ModelBehaviorError {
                 message: format!(
                     "model requested unknown local function tool `{}`",
@@ -53,6 +58,16 @@ pub(crate) async fn execute_local_function_tools(
             Some(tool_call.arguments.clone()),
             None,
         );
+        if let Some(hooks) = &run_config.run_hooks {
+            hooks
+                .on_tool_start(context, agent, &function_tool.definition)
+                .await;
+        }
+        if let Some(hooks) = &agent.hooks {
+            hooks
+                .on_tool_start(context, agent, &function_tool.definition)
+                .await;
+        }
         provider.start_span(&mut span, true);
 
         if function_tool.needs_approval {
@@ -80,6 +95,8 @@ pub(crate) async fn execute_local_function_tools(
                     }
                     tool_results.push(FunctionToolResult {
                         tool_name: tool_call.name.clone(),
+                        call_id: Some(tool_call.id.clone()),
+                        tool_arguments: Some(tool_call.arguments.clone()),
                         qualified_name: Some(function_tool.qualified_name()),
                         output: ToolOutput::from(
                             approval
@@ -209,20 +226,49 @@ pub(crate) async fn execute_local_function_tools(
             call_id: Some(tool_call.id),
             namespace: tool_call.namespace,
         };
+        let output_text = serde_json::to_string(&output).ok();
         new_items.push(run_item.clone());
         tool_results.push(FunctionToolResult {
             tool_name: match &run_item {
                 RunItem::ToolCallOutput { tool_name, .. } => tool_name.clone(),
                 _ => String::new(),
             },
+            call_id: match &run_item {
+                RunItem::ToolCallOutput { call_id, .. } => call_id.clone(),
+                _ => None,
+            },
+            tool_arguments: tool_context
+                .tool_call
+                .as_ref()
+                .map(|call| call.arguments.clone()),
             qualified_name: Some(function_tool.qualified_name()),
             output: output.clone(),
             run_item: Some(run_item),
             interruptions: Vec::new(),
             agent_run_result: None,
         });
+        if let Some(hooks) = &run_config.run_hooks {
+            hooks
+                .on_tool_end(
+                    context,
+                    agent,
+                    &function_tool.definition,
+                    output_text.as_deref().unwrap_or_default(),
+                )
+                .await;
+        }
+        if let Some(hooks) = &agent.hooks {
+            hooks
+                .on_tool_end(
+                    context,
+                    agent,
+                    &function_tool.definition,
+                    output_text.as_deref().unwrap_or_default(),
+                )
+                .await;
+        }
         if let SpanData::Function(data) = &mut span.data {
-            data.output = serde_json::to_string(&output).ok();
+            data.output = output_text;
         }
         provider.finish_span(&mut span, true);
     }

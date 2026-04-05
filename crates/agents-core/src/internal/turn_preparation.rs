@@ -9,7 +9,7 @@ pub(crate) fn validate_run_hooks() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn maybe_filter_model_input(
+pub(crate) async fn maybe_filter_model_input(
     config: &RunConfig,
     agent: &Agent,
     context: &RunContextWrapper,
@@ -18,19 +18,23 @@ pub(crate) fn maybe_filter_model_input(
     let Some(filter) = &config.call_model_input_filter else {
         return Ok(model_data);
     };
-    filter(&CallModelData {
+    filter(CallModelData {
         model_data,
         agent: agent.clone(),
         context: Some(context.context.clone()),
     })
+    .await
 }
 
 pub(crate) fn get_handoffs(agent: &Agent) -> Vec<Handoff> {
     agent.handoffs.clone()
 }
 
-pub(crate) fn get_all_tools(agent: &Agent) -> Vec<ToolDefinition> {
-    agent.tool_definitions()
+pub(crate) async fn get_all_tools(
+    agent: &Agent,
+    context: &RunContextWrapper,
+) -> Result<Vec<ToolDefinition>> {
+    agent.runtime_tool_definitions(context).await
 }
 
 pub(crate) fn get_output_schema(_agent: &Agent) -> Option<serde_json::Value> {

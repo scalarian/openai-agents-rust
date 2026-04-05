@@ -16,6 +16,8 @@ use crate::usage::Usage;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AgentToolInvocation {
     pub tool_name: String,
+    pub tool_call_id: Option<String>,
+    pub tool_arguments: Option<String>,
     pub qualified_name: Option<String>,
     pub output: Option<Value>,
     pub agent_name: Option<String>,
@@ -43,6 +45,7 @@ pub struct RunResult {
     pub conversation_id: Option<String>,
     pub previous_response_id: Option<String>,
     pub auto_previous_response_id: bool,
+    pub agent_tool_invocation: Option<AgentToolInvocation>,
 }
 
 impl RunResult {
@@ -71,6 +74,10 @@ impl RunResult {
     pub fn previous_response_id(&self) -> Option<&str> {
         self.previous_response_id.as_deref()
     }
+
+    pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
+        self.agent_tool_invocation.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -86,6 +93,7 @@ pub struct RunResultStreaming {
     pub output_guardrail_results: Vec<OutputGuardrailResult>,
     pub events: Vec<StreamEvent>,
     pub final_run_result: Option<RunResult>,
+    pub agent_tool_invocation: Option<AgentToolInvocation>,
 }
 
 impl RunResultStreaming {
@@ -110,6 +118,7 @@ impl RunResultStreaming {
             input_guardrail_results: result.input_guardrail_results.clone(),
             output_guardrail_results: result.output_guardrail_results.clone(),
             events,
+            agent_tool_invocation: result.agent_tool_invocation.clone(),
             final_run_result: Some(result),
         }
     }
@@ -123,6 +132,10 @@ impl RunResultStreaming {
 
     pub fn stream_events(&self) -> BoxStream<'static, StreamEvent> {
         stream::iter(self.events.clone()).boxed()
+    }
+
+    pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
+        self.agent_tool_invocation.as_ref()
     }
 }
 

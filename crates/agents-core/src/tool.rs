@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::_tool_identity::tool_qualified_name;
+use crate::agent::Agent;
 use crate::computer::Computer;
 use crate::errors::{AgentsError, Result};
 use crate::function_schema::FunctionSchema;
@@ -129,6 +130,8 @@ impl From<Value> for ToolOutput {
 #[derive(Clone, Debug)]
 pub struct FunctionToolResult {
     pub tool_name: String,
+    pub call_id: Option<String>,
+    pub tool_arguments: Option<String>,
     pub qualified_name: Option<String>,
     pub output: ToolOutput,
     pub run_item: Option<RunItem>,
@@ -179,11 +182,15 @@ impl Tool for StaticTool {
 
 type ToolExecutor =
     Arc<dyn Fn(ToolContext, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync>;
+pub type ToolEnabledFunction =
+    Arc<dyn Fn(RunContextWrapper<RunContext>, Agent) -> BoxFuture<'static, bool> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct FunctionTool {
     pub definition: ToolDefinition,
     pub enabled: bool,
+    #[allow(clippy::type_complexity)]
+    pub is_enabled: Option<ToolEnabledFunction>,
     pub tool_input_guardrails: Vec<ToolInputGuardrail>,
     pub tool_output_guardrails: Vec<ToolOutputGuardrail>,
     pub needs_approval: bool,
@@ -197,6 +204,10 @@ impl std::fmt::Debug for FunctionTool {
         f.debug_struct("FunctionTool")
             .field("definition", &self.definition)
             .field("enabled", &self.enabled)
+            .field(
+                "is_enabled",
+                &self.is_enabled.as_ref().map(|_| "<function>"),
+            )
             .field("tool_input_guardrails", &self.tool_input_guardrails.len())
             .field("tool_output_guardrails", &self.tool_output_guardrails.len())
             .field("needs_approval", &self.needs_approval)
@@ -211,6 +222,7 @@ impl FunctionTool {
         Self {
             definition,
             enabled: true,
+            is_enabled: None,
             tool_input_guardrails: Vec::new(),
             tool_output_guardrails: Vec::new(),
             needs_approval: false,
@@ -227,6 +239,11 @@ impl FunctionTool {
 
     pub fn with_input_guardrail(mut self, guardrail: ToolInputGuardrail) -> Self {
         self.tool_input_guardrails.push(guardrail);
+        self
+    }
+
+    pub fn with_is_enabled(mut self, is_enabled: ToolEnabledFunction) -> Self {
+        self.is_enabled = Some(is_enabled);
         self
     }
 
@@ -249,6 +266,22 @@ impl FunctionTool {
         self.defer_loading = defer_loading;
         self.definition.defer_loading = defer_loading;
         self
+    }
+
+    pub async fn enabled_for(
+        &self,
+        run_context: &RunContextWrapper<RunContext>,
+        agent: &Agent,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+
+        let Some(is_enabled) = &self.is_enabled else {
+            return true;
+        };
+
+        is_enabled(run_context.clone(), agent.clone()).await
     }
 }
 

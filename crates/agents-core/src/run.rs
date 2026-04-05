@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ use crate::internal::tool_execution as internal_tool_execution;
 use crate::internal::turn_preparation as internal_turn_preparation;
 use crate::internal::turn_resolution as internal_turn_resolution;
 use crate::items::{InputItem, OutputItem, RunItem};
+use crate::lifecycle::{SharedAgentHooks, SharedRunHooks};
 use crate::model::{ModelProvider, ModelRequest, ModelResponse, get_default_model_settings};
 use crate::result::{RunResult, RunResultStreaming};
 use crate::run_config::{DEFAULT_MAX_TURNS, ModelInputData, RunConfig};
@@ -33,6 +34,26 @@ use crate::usage::Usage;
 pub struct Runner {
     model_provider: Option<Arc<dyn ModelProvider>>,
     config: RunConfig,
+}
+
+pub type AgentRunner = Runner;
+
+fn default_agent_runner_cell() -> &'static RwLock<AgentRunner> {
+    static DEFAULT_AGENT_RUNNER: OnceLock<RwLock<AgentRunner>> = OnceLock::new();
+    DEFAULT_AGENT_RUNNER.get_or_init(|| RwLock::new(AgentRunner::new()))
+}
+
+pub fn set_default_agent_runner(runner: Option<AgentRunner>) {
+    *default_agent_runner_cell()
+        .write()
+        .expect("default agent runner lock") = runner.unwrap_or_default();
+}
+
+pub fn get_default_agent_runner() -> AgentRunner {
+    default_agent_runner_cell()
+        .read()
+        .expect("default agent runner lock")
+        .clone()
 }
 
 impl Runner {
@@ -57,6 +78,25 @@ impl Runner {
         self
     }
 
+    pub fn run_sync(&self, agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(UserError {
+                message:
+                    "Runner::run_sync() cannot be called when an event loop is already running."
+                        .to_owned(),
+            }
+            .into());
+        }
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| UserError {
+                message: format!("failed to create runtime for run_sync(): {error}"),
+            })?
+            .block_on(self.run(agent, input))
+    }
+
     pub async fn run(&self, agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
         self.run_items(agent, vec![input.into()]).await
     }
@@ -70,7 +110,7 @@ impl Runner {
     }
 
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
-        self.run_items_internal(agent, input.clone(), input, None)
+        self.run_items_internal(agent, input.clone(), input, None, None)
             .await
     }
 
@@ -107,11 +147,48 @@ impl Runner {
         input: Vec<InputItem>,
         session: &(dyn Session + Sync),
     ) -> Result<RunResult> {
+        self.run_items_with_session_and_context(
+            agent,
+            input,
+            session,
+            crate::run_context::RunContextWrapper::new(crate::run_context::RunContext::default()),
+        )
+        .await
+    }
+
+    pub(crate) async fn run_items_with_context(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        context: crate::run_context::RunContextWrapper,
+    ) -> Result<RunResult> {
+        self.run_items_internal(agent, input.clone(), input, None, Some(context))
+            .await
+    }
+
+    pub(crate) async fn run_items_with_session_and_context(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        session: &(dyn Session + Sync),
+        context: crate::run_context::RunContextWrapper,
+    ) -> Result<RunResult> {
         internal_agent_runner_helpers::validate_session_conversation_settings(&self.config)?;
         let (prepared_input, original_input) =
-            internal_agent_runner_helpers::prepare_input_with_session(&input, session).await?;
-        self.run_items_internal(agent, original_input, prepared_input, Some(session))
-            .await
+            internal_agent_runner_helpers::prepare_input_with_session(
+                &self.config,
+                &input,
+                session,
+            )
+            .await?;
+        self.run_items_internal(
+            agent,
+            original_input,
+            prepared_input,
+            Some(session),
+            Some(context),
+        )
+        .await
     }
 
     async fn run_items_internal(
@@ -120,6 +197,7 @@ impl Runner {
         original_input: Vec<InputItem>,
         base_input: Vec<InputItem>,
         session: Option<&(dyn Session + Sync)>,
+        context_override: Option<crate::run_context::RunContextWrapper>,
     ) -> Result<RunResult> {
         internal_turn_preparation::validate_run_hooks()?;
 
@@ -128,15 +206,49 @@ impl Runner {
         } else {
             self.config.workflow_name.clone()
         };
-        let mut trace_manager = TraceCtxManager::new(&workflow_name);
+        let trace_id = self
+            .config
+            .trace_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok());
+        let mut trace_manager = TraceCtxManager::with_options(
+            &workflow_name,
+            trace_id,
+            self.config.group_id.clone(),
+            self.config.trace_metadata.clone(),
+            self.config.tracing.as_ref(),
+            self.config.tracing_disabled
+                || self
+                    .config
+                    .tracing
+                    .as_ref()
+                    .is_some_and(|config| config.disabled),
+        );
         let trace = trace_manager.trace().clone();
 
-        let mut context = internal_guardrails::new_run_context(trace.workflow_name.clone());
+        let mut context = context_override
+            .unwrap_or_else(|| internal_guardrails::new_run_context(trace.workflow_name.clone()));
+        if context.context.workflow_name.is_none() {
+            context.context.workflow_name = Some(trace.workflow_name.clone());
+        }
+        if context.context.conversation_id.is_none() {
+            context.context.conversation_id = self.config.conversation_id.clone();
+        }
         context.turn_input = original_input.clone();
 
+        dispatch_agent_start(
+            self.config.run_hooks.as_ref(),
+            agent.hooks.as_ref(),
+            &context,
+            agent,
+            0,
+        )
+        .await;
+
+        let all_input_guardrails = merged_input_guardrails(agent, &self.config);
         let input_guardrail_results = internal_guardrails::run_input_guardrails(
             agent,
-            &agent.input_guardrails,
+            &all_input_guardrails,
             &original_input,
             &context,
         )
@@ -169,11 +281,13 @@ impl Runner {
                     input: prepared_input,
                     instructions: current_agent.instructions.clone(),
                 },
-            )?;
+            )
+            .await?;
 
             let response = self
                 .call_model_with_retry(
                     &current_agent,
+                    &context,
                     trace.id,
                     model_data,
                     conversation_tracker.previous_response_id(),
@@ -192,6 +306,14 @@ impl Runner {
             if let Some(target_agent) =
                 internal_tool_execution::resolve_handoff_agent(&current_agent, &output)?
             {
+                dispatch_handoff(
+                    self.config.run_hooks.as_ref(),
+                    target_agent.hooks.as_ref(),
+                    &context,
+                    &current_agent,
+                    &target_agent,
+                )
+                .await;
                 let provider = get_trace_provider();
                 let mut span = handoff_span(
                     Some(current_agent.name.clone()),
@@ -203,20 +325,38 @@ impl Runner {
                     source_agent: current_agent.name.clone(),
                 });
                 current_agent = target_agent;
+                dispatch_agent_start(
+                    self.config.run_hooks.as_ref(),
+                    current_agent.hooks.as_ref(),
+                    &context,
+                    &current_agent,
+                    raw_responses.len(),
+                )
+                .await;
                 continue;
             }
 
             let tool_calls = internal_tool_execution::extract_tool_calls(&output);
+            let all_output_guardrails = merged_output_guardrails(&current_agent, &self.config);
             if tool_calls.is_empty() {
                 output_guardrail_results = internal_guardrails::run_output_guardrails(
                     &current_agent,
-                    &current_agent.output_guardrails,
+                    &all_output_guardrails,
                     &output,
                     &context,
                 )
                 .await?;
                 final_output = internal_turn_resolution::extract_final_output_text(&output);
                 final_output_items = output;
+                dispatch_agent_end(
+                    self.config.run_hooks.as_ref(),
+                    current_agent.hooks.as_ref(),
+                    &context,
+                    &current_agent,
+                    final_output.as_deref(),
+                    raw_responses.len(),
+                )
+                .await;
                 break;
             }
 
@@ -241,6 +381,15 @@ impl Runner {
                         generated_items.extend(tool_outcome.new_items);
                         tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
                         tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
+                        dispatch_agent_end(
+                            self.config.run_hooks.as_ref(),
+                            current_agent.hooks.as_ref(),
+                            &context,
+                            &current_agent,
+                            final_output.as_deref(),
+                            raw_responses.len(),
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -376,6 +525,7 @@ impl Runner {
             conversation_id: conversation_tracker.conversation_id.clone(),
             previous_response_id: conversation_tracker.previous_response_id.clone(),
             auto_previous_response_id: conversation_tracker.auto_previous_response_id,
+            agent_tool_invocation: None,
         })
     }
 
@@ -572,6 +722,7 @@ impl Runner {
     async fn call_model(
         &self,
         agent: &Agent,
+        context: &crate::run_context::RunContextWrapper,
         trace_id: Uuid,
         model_data: ModelInputData,
         previous_response_id: Option<&str>,
@@ -580,14 +731,31 @@ impl Runner {
         let provider = get_trace_provider();
         let mut span = get_model_tracing_impl(agent.model.as_deref());
         provider.start_span(&mut span, true);
+        dispatch_llm_start(
+            self.config.run_hooks.as_ref(),
+            agent.hooks.as_ref(),
+            context,
+            agent,
+            model_data.instructions.as_deref(),
+            &model_data.input,
+        )
+        .await;
 
-        if let Some(model_provider) = &self.model_provider {
-            let requested_model = self
-                .config
-                .model
-                .clone()
-                .or_else(|| internal_turn_preparation::get_model(agent));
-            let settings = get_default_model_settings(requested_model.as_deref());
+        let requested_model = self
+            .config
+            .model
+            .clone()
+            .or_else(|| internal_turn_preparation::get_model(agent));
+        let settings = get_default_model_settings(requested_model.as_deref())
+            .resolve(agent.model_settings.as_ref())
+            .resolve(self.config.model_settings.as_ref());
+        let tools = internal_turn_preparation::get_all_tools(agent, context).await?;
+
+        if let Some(model_provider) = self
+            .model_provider
+            .clone()
+            .or_else(|| self.config.model_provider.clone())
+        {
             let request = ModelRequest {
                 trace_id: Some(trace_id),
                 model: requested_model.clone(),
@@ -596,7 +764,7 @@ impl Runner {
                 conversation_id: conversation_id.map(ToOwned::to_owned),
                 settings: settings.clone(),
                 input: model_data.input,
-                tools: internal_turn_preparation::get_all_tools(agent),
+                tools,
             };
             let response = model_provider
                 .resolve_with_settings(requested_model.as_deref(), &settings)
@@ -604,6 +772,14 @@ impl Runner {
                 .await;
             match response {
                 Ok(response) => {
+                    dispatch_llm_end(
+                        self.config.run_hooks.as_ref(),
+                        agent.hooks.as_ref(),
+                        context,
+                        agent,
+                        &response,
+                    )
+                    .await;
                     if let SpanData::Generation(data) = &mut span.data {
                         data.model = response.model.clone().or(requested_model);
                         data.usage = serde_json::to_value(&response.usage).ok();
@@ -632,6 +808,14 @@ impl Runner {
                 response_id: None,
                 request_id: None,
             };
+            dispatch_llm_end(
+                self.config.run_hooks.as_ref(),
+                agent.hooks.as_ref(),
+                context,
+                agent,
+                &response,
+            )
+            .await;
             if let SpanData::Generation(data) = &mut span.data {
                 data.model = response.model.clone();
                 data.usage = serde_json::to_value(&response.usage).ok();
@@ -644,6 +828,7 @@ impl Runner {
     async fn call_model_with_retry(
         &self,
         agent: &Agent,
+        context: &crate::run_context::RunContextWrapper,
         trace_id: Uuid,
         model_data: ModelInputData,
         previous_response_id: Option<&str>,
@@ -652,6 +837,7 @@ impl Runner {
         internal_model_retry::get_response_with_retry(|| {
             self.call_model(
                 agent,
+                context,
                 trace_id,
                 model_data,
                 previous_response_id,
@@ -663,7 +849,7 @@ impl Runner {
 }
 
 pub async fn run(agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
-    Runner::new().run(agent, input).await
+    get_default_agent_runner().run(agent, input).await
 }
 
 pub async fn run_with_session(
@@ -671,7 +857,121 @@ pub async fn run_with_session(
     input: impl Into<InputItem>,
     session: &(dyn Session + Sync),
 ) -> Result<RunResult> {
-    Runner::new().run_with_session(agent, input, session).await
+    get_default_agent_runner()
+        .run_with_session(agent, input, session)
+        .await
+}
+
+pub async fn run_streamed(
+    agent: &Agent,
+    input: impl Into<InputItem>,
+) -> Result<RunResultStreaming> {
+    get_default_agent_runner().run_streamed(agent, input).await
+}
+
+pub fn run_sync(agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
+    get_default_agent_runner().run_sync(agent, input)
+}
+
+fn merged_input_guardrails(
+    agent: &Agent,
+    config: &RunConfig,
+) -> Vec<crate::guardrail::InputGuardrail> {
+    let mut guardrails = config.input_guardrails.clone().unwrap_or_default();
+    guardrails.extend(agent.input_guardrails.clone());
+    guardrails
+}
+
+fn merged_output_guardrails(
+    agent: &Agent,
+    config: &RunConfig,
+) -> Vec<crate::guardrail::OutputGuardrail> {
+    let mut guardrails = config.output_guardrails.clone().unwrap_or_default();
+    guardrails.extend(agent.output_guardrails.clone());
+    guardrails
+}
+
+async fn dispatch_agent_start(
+    run_hooks: Option<&SharedRunHooks>,
+    agent_hooks: Option<&SharedAgentHooks>,
+    context: &crate::run_context::RunContextWrapper,
+    agent: &Agent,
+    turn: usize,
+) {
+    let hook_context = crate::run_context::AgentHookContext::new(context.context.clone(), turn);
+    if let Some(hooks) = run_hooks {
+        hooks.on_agent_start(&hook_context, agent).await;
+    }
+    if let Some(hooks) = agent_hooks {
+        hooks.on_start(&hook_context, agent).await;
+    }
+}
+
+async fn dispatch_agent_end(
+    run_hooks: Option<&SharedRunHooks>,
+    agent_hooks: Option<&SharedAgentHooks>,
+    context: &crate::run_context::RunContextWrapper,
+    agent: &Agent,
+    output: Option<&str>,
+    turn: usize,
+) {
+    let hook_context = crate::run_context::AgentHookContext::new(context.context.clone(), turn);
+    if let Some(hooks) = run_hooks {
+        hooks.on_agent_end(&hook_context, agent, output).await;
+    }
+    if let Some(hooks) = agent_hooks {
+        hooks.on_end(&hook_context, agent, output).await;
+    }
+}
+
+async fn dispatch_handoff(
+    run_hooks: Option<&SharedRunHooks>,
+    agent_hooks: Option<&SharedAgentHooks>,
+    context: &crate::run_context::RunContextWrapper,
+    from_agent: &Agent,
+    to_agent: &Agent,
+) {
+    if let Some(hooks) = run_hooks {
+        hooks.on_handoff(context, from_agent, to_agent).await;
+    }
+    if let Some(hooks) = agent_hooks {
+        hooks.on_handoff(context, from_agent, to_agent).await;
+    }
+}
+
+async fn dispatch_llm_start(
+    run_hooks: Option<&SharedRunHooks>,
+    agent_hooks: Option<&SharedAgentHooks>,
+    context: &crate::run_context::RunContextWrapper,
+    agent: &Agent,
+    system_prompt: Option<&str>,
+    input_items: &[InputItem],
+) {
+    if let Some(hooks) = run_hooks {
+        hooks
+            .on_llm_start(context, agent, system_prompt, input_items)
+            .await;
+    }
+    if let Some(hooks) = agent_hooks {
+        hooks
+            .on_llm_start(context, agent, system_prompt, input_items)
+            .await;
+    }
+}
+
+async fn dispatch_llm_end(
+    run_hooks: Option<&SharedRunHooks>,
+    agent_hooks: Option<&SharedAgentHooks>,
+    context: &crate::run_context::RunContextWrapper,
+    agent: &Agent,
+    response: &ModelResponse,
+) {
+    if let Some(hooks) = run_hooks {
+        hooks.on_llm_end(context, agent, response).await;
+    }
+    if let Some(hooks) = agent_hooks {
+        hooks.on_llm_end(context, agent, response).await;
+    }
 }
 
 fn merge_run_states(previous: &RunState, next: &mut RunState) {
@@ -747,7 +1047,8 @@ fn merge_run_states(previous: &RunState, next: &mut RunState) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use async_trait::async_trait;
     use futures::FutureExt;
@@ -757,6 +1058,7 @@ mod tests {
 
     use crate::errors::AgentsError;
     use crate::guardrail::{GuardrailFunctionOutput, input_guardrail, output_guardrail};
+    use crate::lifecycle::{AgentHooks, RunHooks};
     use crate::model::Model;
     use crate::session::MemorySession;
     use crate::tool::function_tool;
@@ -1060,6 +1362,156 @@ mod tests {
     impl ModelProvider for LoopingToolProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct HookRecorder {
+        events: Arc<Mutex<BTreeMap<&'static str, usize>>>,
+    }
+
+    impl HookRecorder {
+        fn bump(&self, event: &'static str) {
+            *self
+                .events
+                .lock()
+                .expect("hook recorder lock")
+                .entry(event)
+                .or_default() += 1;
+        }
+
+        fn count(&self, event: &'static str) -> usize {
+            self.events
+                .lock()
+                .expect("hook recorder lock")
+                .get(event)
+                .copied()
+                .unwrap_or_default()
+        }
+    }
+
+    #[async_trait]
+    impl RunHooks for HookRecorder {
+        async fn on_llm_start(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _system_prompt: Option<&str>,
+            _input_items: &[InputItem],
+        ) {
+            self.bump("run.llm_start");
+        }
+
+        async fn on_llm_end(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _response: &ModelResponse,
+        ) {
+            self.bump("run.llm_end");
+        }
+
+        async fn on_agent_start(
+            &self,
+            _context: &crate::run_context::AgentHookContext,
+            _agent: &Agent,
+        ) {
+            self.bump("run.agent_start");
+        }
+
+        async fn on_agent_end(
+            &self,
+            _context: &crate::run_context::AgentHookContext,
+            _agent: &Agent,
+            _output: Option<&str>,
+        ) {
+            self.bump("run.agent_end");
+        }
+
+        async fn on_tool_start(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+        ) {
+            self.bump("run.tool_start");
+        }
+
+        async fn on_tool_end(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+            _result: &str,
+        ) {
+            self.bump("run.tool_end");
+        }
+    }
+
+    #[async_trait]
+    impl AgentHooks for HookRecorder {
+        async fn on_start(&self, _context: &crate::run_context::AgentHookContext, _agent: &Agent) {
+            self.bump("agent.start");
+        }
+
+        async fn on_end(
+            &self,
+            _context: &crate::run_context::AgentHookContext,
+            _agent: &Agent,
+            _output: Option<&str>,
+        ) {
+            self.bump("agent.end");
+        }
+
+        async fn on_tool_start(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+        ) {
+            self.bump("agent.tool_start");
+        }
+
+        async fn on_tool_end(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+            _result: &str,
+        ) {
+            self.bump("agent.tool_end");
+        }
+
+        async fn on_llm_start(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _system_prompt: Option<&str>,
+            _input_items: &[InputItem],
+        ) {
+            self.bump("agent.llm_start");
+        }
+
+        async fn on_llm_end(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _response: &ModelResponse,
+        ) {
+            self.bump("agent.llm_end");
+        }
+    }
+
+    fn default_runner_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    struct DefaultRunnerReset(AgentRunner);
+
+    impl Drop for DefaultRunnerReset {
+        fn drop(&mut self) {
+            set_default_agent_runner(Some(self.0.clone()));
         }
     }
 
@@ -1549,6 +2001,148 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, crate::stream_events::StreamEvent::RunItemEvent(_)))
         );
+    }
+
+    #[tokio::test]
+    async fn default_runner_roundtrip_and_free_run_use_global_runner() {
+        let _guard = default_runner_test_lock().lock().await;
+        let original_runner = get_default_agent_runner();
+        let _reset = DefaultRunnerReset(original_runner.clone());
+        let configured_runner = Runner::new().with_config(RunConfig {
+            model: Some("gpt-default-runner".to_owned()),
+            ..RunConfig::default()
+        });
+
+        set_default_agent_runner(Some(configured_runner.clone()));
+
+        let current_runner = get_default_agent_runner();
+        assert_eq!(
+            current_runner.config.model.as_deref(),
+            Some("gpt-default-runner")
+        );
+
+        let agent = Agent::builder("assistant").build();
+        let result = run(&agent, "hello")
+            .await
+            .expect("free run should use the configured default runner");
+
+        assert_eq!(
+            result
+                .raw_responses
+                .first()
+                .and_then(|response| response.model.as_deref()),
+            Some("gpt-default-runner")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_sync_errors_when_runtime_is_already_running() {
+        let agent = Agent::builder("assistant").build();
+
+        let error = Runner::new()
+            .run_sync(&agent, "hello")
+            .expect_err("run_sync should reject active runtimes");
+
+        assert!(matches!(error, AgentsError::User(_)));
+        assert!(
+            error.to_string().contains("event loop is already running"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_uses_session_input_callback_to_prepare_history() {
+        let model = Arc::new(SessionCaptureModel::default());
+        let provider = Arc::new(SessionCaptureProvider {
+            model: model.clone(),
+        });
+        let session = MemorySession::new("session");
+        session
+            .add_items(vec![
+                InputItem::from("history-1"),
+                InputItem::from("history-2"),
+            ])
+            .await
+            .expect("history should be stored");
+        let agent = Agent::builder("assistant").build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                session_input_callback: Some(Arc::new(|history, new_items| {
+                    async move {
+                        Ok(vec![
+                            history
+                                .last()
+                                .cloned()
+                                .unwrap_or_else(|| InputItem::from("")),
+                            new_items
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| InputItem::from("")),
+                        ])
+                    }
+                    .boxed()
+                })),
+                ..RunConfig::default()
+            })
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect("session-backed run should succeed");
+
+        let seen_inputs = model.seen_inputs.lock().expect("session seen inputs lock");
+        assert_eq!(seen_inputs.len(), 1);
+        assert_eq!(seen_inputs[0].len(), 2);
+        assert_eq!(seen_inputs[0][0].as_text(), Some("history-2"));
+        assert_eq!(seen_inputs[0][1].as_text(), Some("hello"));
+        drop(seen_inputs);
+        assert_eq!(result.final_output.as_deref(), Some("session-ok"));
+    }
+
+    #[tokio::test]
+    async fn runner_fires_run_and_agent_hooks_for_llm_and_tool_events() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let run_hooks = Arc::new(HookRecorder::default());
+        let agent_hooks = Arc::new(HookRecorder::default());
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .hooks(agent_hooks.clone())
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                run_hooks: Some(run_hooks.clone()),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("final:result:rust"));
+        assert_eq!(run_hooks.count("run.agent_start"), 1);
+        assert_eq!(run_hooks.count("run.agent_end"), 1);
+        assert_eq!(run_hooks.count("run.llm_start"), 2);
+        assert_eq!(run_hooks.count("run.llm_end"), 2);
+        assert_eq!(run_hooks.count("run.tool_start"), 1);
+        assert_eq!(run_hooks.count("run.tool_end"), 1);
+
+        assert_eq!(agent_hooks.count("agent.start"), 1);
+        assert_eq!(agent_hooks.count("agent.end"), 1);
+        assert_eq!(agent_hooks.count("agent.llm_start"), 2);
+        assert_eq!(agent_hooks.count("agent.llm_end"), 2);
+        assert_eq!(agent_hooks.count("agent.tool_start"), 1);
+        assert_eq!(agent_hooks.count("agent.tool_end"), 1);
     }
 
     #[tokio::test]
