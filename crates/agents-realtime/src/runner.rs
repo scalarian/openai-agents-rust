@@ -48,6 +48,7 @@ impl RealtimeRunner {
                 config: RealtimeModelConfig { model: model_name },
                 transport: TransportConfig::default(),
                 connected: false,
+                last_connection_url: None,
                 last_session_payload: None,
             }))
             .await;

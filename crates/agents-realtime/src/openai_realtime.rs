@@ -31,6 +31,23 @@ pub struct NormalizedRealtimeSessionPayload {
     pub payload: Value,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealtimeTransportRuntimeState {
+    pub connected: bool,
+    pub connection_url: Option<String>,
+    pub api_key_present: bool,
+    pub call_id: Option<String>,
+    #[serde(default)]
+    pub query_params: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeRuntimeState {
+    pub model: Option<String>,
+    pub transport: RealtimeTransportRuntimeState,
+    pub last_session_payload: Option<NormalizedRealtimeSessionPayload>,
+}
+
 pub fn get_api_key(config: &TransportConfig) -> Option<String> {
     config.api_key.clone().or_else(default_openai_key)
 }
@@ -50,6 +67,7 @@ pub struct OpenAIRealtimeWebSocketModel {
     pub config: RealtimeModelConfig,
     pub transport: TransportConfig,
     pub connected: bool,
+    pub last_connection_url: Option<String>,
     pub last_session_payload: Option<NormalizedRealtimeSessionPayload>,
 }
 
@@ -149,6 +167,15 @@ impl OpenAIRealtimeWebSocketModel {
         }
     }
 
+    fn config_payload<T: Serialize>(value: &T) -> Option<Value> {
+        let payload = serde_json::to_value(value).ok()?;
+        match payload {
+            Value::Null => None,
+            Value::Object(ref map) if map.is_empty() => None,
+            other => Some(other),
+        }
+    }
+
     fn session_payload_from_settings(&self, settings: &RealtimeSessionModelSettings) -> Value {
         let input_audio_format = settings
             .audio
@@ -162,6 +189,36 @@ impl OpenAIRealtimeWebSocketModel {
             .and_then(|audio| audio.output.as_ref())
             .and_then(|output| output.format.clone())
             .or_else(|| settings.output_audio_format.clone());
+        let input_transcription = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.input.as_ref())
+            .and_then(|input| input.transcription.clone())
+            .or_else(|| settings.input_audio_transcription.clone());
+        let input_noise_reduction = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.input.as_ref())
+            .and_then(|input| input.noise_reduction.clone())
+            .or_else(|| settings.input_audio_noise_reduction.clone());
+        let turn_detection = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.input.as_ref())
+            .and_then(|input| input.turn_detection.clone())
+            .or_else(|| settings.turn_detection.clone());
+        let output_voice = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.voice.clone())
+            .or_else(|| settings.voice.clone());
+        let output_speed = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.speed)
+            .or(settings.speed);
 
         let mut payload = serde_json::json!({
             "type": "realtime",
@@ -171,23 +228,67 @@ impl OpenAIRealtimeWebSocketModel {
             return payload;
         };
 
-        let mut audio = serde_json::Map::new();
-        if let Some(input_audio_format) = input_audio_format {
-            audio.insert(
-                "input".to_owned(),
-                serde_json::json!({
-                    "format": Self::audio_format_payload(&input_audio_format),
-                }),
+        if let Some(instructions) = &settings.instructions {
+            session.insert(
+                "instructions".to_owned(),
+                Value::String(instructions.clone()),
             );
         }
-        if let Some(output_audio_format) = output_audio_format {
-            audio.insert(
-                "output".to_owned(),
-                serde_json::json!({
-                    "format": Self::audio_format_payload(&output_audio_format),
-                    "voice": settings.voice.clone(),
-                }),
+        if let Some(modalities) = &settings.modalities {
+            session.insert("modalities".to_owned(), serde_json::json!(modalities));
+        }
+        if let Some(output_modalities) = &settings.output_modalities {
+            session.insert(
+                "output_modalities".to_owned(),
+                serde_json::json!(output_modalities),
             );
+        }
+        if let Some(tool_choice) = &settings.tool_choice {
+            session.insert("tool_choice".to_owned(), Value::String(tool_choice.clone()));
+        }
+        if let Some(tracing) = settings.tracing.as_ref().and_then(Self::config_payload) {
+            session.insert("tracing".to_owned(), tracing);
+        }
+
+        let mut audio = serde_json::Map::new();
+        let mut input = serde_json::Map::new();
+        if let Some(input_audio_format) = input_audio_format {
+            input.insert(
+                "format".to_owned(),
+                Self::audio_format_payload(&input_audio_format),
+            );
+        }
+        if let Some(transcription) = input_transcription.as_ref().and_then(Self::config_payload) {
+            input.insert("transcription".to_owned(), transcription);
+        }
+        if let Some(noise_reduction) = input_noise_reduction
+            .as_ref()
+            .and_then(Self::config_payload)
+        {
+            input.insert("noise_reduction".to_owned(), noise_reduction);
+        }
+        if let Some(turn_detection) = turn_detection.as_ref().and_then(Self::config_payload) {
+            input.insert("turn_detection".to_owned(), turn_detection);
+        }
+        if !input.is_empty() {
+            audio.insert("input".to_owned(), Value::Object(input));
+        }
+
+        let mut output = serde_json::Map::new();
+        if let Some(output_audio_format) = output_audio_format {
+            output.insert(
+                "format".to_owned(),
+                Self::audio_format_payload(&output_audio_format),
+            );
+        }
+        if let Some(output_voice) = output_voice {
+            output.insert("voice".to_owned(), Value::String(output_voice));
+        }
+        if let Some(output_speed) = output_speed {
+            output.insert("speed".to_owned(), serde_json::json!(output_speed));
+        }
+        if !output.is_empty() {
+            audio.insert("output".to_owned(), Value::Object(output));
         }
 
         if !audio.is_empty() {
@@ -196,11 +297,26 @@ impl OpenAIRealtimeWebSocketModel {
 
         payload
     }
+
+    pub fn runtime_state(&self) -> RealtimeRuntimeState {
+        RealtimeRuntimeState {
+            model: self.config.model.clone(),
+            transport: RealtimeTransportRuntimeState {
+                connected: self.connected,
+                connection_url: self.last_connection_url.clone(),
+                api_key_present: get_api_key(&self.transport).is_some(),
+                call_id: self.transport.call_id.clone(),
+                query_params: self.transport.query_params.clone(),
+            },
+            last_session_payload: self.last_session_payload.clone(),
+        }
+    }
 }
 
 #[async_trait]
 impl RealtimeModel for OpenAIRealtimeWebSocketModel {
     async fn connect(&mut self) -> Result<()> {
+        self.last_connection_url = Some(self.connection_url());
         self.connected = true;
         Ok(())
     }
@@ -257,6 +373,35 @@ pub struct OpenAIRealtimeSIPModel {
     pub config: RealtimeModelConfig,
     pub transport: TransportConfig,
     pub connected: bool,
+    pub last_connection_url: Option<String>,
+    pub last_session_payload: Option<NormalizedRealtimeSessionPayload>,
+}
+
+impl OpenAIRealtimeSIPModel {
+    pub fn connection_url(&self) -> String {
+        OpenAIRealtimeWebSocketModel {
+            config: self.config.clone(),
+            transport: self.transport.clone(),
+            connected: self.connected,
+            last_connection_url: self.last_connection_url.clone(),
+            last_session_payload: self.last_session_payload.clone(),
+        }
+        .connection_url()
+    }
+
+    pub fn runtime_state(&self) -> RealtimeRuntimeState {
+        RealtimeRuntimeState {
+            model: self.config.model.clone(),
+            transport: RealtimeTransportRuntimeState {
+                connected: self.connected,
+                connection_url: self.last_connection_url.clone(),
+                api_key_present: get_api_key(&self.transport).is_some(),
+                call_id: self.transport.call_id.clone(),
+                query_params: self.transport.query_params.clone(),
+            },
+            last_session_payload: self.last_session_payload.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -267,6 +412,7 @@ impl RealtimeModel for OpenAIRealtimeSIPModel {
                 "OpenAIRealtimeSIPModel requires `call_id` in the transport configuration.",
             ));
         }
+        self.last_connection_url = Some(self.connection_url());
         self.connected = true;
         Ok(())
     }
@@ -315,6 +461,16 @@ impl RealtimeModel for OpenAIRealtimeSIPModel {
         if let Some(model_name) = &settings.model_name {
             self.config.model = Some(model_name.clone());
         }
+        let payload = OpenAIRealtimeWebSocketModel {
+            config: self.config.clone(),
+            transport: self.transport.clone(),
+            connected: self.connected,
+            last_connection_url: self.last_connection_url.clone(),
+            last_session_payload: self.last_session_payload.clone(),
+        }
+        .session_payload_from_settings(settings);
+        self.last_session_payload =
+            OpenAIRealtimeWebSocketModel::normalize_session_payload(&payload);
         Ok(Vec::new())
     }
 }
@@ -353,6 +509,7 @@ mod tests {
                 query_params: BTreeMap::new(),
             },
             connected: false,
+            last_connection_url: None,
             last_session_payload: None,
         };
 
@@ -390,6 +547,10 @@ mod tests {
         let mut model = OpenAIRealtimeWebSocketModel::default();
         model.connect().await.expect("connect should succeed");
         assert!(model.connected);
+        assert_eq!(
+            model.runtime_state().transport.connection_url.as_deref(),
+            Some("wss://api.openai.com/v1/realtime")
+        );
 
         let events = model.send_text("hello").await.expect("text should send");
         assert!(matches!(
@@ -400,11 +561,28 @@ mod tests {
         model
             .update_session(&RealtimeSessionModelSettings {
                 model_name: Some("gpt-realtime-updated".to_owned()),
+                audio: Some(crate::RealtimeAudioConfig {
+                    output: Some(crate::RealtimeAudioOutputConfig {
+                        voice: Some("marin".to_owned()),
+                        speed: Some(1.25),
+                        ..crate::RealtimeAudioOutputConfig::default()
+                    }),
+                    ..crate::RealtimeAudioConfig::default()
+                }),
                 ..RealtimeSessionModelSettings::default()
             })
             .await
             .expect("session should update");
         assert_eq!(model.config.model.as_deref(), Some("gpt-realtime-updated"));
+        let runtime_state = model.runtime_state();
+        let output = runtime_state
+            .last_session_payload
+            .as_ref()
+            .and_then(|payload| payload.payload.get("audio"))
+            .and_then(|audio| audio.get("output"))
+            .expect("output payload should exist");
+        assert_eq!(output.get("voice").and_then(Value::as_str), Some("marin"));
+        assert_eq!(output.get("speed").and_then(Value::as_f64), Some(1.25));
 
         model.disconnect().await.expect("disconnect should succeed");
         assert!(!model.connected);
@@ -421,6 +599,10 @@ mod tests {
         };
         model.connect().await.expect("connect should succeed");
         assert!(model.connected);
+        assert_eq!(
+            model.runtime_state().transport.call_id.as_deref(),
+            Some("call_123")
+        );
 
         let text_events = model.send_text("hello").await.expect("text should send");
         assert!(matches!(
@@ -442,6 +624,34 @@ mod tests {
             interrupt_events.first(),
             Some(RealtimeModelEvent::AudioInterrupted(_))
         ));
+
+        model
+            .update_session(&RealtimeSessionModelSettings {
+                audio: Some(crate::RealtimeAudioConfig {
+                    output: Some(crate::RealtimeAudioOutputConfig {
+                        voice: Some("verse".to_owned()),
+                        speed: Some(1.5),
+                        ..crate::RealtimeAudioOutputConfig::default()
+                    }),
+                    ..crate::RealtimeAudioConfig::default()
+                }),
+                ..RealtimeSessionModelSettings::default()
+            })
+            .await
+            .expect("session should update");
+        let runtime_state = model.runtime_state();
+        assert_eq!(
+            runtime_state.transport.connection_url.as_deref(),
+            Some("wss://api.openai.com/v1/realtime?call_id=call_123")
+        );
+        let output = runtime_state
+            .last_session_payload
+            .as_ref()
+            .and_then(|payload| payload.payload.get("audio"))
+            .and_then(|audio| audio.get("output"))
+            .expect("output payload should exist");
+        assert_eq!(output.get("voice").and_then(Value::as_str), Some("verse"));
+        assert_eq!(output.get("speed").and_then(Value::as_f64), Some(1.5));
     }
 
     #[tokio::test]

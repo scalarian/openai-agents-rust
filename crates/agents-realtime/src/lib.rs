@@ -51,7 +51,8 @@ pub use model_inputs::{
     RealtimeModelSendUserInput, RealtimeModelUserInputMessage,
 };
 pub use openai_realtime::{
-    OpenAIRealtimeSIPModel, OpenAIRealtimeWebSocketModel, TransportConfig, get_api_key,
+    NormalizedRealtimeSessionPayload, OpenAIRealtimeSIPModel, OpenAIRealtimeWebSocketModel,
+    RealtimeRuntimeState, RealtimeTransportRuntimeState, TransportConfig, get_api_key,
     get_server_event_type_adapter,
 };
 pub use runner::RealtimeRunner;
