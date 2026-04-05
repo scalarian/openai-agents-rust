@@ -1,5 +1,5 @@
 [package]
-name = "openai-agents"
+name = "openai-agents-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,12 +12,15 @@ readme = "../../README.md"
 keywords = ["agents", "openai", "llm", "realtime", "mcp"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 
+[lib]
+name = "openai_agents"
+
 [dependencies]
-agents-core = { version = "0.1.2", path = "../agents-core" }
-agents-extensions = { version = "0.1.2", path = "../agents-extensions" }
-agents-openai = { version = "0.1.2", path = "../agents-openai" }
-agents-realtime = { version = "0.1.2", path = "../agents-realtime" }
-agents-voice = { version = "0.1.2", path = "../agents-voice" }
+agents-core = { package = "openai-agents-core-rs", version = "0.1.2", path = "../agents-core" }
+agents-extensions = { package = "openai-agents-extensions-rs", version = "0.1.2", path = "../agents-extensions" }
+agents-openai = { package = "openai-agents-openai-rs", version = "0.1.2", path = "../agents-openai" }
+agents-realtime = { package = "openai-agents-realtime-rs", version = "0.1.2", path = "../agents-realtime" }
+agents-voice = { package = "openai-agents-voice-rs", version = "0.1.2", path = "../agents-voice" }
 tokio.workspace = true
 
 [dev-dependencies]

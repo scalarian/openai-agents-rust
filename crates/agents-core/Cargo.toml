@@ -1,5 +1,5 @@
 [package]
-name = "agents-core"
+name = "openai-agents-core-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,9 @@ homepage = "https://github.com/scalarian/openai-agents-rust"
 readme = "../../README.md"
 keywords = ["agents", "openai", "llm", "runtime", "mcp"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
+
+[lib]
+name = "agents_core"
 
 [dependencies]
 async-trait.workspace = true

@@ -31,7 +31,7 @@ This repository is for teams that want to build agent systems in Rust without wr
 
 ```toml
 [dependencies]
-openai-agents = { git = "https://github.com/scalarian/openai-agents-rust", package = "openai-agents" }
+openai-agents = { package = "openai-agents-rs", version = "0.1.2" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -69,7 +69,7 @@ For a fuller walkthrough, open [docs/quickstart.md](docs/quickstart.md).
 
 ## Public Surface
 
-The top-level `openai-agents` crate is the normal entry point.
+The top-level published package is `openai-agents-rs`, and the Rust crate name remains `openai_agents`.
 
 - runtime: `Agent`, `Runner`, `RunConfig`, `RunOptions`, `RunResult`, `RunResultStreaming`
 - OpenAI: `OpenAIProvider`, `OpenAIResponsesModel`, `OpenAIChatCompletionsModel`

@@ -8,7 +8,7 @@ Add the facade crate and Tokio:
 
 ```toml
 [dependencies]
-openai-agents = { git = "https://github.com/scalarian/openai-agents-rust", package = "openai-agents" }
+openai-agents = { package = "openai-agents-rs", version = "0.1.2" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

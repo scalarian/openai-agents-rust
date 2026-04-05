@@ -1,5 +1,5 @@
 [package]
-name = "agents-voice"
+name = "openai-agents-voice-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,9 +12,12 @@ readme = "../../README.md"
 keywords = ["agents", "openai", "voice", "stt", "tts"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 
+[lib]
+name = "agents_voice"
+
 [dependencies]
-agents-core = { version = "0.1.2", path = "../agents-core" }
-agents-openai = { version = "0.1.2", path = "../agents-openai" }
+agents-core = { package = "openai-agents-core-rs", version = "0.1.2", path = "../agents-core" }
+agents-openai = { package = "openai-agents-openai-rs", version = "0.1.2", path = "../agents-openai" }
 async-trait.workspace = true
 futures.workspace = true
 reqwest.workspace = true

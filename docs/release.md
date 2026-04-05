@@ -9,7 +9,8 @@ Use this page when you are preparing a release or making a change that affects t
 3. run docs maintenance scripts
 4. run `cargo fmt --all`
 5. run `cargo test --workspace`
-6. confirm the README still points at the right docs entrypoints
+6. run `cargo package --workspace --allow-dirty --no-verify`
+7. confirm the README and quickstart use the current published package names
 
 ## Docs Maintenance
 

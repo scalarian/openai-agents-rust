@@ -27,6 +27,8 @@ PY
       status=1
     fi
   done < <(rg -o '\[[^]]+\]\(([^)]+)\)' "$file" -r '$1')
-done < <(find . -type f \( -name '*.md' -o -name 'README.md' \) | sort)
+done < <(find . \
+  \( -path './.git' -o -path './target' \) -prune -o \
+  -type f \( -name '*.md' -o -name 'README.md' \) -print | sort)
 
 exit "$status"

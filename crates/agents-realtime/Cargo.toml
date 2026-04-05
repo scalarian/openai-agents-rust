@@ -1,5 +1,5 @@
 [package]
-name = "agents-realtime"
+name = "openai-agents-realtime-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,12 +8,15 @@ authors.workspace = true
 description = "Realtime runtime, sessions, and event models for openai-agents-rust."
 repository = "https://github.com/scalarian/openai-agents-rust"
 homepage = "https://github.com/scalarian/openai-agents-rust"
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["agents", "openai", "realtime", "audio", "streaming"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 
+[lib]
+name = "agents_realtime"
+
 [dependencies]
-agents-core = { version = "0.1.2", path = "../agents-core" }
+agents-core = { package = "openai-agents-core-rs", version = "0.1.2", path = "../agents-core" }
 async-trait.workspace = true
 futures.workspace = true
 serde.workspace = true

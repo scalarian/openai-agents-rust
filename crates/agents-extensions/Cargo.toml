@@ -1,5 +1,5 @@
 [package]
-name = "agents-extensions"
+name = "openai-agents-extensions-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,10 +12,13 @@ readme = "../../README.md"
 keywords = ["agents", "openai", "extensions", "realtime", "integrations"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 
+[lib]
+name = "agents_extensions"
+
 [dependencies]
-agents-core = { version = "0.1.2", path = "../agents-core" }
-agents-openai = { version = "0.1.2", path = "../agents-openai" }
-agents-realtime = { version = "0.1.2", path = "../agents-realtime" }
+agents-core = { package = "openai-agents-core-rs", version = "0.1.2", path = "../agents-core" }
+agents-openai = { package = "openai-agents-openai-rs", version = "0.1.2", path = "../agents-openai" }
+agents-realtime = { package = "openai-agents-realtime-rs", version = "0.1.2", path = "../agents-realtime" }
 async-trait.workspace = true
 base64.workspace = true
 redis.workspace = true

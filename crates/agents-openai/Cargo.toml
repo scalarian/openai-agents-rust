@@ -1,5 +1,5 @@
 [package]
-name = "agents-openai"
+name = "openai-agents-openai-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,8 +12,11 @@ readme = "../../README.md"
 keywords = ["agents", "openai", "responses", "chat-completions", "mcp"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 
+[lib]
+name = "agents_openai"
+
 [dependencies]
-agents-core = { version = "0.1.2", path = "../agents-core" }
+agents-core = { package = "openai-agents-core-rs", version = "0.1.2", path = "../agents-core" }
 async-trait.workspace = true
 futures.workspace = true
 once_cell.workspace = true

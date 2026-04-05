@@ -3,83 +3,6 @@
 version = 4
 
 [[package]]
-name = "agents-core"
-version = "0.1.2"
-dependencies = [
- "async-trait",
- "futures",
- "log",
- "schemars",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "agents-extensions"
-version = "0.1.2"
-dependencies = [
- "agents-core",
- "agents-openai",
- "agents-realtime",
- "async-trait",
- "base64",
- "redis",
- "reqwest",
- "schemars",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
-]
-
-[[package]]
-name = "agents-openai"
-version = "0.1.2"
-dependencies = [
- "agents-core",
- "async-trait",
- "futures",
- "once_cell",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "agents-realtime"
-version = "0.1.2"
-dependencies = [
- "agents-core",
- "async-trait",
- "futures",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "agents-voice"
-version = "0.1.2"
-dependencies = [
- "agents-core",
- "agents-openai",
- "async-trait",
- "futures",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1054,16 +977,93 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "openai-agents"
+name = "openai-agents-core-rs"
 version = "0.1.2"
 dependencies = [
- "agents-core",
- "agents-extensions",
- "agents-openai",
- "agents-realtime",
- "agents-voice",
  "async-trait",
  "futures",
+ "log",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "openai-agents-extensions-rs"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "base64",
+ "openai-agents-core-rs",
+ "openai-agents-openai-rs",
+ "openai-agents-realtime-rs",
+ "redis",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
+name = "openai-agents-openai-rs"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "futures",
+ "once_cell",
+ "openai-agents-core-rs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "openai-agents-realtime-rs"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "futures",
+ "openai-agents-core-rs",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "openai-agents-rs"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "futures",
+ "openai-agents-core-rs",
+ "openai-agents-extensions-rs",
+ "openai-agents-openai-rs",
+ "openai-agents-realtime-rs",
+ "openai-agents-voice-rs",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "openai-agents-voice-rs"
+version = "0.1.2"
+dependencies = [
+ "async-trait",
+ "futures",
+ "openai-agents-core-rs",
+ "openai-agents-openai-rs",
+ "reqwest",
+ "serde",
  "serde_json",
  "tokio",
 ]
