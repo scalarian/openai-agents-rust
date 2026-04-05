@@ -6,10 +6,74 @@ use agents_core::{
     SessionSettings,
 };
 use async_trait::async_trait;
+use reqwest::header::CONTENT_TYPE;
+use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::models::OpenAIClientOptions;
+use crate::{get_default_openai_key, get_openai_base_url};
+
+const DEFAULT_COMPACTION_THRESHOLD: usize = 10;
+const TOOL_CALL_SESSION_DESCRIPTION_KEY: &str = "tool_call_session_description";
+const TOOL_CALL_SESSION_TITLE_KEY: &str = "tool_call_session_title";
+
+pub async fn start_openai_conversations_session(
+    client_options: Option<OpenAIClientOptions>,
+) -> Result<String> {
+    let client_options = client_options.unwrap_or_else(|| {
+        OpenAIClientOptions::new(get_default_openai_key()).with_base_url(get_openai_base_url())
+    });
+    let api_key = client_options
+        .api_key
+        .clone()
+        .ok_or(agents_core::AgentsError::ModelProviderNotConfigured)?;
+    let response = reqwest::Client::new()
+        .post(client_options.api_url("/conversations"))
+        .header(CONTENT_TYPE, "application/json")
+        .bearer_auth(api_key)
+        .json(&serde_json::json!({ "items": [] }))
+        .send()
+        .await
+        .map_err(|error| agents_core::AgentsError::message(error.to_string()))?;
+    let response = response
+        .error_for_status()
+        .map_err(|error| agents_core::AgentsError::message(error.to_string()))?;
+    let payload = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| agents_core::AgentsError::message(error.to_string()))?;
+    payload
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| agents_core::AgentsError::message("conversation create response missing id"))
+}
+
+pub fn select_compaction_candidate_items(items: &[InputItem]) -> Vec<InputItem> {
+    items
+        .iter()
+        .filter(|item| !is_user_like_item(item) && !is_compaction_marker(item))
+        .cloned()
+        .collect()
+}
+
+pub fn default_should_trigger_compaction(compaction_candidate_items: &[InputItem]) -> bool {
+    compaction_candidate_items.len() >= DEFAULT_COMPACTION_THRESHOLD
+}
+
+pub fn is_openai_model_name(model: &str) -> bool {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let without_ft_prefix = trimmed.strip_prefix("ft:").unwrap_or(trimmed);
+    let root = without_ft_prefix.split(':').next().unwrap_or_default();
+
+    root.starts_with("gpt-")
+        || (root.starts_with('o') && root.chars().nth(1).is_some_and(|ch| ch.is_ascii_digit()))
+}
 
 #[derive(Clone, Debug)]
 pub struct OpenAIConversationsSession {
@@ -119,6 +183,7 @@ pub enum OpenAIResponsesCompactionMode {
 #[derive(Clone, Debug)]
 pub struct OpenAIResponsesCompactionSession {
     inner: MemorySession,
+    pub model: String,
     pub mode: OpenAIResponsesCompactionMode,
     pub client_options: OpenAIClientOptions,
     response_id: Arc<Mutex<Option<String>>>,
@@ -131,6 +196,7 @@ impl OpenAIResponsesCompactionSession {
     pub fn new(session_id: impl Into<String>) -> Self {
         Self {
             inner: MemorySession::new(session_id),
+            model: "gpt-4.1".to_owned(),
             mode: OpenAIResponsesCompactionMode::Auto,
             client_options: OpenAIClientOptions::default(),
             response_id: Arc::new(Mutex::new(None)),
@@ -143,6 +209,17 @@ impl OpenAIResponsesCompactionSession {
     pub fn with_mode(mut self, mode: OpenAIResponsesCompactionMode) -> Self {
         self.mode = mode;
         self
+    }
+
+    pub fn with_model(mut self, model: impl Into<String>) -> Result<Self> {
+        let model = model.into();
+        if !is_openai_model_name(&model) {
+            return Err(agents_core::AgentsError::message(format!(
+                "unsupported model for OpenAI responses compaction: {model}"
+            )));
+        }
+        self.model = model;
+        Ok(self)
     }
 
     pub fn with_client_options(mut self, client_options: OpenAIClientOptions) -> Self {
@@ -180,13 +257,9 @@ impl OpenAIResponsesCompactionSession {
     }
 
     pub async fn compaction_candidate_items(&self) -> Result<Vec<InputItem>> {
-        Ok(self
-            .inner
-            .get_items()
-            .await?
-            .into_iter()
-            .filter(|item| !is_user_like_item(item) && !is_compaction_marker(item))
-            .collect())
+        Ok(select_compaction_candidate_items(
+            &self.inner.get_items().await?,
+        ))
     }
 
     pub async fn compaction_candidate_count(&self) -> Result<usize> {
@@ -198,7 +271,11 @@ impl OpenAIResponsesCompactionSession {
     }
 
     pub async fn compact(&self) -> Result<()> {
-        let items = self.inner.get_items().await?;
+        self.compact_with_force(false).await
+    }
+
+    async fn compact_with_force(&self, force: bool) -> Result<()> {
+        let items = sanitize_compaction_items(&self.inner.get_items().await?);
         let candidate_indices = items
             .iter()
             .enumerate()
@@ -207,6 +284,10 @@ impl OpenAIResponsesCompactionSession {
             })
             .collect::<Vec<_>>();
         if candidate_indices.len() <= self.compaction_threshold {
+            if force {
+                self.inner.clear().await?;
+                return self.inner.add_items(items).await;
+            }
             return Ok(());
         }
 
@@ -234,6 +315,39 @@ impl OpenAIResponsesCompactionSession {
 
         self.inner.clear().await?;
         self.inner.add_items(compacted).await
+    }
+
+    async fn compact_to_previous_response_id(
+        &self,
+        previous_response_id: String,
+        force: bool,
+    ) -> Result<()> {
+        let items = sanitize_compaction_items(&self.inner.get_items().await?);
+        let candidates = select_compaction_candidate_items(&items);
+        if !force && !default_should_trigger_compaction(&candidates) {
+            return Ok(());
+        }
+
+        let mut compacted = items
+            .into_iter()
+            .filter(|item| is_user_like_item(item) || is_compaction_marker(item))
+            .collect::<Vec<_>>();
+        compacted.push(InputItem::Json {
+            value: serde_json::json!({
+                "type": "compaction",
+                "mode": "previous_response_id",
+                "model": self.model,
+                "previous_response_id": previous_response_id,
+                "summary": format!("Compacted {} candidate item(s)", candidates.len()),
+            }),
+        });
+
+        self.inner.clear().await?;
+        self.inner.add_items(compacted).await?;
+        *self.response_id.lock().await = Some(previous_response_id.clone());
+        *self.deferred_response_id.lock().await = Some(previous_response_id.clone());
+        *self.last_unstored_response_id.lock().await = Some(previous_response_id);
+        Ok(())
     }
 }
 
@@ -326,8 +440,67 @@ impl OpenAIConversationAwareSession for OpenAIResponsesCompactionSession {
 
 #[async_trait]
 impl OpenAIResponsesCompactionAwareSession for OpenAIResponsesCompactionSession {
-    async fn run_compaction(&self, _args: Option<OpenAIResponsesCompactionArgs>) -> Result<()> {
-        self.compact().await
+    async fn run_compaction(&self, args: Option<OpenAIResponsesCompactionArgs>) -> Result<()> {
+        let args = args.unwrap_or_default();
+        let mode = match args.compaction_mode.as_deref() {
+            Some("previous_response_id") => OpenAIResponsesCompactionMode::PreviousResponseId,
+            Some("input") => OpenAIResponsesCompactionMode::Input,
+            Some("auto") | None => self.mode,
+            Some(other) => {
+                return Err(agents_core::AgentsError::message(format!(
+                    "unsupported compaction mode `{other}`"
+                )));
+            }
+        };
+        let force = args.force.unwrap_or(false);
+        let deferred_response_id = self.deferred_response_id.lock().await.clone();
+        let current_response_id = self.response_id.lock().await.clone();
+        let response_id = args
+            .response_id
+            .or(deferred_response_id)
+            .or(current_response_id);
+
+        match mode {
+            OpenAIResponsesCompactionMode::Input => self.compact_with_force(force).await,
+            OpenAIResponsesCompactionMode::PreviousResponseId => {
+                let response_id = response_id.ok_or_else(|| {
+                    agents_core::AgentsError::message(
+                        "previous_response_id compaction requires a response id",
+                    )
+                })?;
+                self.compact_to_previous_response_id(response_id, force)
+                    .await
+            }
+            OpenAIResponsesCompactionMode::Auto => {
+                if let Some(response_id) = response_id {
+                    self.compact_to_previous_response_id(response_id, force)
+                        .await
+                } else {
+                    self.compact_with_force(force).await
+                }
+            }
+        }
+    }
+}
+
+fn sanitize_compaction_items(items: &[InputItem]) -> Vec<InputItem> {
+    items.iter().map(sanitize_compaction_item).collect()
+}
+
+fn sanitize_compaction_item(item: &InputItem) -> InputItem {
+    match item {
+        InputItem::Text { .. } => item.clone(),
+        InputItem::Json { value } => {
+            let Some(object) = value.as_object() else {
+                return item.clone();
+            };
+            let mut sanitized = object.clone();
+            sanitized.remove(TOOL_CALL_SESSION_DESCRIPTION_KEY);
+            sanitized.remove(TOOL_CALL_SESSION_TITLE_KEY);
+            InputItem::Json {
+                value: Value::Object(sanitized),
+            }
+        }
     }
 }
 
@@ -446,5 +619,151 @@ mod tests {
 
         assert_eq!(state.previous_response_id, None);
         assert!(!state.auto_previous_response_id);
+    }
+
+    #[tokio::test]
+    async fn compaction_validates_override_model_names() {
+        let error = OpenAIResponsesCompactionSession::new("session")
+            .with_model("claude-3")
+            .expect_err("non-openai model should fail");
+
+        assert!(error.to_string().contains("unsupported model"));
+    }
+
+    #[tokio::test]
+    async fn previous_response_id_compaction_requires_response_id() {
+        let session = OpenAIResponsesCompactionSession::new("session")
+            .with_mode(OpenAIResponsesCompactionMode::PreviousResponseId);
+
+        let error = session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                force: Some(true),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect_err("previous_response_id compaction should require a response id");
+
+        assert!(
+            error
+                .to_string()
+                .contains("previous_response_id compaction requires a response id")
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_compaction_prefers_previous_response_id_when_available() {
+        let session = OpenAIResponsesCompactionSession::new("session");
+        session
+            .add_items(vec![
+                InputItem::from("hello"),
+                InputItem::Json {
+                    value: serde_json::json!({"type":"tool_call_output","call_id":"call-1"}),
+                },
+                InputItem::Json {
+                    value: serde_json::json!({"type":"reasoning","text":"thinking"}),
+                },
+            ])
+            .await
+            .expect("items should be stored");
+        session.set_response_id("resp-prev").await;
+
+        session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                force: Some(true),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect("compaction should succeed");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].as_text(), Some("hello"));
+        assert_eq!(
+            items[1],
+            InputItem::Json {
+                value: serde_json::json!({
+                    "type": "compaction",
+                    "mode": "previous_response_id",
+                    "model": "gpt-4.1",
+                    "previous_response_id": "resp-prev",
+                    "summary": "Compacted 2 candidate item(s)",
+                }),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn input_compaction_strips_internal_tool_metadata() {
+        let session = OpenAIResponsesCompactionSession::new("session")
+            .with_compaction_threshold(1)
+            .with_mode(OpenAIResponsesCompactionMode::Input);
+        session
+            .add_items(vec![InputItem::Json {
+                value: serde_json::json!({
+                    "type":"tool_call",
+                    "tool_name":"lookup_account",
+                    "call_id":"call_123",
+                    "arguments":{},
+                    TOOL_CALL_SESSION_DESCRIPTION_KEY: "Lookup customer records.",
+                    TOOL_CALL_SESSION_TITLE_KEY: "Lookup Account",
+                }),
+            }])
+            .await
+            .expect("items should be stored");
+
+        session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                force: Some(true),
+                compaction_mode: Some("input".to_owned()),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect("compaction should succeed");
+
+        let items = session.get_items().await.expect("items should load");
+        let json = match &items[0] {
+            InputItem::Json { value } => value,
+            InputItem::Text { .. } => panic!("expected json item"),
+        };
+        assert!(json.get(TOOL_CALL_SESSION_DESCRIPTION_KEY).is_none());
+        assert!(json.get(TOOL_CALL_SESSION_TITLE_KEY).is_none());
+    }
+
+    #[test]
+    fn validates_openai_model_names() {
+        assert!(is_openai_model_name("gpt-4o"));
+        assert!(is_openai_model_name("gpt-5"));
+        assert!(is_openai_model_name("o3"));
+        assert!(is_openai_model_name("ft:gpt-4.1:org:proj:suffix"));
+        assert!(!is_openai_model_name(""));
+        assert!(!is_openai_model_name("not-openai"));
+    }
+
+    #[test]
+    fn selects_compaction_candidates_by_skipping_user_and_compaction_items() {
+        let items = vec![
+            InputItem::from("hello"),
+            InputItem::Json {
+                value: serde_json::json!({"type":"tool_call_output","call_id":"1"}),
+            },
+            InputItem::Json {
+                value: serde_json::json!({"type":"compaction","summary":"done"}),
+            },
+            InputItem::Json {
+                value: serde_json::json!({"type":"reasoning","text":"thinking"}),
+            },
+        ];
+
+        let selected = select_compaction_candidate_items(&items);
+
+        assert_eq!(selected.len(), 2);
+        assert!(
+            selected
+                .iter()
+                .all(|item| !matches!(item, InputItem::Text { .. }))
+        );
+        assert!(default_should_trigger_compaction(&vec![InputItem::Json {
+            value: serde_json::json!({"type":"tool_call_output"})
+        }; DEFAULT_COMPACTION_THRESHOLD]));
     }
 }

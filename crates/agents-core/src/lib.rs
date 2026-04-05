@@ -116,9 +116,13 @@ pub use items::{
 pub use lifecycle::{AgentHooks, RunHooks, SharedAgentHooks, SharedRunHooks};
 pub use logger::{LOGGER_TARGET, enable_verbose_stdout_logging};
 pub use mcp::{
-    MCPServer, MCPServerManager, MCPTool, MCPToolAnnotations, MCPToolMetaContext,
-    MCPToolMetaResolver, MCPUtil, RequireApprovalObject, RequireApprovalToolList, ToolFilter,
-    ToolFilterCallable, ToolFilterContext, ToolFilterStatic, create_static_tool_filter,
+    MCPBlobResourceContents, MCPListResourceTemplatesResult, MCPListResourcesResult,
+    MCPReadResourceResult, MCPResource, MCPResourceContents, MCPResourceTemplate, MCPServer,
+    MCPServerManager, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
+    MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
+    MCPToolAnnotations, MCPToolMetaContext, MCPToolMetaResolver, MCPUtil, RequireApprovalObject,
+    RequireApprovalToolList, ToolFilter, ToolFilterCallable, ToolFilterContext, ToolFilterStatic,
+    create_static_tool_filter,
 };
 pub use memory::Session as SessionABC;
 pub use memory::{

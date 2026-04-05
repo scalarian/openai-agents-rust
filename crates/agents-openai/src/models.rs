@@ -847,9 +847,7 @@ mod tests {
         assert_eq!(payload["model"], "gpt-5");
         assert_eq!(payload["input"][0]["role"], "user");
         assert_eq!(payload["tools"][0]["type"], "function");
-        assert!(
-            (payload["temperature"].as_f64().unwrap_or_default() - 0.3).abs() < 0.000_1
-        );
+        assert!((payload["temperature"].as_f64().unwrap_or_default() - 0.3).abs() < 0.000_1);
         assert_eq!(payload["max_output_tokens"], 256);
         assert_eq!(payload["store"], true);
         assert_eq!(payload["tool_choice"], "required");
@@ -900,12 +898,8 @@ mod tests {
             payload["messages"][2]["tool_calls"][0]["function"]["name"],
             "search"
         );
-        assert!(
-            (payload["frequency_penalty"].as_f64().unwrap_or_default() - 0.4).abs() < 0.000_1
-        );
-        assert!(
-            (payload["presence_penalty"].as_f64().unwrap_or_default() - 0.2).abs() < 0.000_1
-        );
+        assert!((payload["frequency_penalty"].as_f64().unwrap_or_default() - 0.4).abs() < 0.000_1);
+        assert!((payload["presence_penalty"].as_f64().unwrap_or_default() - 0.2).abs() < 0.000_1);
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");

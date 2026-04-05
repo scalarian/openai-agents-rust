@@ -47,6 +47,8 @@ pub use defaults::{
 pub use fake_id::{FAKE_RESPONSES_ID, fake_id};
 pub use memory::{
     OpenAIConversationsSession, OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession,
+    default_should_trigger_compaction, is_openai_model_name, select_compaction_candidate_items,
+    start_openai_conversations_session,
 };
 pub use models::OpenAIResponsesWsModel as OpenAIResponsesWSModel;
 pub use models::{

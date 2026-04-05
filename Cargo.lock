@@ -1060,6 +1060,7 @@ dependencies = [
  "agents-realtime",
  "agents-voice",
  "async-trait",
+ "futures",
  "serde_json",
  "tokio",
 ]
