@@ -121,8 +121,8 @@ pub use mcp::{
     MCPServerManager, MCPServerSse, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
     MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
     MCPToolAnnotations, MCPToolMetaContext, MCPToolMetaResolver, MCPTransportAuth,
-    MCPTransportClientConfig, MCPTransportClientFactory, MCPTransportKind, MCPUtil,
-    RequireApprovalObject, RequireApprovalToolList, ToolFilter, ToolFilterCallable,
+    MCPTransportClient, MCPTransportClientConfig, MCPTransportClientFactory, MCPTransportKind,
+    MCPUtil, RequireApprovalObject, RequireApprovalToolList, ToolFilter, ToolFilterCallable,
     ToolFilterContext, ToolFilterStatic, create_static_tool_filter,
 };
 pub use memory::Session as SessionABC;

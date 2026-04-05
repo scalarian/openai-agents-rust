@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -13,6 +13,8 @@ use tokio::sync::Mutex;
 use crate::errors::{AgentsError, Result};
 use crate::exceptions::UserError;
 use crate::tool::ToolOutput;
+
+static NEXT_MCP_STREAMABLE_HTTP_SESSION_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RequireApprovalToolList {
@@ -208,7 +210,70 @@ pub struct MCPTransportClientConfig {
     pub session_id: Option<String>,
 }
 
-pub type MCPTransportClientFactory = Arc<dyn Fn(MCPTransportClientConfig) + Send + Sync + 'static>;
+#[async_trait]
+pub trait MCPTransportClient: Send + Sync {
+    fn config(&self) -> &MCPTransportClientConfig;
+
+    async fn connect(&self) -> Result<()>;
+
+    async fn cleanup(&self) -> Result<()>;
+
+    fn session_id(&self) -> Option<String> {
+        self.config().session_id.clone()
+    }
+}
+
+#[derive(Debug)]
+struct DefaultMCPTransportClient {
+    config: MCPTransportClientConfig,
+    session_id: StdMutex<Option<String>>,
+}
+
+impl DefaultMCPTransportClient {
+    fn new(config: MCPTransportClientConfig) -> Self {
+        Self {
+            config,
+            session_id: StdMutex::new(None),
+        }
+    }
+
+    fn next_streamable_http_session_id() -> String {
+        let sequence = NEXT_MCP_STREAMABLE_HTTP_SESSION_ID.fetch_add(1, Ordering::SeqCst);
+        format!("streamable-http-session-{sequence}")
+    }
+}
+
+#[async_trait]
+impl MCPTransportClient for DefaultMCPTransportClient {
+    fn config(&self) -> &MCPTransportClientConfig {
+        &self.config
+    }
+
+    async fn connect(&self) -> Result<()> {
+        let session_id = match self.config.transport {
+            Some(MCPTransportKind::StreamableHttp) => self
+                .config
+                .session_id
+                .clone()
+                .or_else(|| Some(Self::next_streamable_http_session_id())),
+            _ => None,
+        };
+        *self.session_id.lock().expect("session id mutex") = session_id;
+        Ok(())
+    }
+
+    async fn cleanup(&self) -> Result<()> {
+        *self.session_id.lock().expect("session id mutex") = None;
+        Ok(())
+    }
+
+    fn session_id(&self) -> Option<String> {
+        self.session_id.lock().expect("session id mutex").clone()
+    }
+}
+
+pub type MCPTransportClientFactory =
+    Arc<dyn Fn(MCPTransportClientConfig) -> Arc<dyn MCPTransportClient> + Send + Sync + 'static>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MCPServerSseParams {
@@ -361,6 +426,7 @@ pub struct MCPServerSse {
     pub params: MCPServerSseParams,
     connected: Arc<AtomicBool>,
     client_factory: Option<MCPTransportClientFactory>,
+    current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
@@ -382,6 +448,7 @@ impl MCPServerSse {
             params,
             connected: Arc::new(AtomicBool::new(false)),
             client_factory: None,
+            current_client: Arc::new(StdMutex::new(None)),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
@@ -432,6 +499,14 @@ impl MCPServerSse {
             session_id: None,
         }
     }
+
+    fn build_client(&self) -> Arc<dyn MCPTransportClient> {
+        let config = self.client_config();
+        self.client_factory
+            .as_ref()
+            .map(|factory| factory(config.clone()))
+            .unwrap_or_else(|| Arc::new(DefaultMCPTransportClient::new(config)))
+    }
 }
 
 #[async_trait]
@@ -441,14 +516,30 @@ impl MCPServer for MCPServerSse {
     }
 
     async fn connect(&self) -> Result<()> {
-        if let Some(factory) = &self.client_factory {
-            factory(self.client_config());
+        let previous = self
+            .current_client
+            .lock()
+            .expect("transport client mutex")
+            .take();
+        if let Some(client) = previous {
+            client.cleanup().await?;
         }
+        let client = self.build_client();
+        client.connect().await?;
+        *self.current_client.lock().expect("transport client mutex") = Some(client);
         self.connected.store(true, Ordering::SeqCst);
         Ok(())
     }
 
     async fn cleanup(&self) -> Result<()> {
+        let client = self
+            .current_client
+            .lock()
+            .expect("transport client mutex")
+            .take();
+        if let Some(client) = client {
+            client.cleanup().await?;
+        }
         self.connected.store(false, Ordering::SeqCst);
         Ok(())
     }
@@ -506,7 +597,7 @@ pub struct MCPServerStreamableHttp {
     pub params: MCPServerStreamableHttpParams,
     connected: Arc<AtomicBool>,
     client_factory: Option<MCPTransportClientFactory>,
-    session_id: Arc<StdMutex<Option<String>>>,
+    current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
@@ -528,7 +619,7 @@ impl MCPServerStreamableHttp {
             params,
             connected: Arc::new(AtomicBool::new(false)),
             client_factory: None,
-            session_id: Arc::new(StdMutex::new(None)),
+            current_client: Arc::new(StdMutex::new(None)),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
@@ -580,12 +671,20 @@ impl MCPServerStreamableHttp {
         }
     }
 
-    fn generated_session_id(&self) -> String {
-        format!("generated-session:{}", self.name)
+    pub fn session_id(&self) -> Option<String> {
+        self.current_client
+            .lock()
+            .expect("transport client mutex")
+            .as_ref()
+            .and_then(|client| client.session_id())
     }
 
-    pub fn session_id(&self) -> Option<String> {
-        self.session_id.lock().expect("session id mutex").clone()
+    fn build_client(&self) -> Arc<dyn MCPTransportClient> {
+        let config = self.client_config();
+        self.client_factory
+            .as_ref()
+            .map(|factory| factory(config.clone()))
+            .unwrap_or_else(|| Arc::new(DefaultMCPTransportClient::new(config)))
     }
 }
 
@@ -596,22 +695,31 @@ impl MCPServer for MCPServerStreamableHttp {
     }
 
     async fn connect(&self) -> Result<()> {
-        if let Some(factory) = &self.client_factory {
-            factory(self.client_config());
+        let previous = self
+            .current_client
+            .lock()
+            .expect("transport client mutex")
+            .take();
+        if let Some(client) = previous {
+            client.cleanup().await?;
         }
+        let client = self.build_client();
+        client.connect().await?;
         self.connected.store(true, Ordering::SeqCst);
-        let session_id = self
-            .params
-            .session_id
-            .clone()
-            .unwrap_or_else(|| self.generated_session_id());
-        *self.session_id.lock().expect("session id mutex") = Some(session_id);
+        *self.current_client.lock().expect("transport client mutex") = Some(client);
         Ok(())
     }
 
     async fn cleanup(&self) -> Result<()> {
+        let client = self
+            .current_client
+            .lock()
+            .expect("transport client mutex")
+            .take();
+        if let Some(client) = client {
+            client.cleanup().await?;
+        }
         self.connected.store(false, Ordering::SeqCst);
-        *self.session_id.lock().expect("session id mutex") = None;
         Ok(())
     }
 
@@ -666,13 +774,63 @@ impl MCPServer for MCPServerStreamableHttp {
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[derive(Default)]
+    struct TestTransportState {
+        connect_calls: AtomicUsize,
+        cleanup_calls: AtomicUsize,
+    }
+
+    struct TestTransportClient {
+        config: MCPTransportClientConfig,
+        state: Arc<TestTransportState>,
+        allocated_session_id: Option<String>,
+    }
+
+    impl TestTransportClient {
+        fn new(
+            config: MCPTransportClientConfig,
+            state: Arc<TestTransportState>,
+            allocated_session_id: Option<String>,
+        ) -> Self {
+            Self {
+                config,
+                state,
+                allocated_session_id,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MCPTransportClient for TestTransportClient {
+        fn config(&self) -> &MCPTransportClientConfig {
+            &self.config
+        }
+
+        async fn connect(&self) -> Result<()> {
+            self.state.connect_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn cleanup(&self) -> Result<()> {
+            self.state.cleanup_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn session_id(&self) -> Option<String> {
+            self.allocated_session_id.clone()
+        }
+    }
 
     #[tokio::test]
     async fn sse_transport_preserves_auth_and_client_factory_configuration() {
         let seen = Arc::new(StdMutex::new(Vec::new()));
         let capture = seen.clone();
+        let state = Arc::new(TestTransportState::default());
+        let factory_state = state.clone();
         let server = MCPServerSse::new(
             "docs",
             MCPServerSseParams {
@@ -684,7 +842,12 @@ mod tests {
             },
         )
         .with_client_factory(Arc::new(move |config| {
-            capture.lock().expect("capture mutex").push(config);
+            capture.lock().expect("capture mutex").push(config.clone());
+            Arc::new(TestTransportClient::new(
+                config,
+                factory_state.clone(),
+                None,
+            ))
         }));
 
         server.connect().await.expect("connect should succeed");
@@ -700,12 +863,20 @@ mod tests {
         assert_eq!(seen[0].sse_read_timeout_seconds, Some(45));
         assert_eq!(seen[0].auth, Some(MCPTransportAuth::basic("user", "pass")));
         assert_eq!(seen[0].session_id.as_deref(), None);
+        assert_eq!(state.connect_calls.load(Ordering::SeqCst), 1);
+
+        server.cleanup().await.expect("cleanup should succeed");
+        assert_eq!(state.cleanup_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn streamable_http_transport_preserves_factory_and_session_id_semantics() {
         let seen = Arc::new(StdMutex::new(Vec::new()));
         let capture = seen.clone();
+        let state = Arc::new(TestTransportState::default());
+        let next_generated_session = Arc::new(AtomicUsize::new(0));
+        let factory_state = state.clone();
+        let factory_session = next_generated_session.clone();
         let generated = MCPServerStreamableHttp::new(
             "docs",
             MCPServerStreamableHttpParams {
@@ -718,17 +889,25 @@ mod tests {
             },
         )
         .with_client_factory(Arc::new(move |config| {
-            capture.lock().expect("capture mutex").push(config);
+            capture.lock().expect("capture mutex").push(config.clone());
+            let sequence = factory_session.fetch_add(1, Ordering::SeqCst);
+            Arc::new(TestTransportClient::new(
+                config,
+                factory_state.clone(),
+                Some(format!("factory-session-{sequence}")),
+            ))
         }));
 
         assert_eq!(generated.session_id(), None);
         generated.connect().await.expect("connect should succeed");
-        assert_eq!(
-            generated.session_id(),
-            Some("generated-session:docs".to_owned())
-        );
+        assert_eq!(generated.session_id(), Some("factory-session-0".to_owned()));
         generated.cleanup().await.expect("cleanup should succeed");
         assert_eq!(generated.session_id(), None);
+        generated.connect().await.expect("reconnect should succeed");
+        assert_eq!(generated.session_id(), Some("factory-session-1".to_owned()));
+        assert_eq!(state.connect_calls.load(Ordering::SeqCst), 2);
+        generated.cleanup().await.expect("cleanup should succeed");
+        assert_eq!(state.cleanup_calls.load(Ordering::SeqCst), 2);
 
         let pinned = MCPServerStreamableHttp::new(
             "docs",
@@ -745,7 +924,7 @@ mod tests {
         assert_eq!(pinned.session_id(), Some("pinned-session".to_owned()));
 
         let seen = seen.lock().expect("capture mutex");
-        assert_eq!(seen.len(), 1);
+        assert_eq!(seen.len(), 2);
         assert_eq!(seen[0].transport, Some(MCPTransportKind::StreamableHttp));
         assert_eq!(seen[0].auth, Some(MCPTransportAuth::bearer("secret")));
         assert_eq!(seen[0].session_id, None);
