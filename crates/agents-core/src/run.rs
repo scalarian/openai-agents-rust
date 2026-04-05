@@ -258,7 +258,7 @@ impl Runner {
         input: Vec<InputItem>,
         context: crate::run_context::RunContextWrapper,
     ) -> Result<RunResult> {
-        self.run_items_internal(agent, input.clone(), input, None, Some(context), None)
+        self.run_items_internal(agent, input.clone(), input, None, None, Some(context), None)
             .await
     }
 
@@ -290,6 +290,7 @@ impl Runner {
                     &agent,
                     input.clone(),
                     input,
+                    None,
                     None,
                     Some(context),
                     Some(recorder.clone()),
@@ -357,10 +358,18 @@ impl Runner {
             )
             .await
         } else if let Some(context) = context {
-            self.run_items_internal(agent, input.clone(), input, None, Some(context), recorder)
-                .await
+            self.run_items_internal(
+                agent,
+                input.clone(),
+                input,
+                None,
+                None,
+                Some(context),
+                recorder,
+            )
+            .await
         } else {
-            self.run_items_internal(agent, input.clone(), input, None, None, recorder)
+            self.run_items_internal(agent, input.clone(), input, None, None, None, recorder)
                 .await
         }
     }
@@ -377,7 +386,7 @@ impl Runner {
             &self.config,
             session,
         )?;
-        let (prepared_input, original_input) =
+        let (prepared_input, original_input, session_input_items) =
             internal_agent_runner_helpers::prepare_input_with_session(
                 &self.config,
                 &input,
@@ -388,6 +397,7 @@ impl Runner {
             agent,
             original_input,
             prepared_input,
+            Some(session_input_items),
             Some(session),
             Some(context),
             recorder,
@@ -400,6 +410,7 @@ impl Runner {
         agent: &Agent,
         original_input: Vec<InputItem>,
         base_input: Vec<InputItem>,
+        session_input_items: Option<Vec<InputItem>>,
         session: Option<&(dyn Session + Sync)>,
         context_override: Option<crate::run_context::RunContextWrapper>,
         stream_recorder: Option<StreamRecorder>,
@@ -832,7 +843,7 @@ impl Runner {
         let persisted_item_count = if let Some(session) = session {
             internal_session_persistence::save_result_to_session(
                 session,
-                &original_input,
+                session_input_items.as_deref().unwrap_or(&original_input),
                 &session_generated_items,
             )
             .await?
@@ -2742,6 +2753,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_run_with_options_does_not_mutate_shared_defaults() {
+        let model = Arc::new(RequestCaptureModel::default());
+        let provider = Arc::new(RequestCaptureProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant").build();
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                previous_response_id: Some("resp-base".to_owned()),
+                conversation_id: Some("conv-base".to_owned()),
+                ..RunConfig::default()
+            });
+
+        runner
+            .run_with_options(
+                &agent,
+                vec![InputItem::from("override")],
+                RunOptions {
+                    previous_response_id: Some("resp-override".to_owned()),
+                    conversation_id: Some("conv-override".to_owned()),
+                    ..RunOptions::default()
+                },
+            )
+            .await
+            .expect("override-backed run should succeed");
+
+        runner
+            .run(&agent, "base")
+            .await
+            .expect("follow-up run should succeed");
+
+        assert_eq!(
+            model
+                .previous_response_id
+                .lock()
+                .expect("previous response capture lock")
+                .as_deref(),
+            Some("resp-base")
+        );
+        assert_eq!(
+            model
+                .conversation_id
+                .lock()
+                .expect("conversation capture lock")
+                .as_deref(),
+            Some("conv-base")
+        );
+        assert_eq!(
+            runner.config.previous_response_id.as_deref(),
+            Some("resp-base")
+        );
+        assert_eq!(runner.config.conversation_id.as_deref(), Some("conv-base"));
+    }
+
+    #[tokio::test]
     async fn runner_advances_auto_previous_response_id_across_turns() {
         let model = Arc::new(AutoPreviousResponseModel::default());
         let provider = Arc::new(AutoPreviousResponseProvider {
@@ -2841,6 +2908,38 @@ mod tests {
             .run_with_session(&agent, "hello", &session)
             .await
             .expect_err("session with previous response id should fail");
+
+        assert!(matches!(error, AgentsError::User(_)));
+    }
+
+    #[tokio::test]
+    async fn runner_rejects_session_persistence_with_conversation_id() {
+        let session = MemorySession::new("session");
+        let agent = Agent::builder("assistant").build();
+        let error = Runner::new()
+            .with_config(RunConfig {
+                conversation_id: Some("conv_123".to_owned()),
+                ..RunConfig::default()
+            })
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect_err("session with conversation id should fail");
+
+        assert!(matches!(error, AgentsError::User(_)));
+    }
+
+    #[tokio::test]
+    async fn runner_rejects_session_persistence_with_auto_previous_response_id() {
+        let session = MemorySession::new("session");
+        let agent = Agent::builder("assistant").build();
+        let error = Runner::new()
+            .with_config(RunConfig {
+                auto_previous_response_id: true,
+                ..RunConfig::default()
+            })
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect_err("session with auto previous response id should fail");
 
         assert!(matches!(error, AgentsError::User(_)));
     }
@@ -2980,6 +3079,15 @@ mod tests {
         assert_eq!(seen_inputs[0][0].as_text(), Some("history-2"));
         assert_eq!(seen_inputs[0][1].as_text(), Some("hello"));
         drop(seen_inputs);
+        let persisted = session
+            .get_items()
+            .await
+            .expect("session items should load");
+        assert_eq!(persisted.len(), 4);
+        assert_eq!(persisted[0].as_text(), Some("history-1"));
+        assert_eq!(persisted[1].as_text(), Some("history-2"));
+        assert_eq!(persisted[2].as_text(), Some("hello"));
+        assert_eq!(persisted[3].as_text(), Some("session-ok"));
         assert_eq!(result.final_output.as_deref(), Some("session-ok"));
     }
 

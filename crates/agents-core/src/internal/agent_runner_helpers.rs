@@ -36,6 +36,6 @@ pub(crate) async fn prepare_input_with_session(
     config: &RunConfig,
     input: &[InputItem],
     session: &(dyn Session + Sync),
-) -> crate::errors::Result<(Vec<InputItem>, Vec<InputItem>)> {
+) -> crate::errors::Result<(Vec<InputItem>, Vec<InputItem>, Vec<InputItem>)> {
     crate::internal::session_persistence::prepare_input_with_session(input, config, session).await
 }

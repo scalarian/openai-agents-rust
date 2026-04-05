@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use openai_agents::{
-    Agent, Model, ModelProvider, ModelRequest, ModelResponse, OpenAIConversationsSession,
-    OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession, OutputItem, Runner, Session,
+    Agent, InputItem, Model, ModelProvider, ModelRequest, ModelResponse,
+    OpenAIConversationsSession, OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession,
+    OutputItem, RunConfig, RunOptions, Runner, Session,
 };
 use tokio::sync::Mutex;
 
@@ -45,6 +46,37 @@ struct CapturingProvider {
 impl ModelProvider for CapturingProvider {
     fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
         self.model.clone()
+    }
+}
+
+#[derive(Clone)]
+struct SequencedCapturingModel {
+    requests: Arc<Mutex<Vec<(Option<String>, Option<String>)>>>,
+    response_ids: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl Model for SequencedCapturingModel {
+    async fn generate(&self, request: ModelRequest) -> openai_agents::Result<ModelResponse> {
+        self.requests.lock().await.push((
+            request.previous_response_id.clone(),
+            request.conversation_id.clone(),
+        ));
+        let response_id = self.response_ids.lock().await.remove(0);
+        Ok(ModelResponse {
+            model: request.model.clone(),
+            output: vec![OutputItem::Text {
+                text: request
+                    .input
+                    .last()
+                    .and_then(|item| item.as_text())
+                    .unwrap_or_default()
+                    .to_owned(),
+            }],
+            usage: Default::default(),
+            response_id: Some(response_id),
+            request_id: Some("req-sequenced".to_owned()),
+        })
     }
 }
 
@@ -117,4 +149,92 @@ async fn runner_triggers_auto_compaction_for_compaction_sessions() {
         openai_agents::InputItem::Json { value }
             if value.get("type").and_then(serde_json::Value::as_str) == Some("compaction")
     )));
+}
+
+#[tokio::test]
+async fn run_options_override_conversation_tracking_for_one_call_only() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = CapturingProvider {
+        model: Arc::new(CapturingModel {
+            requests: requests.clone(),
+            response_id: "resp-next".to_owned(),
+        }),
+    };
+    let runner = Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .with_config(RunConfig {
+            conversation_id: Some("conv-base".to_owned()),
+            previous_response_id: Some("resp-base".to_owned()),
+            ..RunConfig::default()
+        });
+    let agent = Agent::builder("assistant").build();
+
+    runner
+        .run_with_options(
+            &agent,
+            vec![InputItem::from("override")],
+            RunOptions {
+                conversation_id: Some("conv-override".to_owned()),
+                previous_response_id: Some("resp-override".to_owned()),
+                ..RunOptions::default()
+            },
+        )
+        .await
+        .expect("override run should succeed");
+
+    runner
+        .run(&agent, "base")
+        .await
+        .expect("base run should succeed");
+
+    assert_eq!(
+        requests.lock().await.clone(),
+        vec![
+            (
+                Some("resp-override".to_owned()),
+                Some("conv-override".to_owned())
+            ),
+            (Some("resp-base".to_owned()), Some("conv-base".to_owned())),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn openai_conversation_session_advances_previous_response_id_across_turns() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = CapturingProvider {
+        model: Arc::new(SequencedCapturingModel {
+            requests: requests.clone(),
+            response_ids: Arc::new(Mutex::new(vec![
+                "resp-first".to_owned(),
+                "resp-second".to_owned(),
+            ])),
+        }),
+    };
+    let session = OpenAIConversationsSession::new("conv-1");
+    let runner = Runner::new().with_model_provider(Arc::new(provider));
+    let agent = Agent::builder("assistant").build();
+
+    let first = runner
+        .run_with_session(&agent, "hello", &session)
+        .await
+        .expect("first run should succeed");
+    let second = runner
+        .run_with_session(&agent, "again", &session)
+        .await
+        .expect("second run should succeed");
+
+    assert_eq!(first.previous_response_id(), Some("resp-first"));
+    assert_eq!(second.previous_response_id(), Some("resp-second"));
+    assert_eq!(
+        requests.lock().await.clone(),
+        vec![
+            (None, Some("conv-1".to_owned())),
+            (Some("resp-first".to_owned()), Some("conv-1".to_owned())),
+        ]
+    );
+    assert_eq!(
+        session.last_response_id().await.as_deref(),
+        Some("resp-second")
+    );
 }
