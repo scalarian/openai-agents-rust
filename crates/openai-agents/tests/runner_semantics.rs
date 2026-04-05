@@ -1,11 +1,14 @@
 use agents_core::ModelInputData;
 use futures::FutureExt;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use agents_core::OutputSchemaDefinition;
 use openai_agents::{
-    Agent, AgentAsToolInput, AgentAsToolOptions, AgentRunner, LocalShellCommandRequest, RunConfig,
-    RunContext, RunContextWrapper, Runner, Tool, ToolContext, ToolOutput,
-    drop_agent_tool_run_result, get_default_agent_runner, run, run_sync, set_default_agent_runner,
+    Agent, AgentAsToolInput, AgentAsToolOptions, AgentRunner, AgentsError,
+    LocalShellCommandRequest, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
+    RunConfig, RunContext, RunContextWrapper, Runner, Tool, ToolContext, ToolOutput, Usage,
+    drop_agent_tool_run_result, function_tool, get_default_agent_runner, run, run_sync,
+    set_default_agent_runner,
 };
 use serde_json::json;
 
@@ -19,6 +22,50 @@ struct DefaultRunnerReset(AgentRunner);
 impl Drop for DefaultRunnerReset {
     fn drop(&mut self) {
         set_default_agent_runner(Some(self.0.clone()));
+    }
+}
+
+#[derive(Clone, Default)]
+struct StructuredOutputLoopModel {
+    calls: Arc<Mutex<usize>>,
+    output_schemas: Arc<Mutex<Vec<Option<OutputSchemaDefinition>>>>,
+}
+
+#[async_trait::async_trait]
+impl Model for StructuredOutputLoopModel {
+    async fn generate(&self, request: ModelRequest) -> openai_agents::Result<ModelResponse> {
+        let mut calls = self
+            .calls
+            .lock()
+            .expect("structured output loop calls lock");
+        self.output_schemas
+            .lock()
+            .expect("structured output loop schema lock")
+            .push(request.output_schema.clone());
+        *calls += 1;
+
+        Ok(ModelResponse {
+            model: request.model,
+            output: vec![OutputItem::ToolCall {
+                call_id: format!("call-{calls}"),
+                tool_name: "search".to_owned(),
+                arguments: json!({"query":"rust"}),
+                namespace: None,
+            }],
+            usage: Usage::default(),
+            response_id: Some(format!("resp-{calls}")),
+            request_id: None,
+        })
+    }
+}
+
+struct StructuredOutputLoopProvider {
+    model: Arc<StructuredOutputLoopModel>,
+}
+
+impl ModelProvider for StructuredOutputLoopProvider {
+    fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+        self.model.clone()
     }
 }
 
@@ -184,5 +231,80 @@ async fn facade_call_model_input_filter_rewrites_streamed_history() {
     assert_eq!(
         result.normalized_input,
         Some(vec![openai_agents::InputItem::from("stream-filtered")])
+    );
+}
+
+#[tokio::test]
+async fn facade_structured_output_run_exhausts_max_turns_with_runtime_schema_plumbing() {
+    let model = Arc::new(StructuredOutputLoopModel::default());
+    let provider = Arc::new(StructuredOutputLoopProvider {
+        model: model.clone(),
+    });
+    let output_schema = OutputSchemaDefinition::new(
+        "StructuredSummary",
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "answer": { "type": "string" }
+            },
+            "required": ["answer"]
+        }),
+        true,
+    );
+    let search_tool = function_tool(
+        "search",
+        "Search docs",
+        |_ctx, _args: serde_json::Value| async { Ok::<_, AgentsError>("tool-result".to_owned()) },
+    )
+    .expect("function tool should build");
+    let agent = Agent::builder("assistant")
+        .output_schema(output_schema.clone())
+        .function_tool(search_tool)
+        .build();
+    let runner = Runner::new()
+        .with_model_provider(provider)
+        .with_config(RunConfig {
+            max_turns: 2,
+            ..RunConfig::default()
+        });
+
+    let error = runner
+        .run(&agent, "hello")
+        .await
+        .expect_err("non-streamed structured-output run should exhaust max turns");
+    assert!(error.to_string().contains("max_turns (2)"));
+    assert_eq!(
+        model
+            .output_schemas
+            .lock()
+            .expect("structured output schema lock")
+            .clone(),
+        vec![Some(output_schema.clone()), Some(output_schema.clone())]
+    );
+
+    let streamed = runner
+        .run_streamed(&agent, "hello")
+        .await
+        .expect("streamed structured-output run should start");
+    let error = streamed
+        .wait_for_completion()
+        .await
+        .expect_err("streamed structured-output run should exhaust max turns");
+    assert!(error.to_string().contains("max_turns (2)"));
+
+    let schemas = model
+        .output_schemas
+        .lock()
+        .expect("structured output schema lock")
+        .clone();
+    assert_eq!(
+        schemas,
+        vec![
+            Some(output_schema.clone()),
+            Some(output_schema.clone()),
+            Some(output_schema.clone()),
+            Some(output_schema),
+        ]
     );
 }

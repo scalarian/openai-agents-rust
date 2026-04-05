@@ -2067,15 +2067,25 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct LoopingToolModel;
+    struct LoopingToolModel {
+        calls: Arc<Mutex<usize>>,
+        output_schemas: Arc<Mutex<Vec<Option<crate::OutputSchemaDefinition>>>>,
+    }
 
     #[async_trait]
     impl Model for LoopingToolModel {
         async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.output_schemas
+                .lock()
+                .expect("looping tool output schemas lock")
+                .push(request.output_schema.clone());
+            let mut calls = self.calls.lock().expect("looping tool calls lock");
+            *calls += 1;
+
             Ok(ModelResponse {
                 model: request.model,
                 output: vec![OutputItem::ToolCall {
-                    call_id: format!("call-{}", request.input.len()),
+                    call_id: format!("call-{calls}"),
                     tool_name: "search".to_owned(),
                     arguments: json!({"query":"rust"}),
                     namespace: None,
@@ -2084,7 +2094,7 @@ mod tests {
                     input_tokens: 1,
                     output_tokens: 1,
                 },
-                response_id: Some(format!("resp-{}", request.input.len())),
+                response_id: Some(format!("resp-{calls}")),
                 request_id: None,
             })
         }
@@ -2908,19 +2918,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_errors_when_max_turns_are_exhausted_with_structured_tool_outputs() {
+    async fn runner_errors_when_max_turns_are_exhausted_with_structured_output_runtime_schema() {
+        let model = Arc::new(LoopingToolModel::default());
         let provider = Arc::new(LoopingToolProvider {
-            model: Arc::new(LoopingToolModel),
+            model: model.clone(),
         });
         let search_tool = function_tool(
             "search",
-            "Search structured documents",
-            |_ctx, _args: SearchArgs| async move {
-                Ok::<_, AgentsError>(json!({"status":"loop","query":"rust"}))
-            },
+            "Search documents",
+            |_ctx, _args: SearchArgs| async move { Ok::<_, AgentsError>("tool-result".to_owned()) },
         )
         .expect("function tool should build");
+        let output_schema =
+            crate::OutputSchemaDefinition::from_output_type::<StructuredAnswer>(true)
+                .expect("structured output schema should build");
         let agent = Agent::builder("assistant")
+            .output_schema(output_schema.clone())
             .function_tool(search_tool)
             .build();
         let runner = Runner::new()
@@ -2933,18 +2946,39 @@ mod tests {
         let error = runner
             .run(&agent, "hello")
             .await
-            .expect_err("plain structured run should exhaust max turns");
+            .expect_err("plain structured-output run should exhaust max turns");
         assert!(error.to_string().contains("max_turns (2)"));
+        assert_eq!(
+            model
+                .output_schemas
+                .lock()
+                .expect("looping tool output schemas lock")
+                .clone(),
+            vec![Some(output_schema.clone()), Some(output_schema.clone())]
+        );
 
         let streamed = runner
             .run_streamed(&agent, "hello")
             .await
-            .expect("streamed structured run should start");
+            .expect("streamed structured-output run should start");
         let error = streamed
             .wait_for_completion()
             .await
-            .expect_err("streamed structured run should exhaust max turns");
+            .expect_err("streamed structured-output run should exhaust max turns");
         assert!(error.to_string().contains("max_turns (2)"));
+        assert_eq!(
+            model
+                .output_schemas
+                .lock()
+                .expect("looping tool output schemas lock")
+                .clone(),
+            vec![
+                Some(output_schema.clone()),
+                Some(output_schema.clone()),
+                Some(output_schema.clone()),
+                Some(output_schema),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -3555,7 +3589,7 @@ mod tests {
     #[tokio::test]
     async fn runner_uses_max_turn_handler_for_terminal_output() {
         let provider = Arc::new(LoopingToolProvider {
-            model: Arc::new(LoopingToolModel),
+            model: Arc::new(LoopingToolModel::default()),
         });
         let search_tool =
             function_tool(
@@ -3611,7 +3645,7 @@ mod tests {
     #[tokio::test]
     async fn runner_errors_when_max_turns_are_exhausted_in_plain_and_streamed_runs() {
         let provider = Arc::new(LoopingToolProvider {
-            model: Arc::new(LoopingToolModel),
+            model: Arc::new(LoopingToolModel::default()),
         });
         let search_tool =
             function_tool(
