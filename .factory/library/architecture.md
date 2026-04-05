@@ -49,6 +49,8 @@ The parity mission should preserve existing landed Rust behavior, only broadenin
 - `agents-core` owns normalized runner history, replay/resume behavior, handoff-visible history, and generic session-visible state.
 - `agents-openai` owns provider-specific continuity tokens and behaviors such as `conversation_id`, `previous_response_id`, and compaction, but must plug into the shared core history model rather than create a divergent one.
 - Realtime session state lives in `agents-realtime` and should stay compatible with extension transports and voice workflows.
+- Server-managed OpenAI conversation tracking must preserve source-item attribution across `call_model_input_filter` rewrites. The runner may send filtered items to the model, but durable/session bookkeeping still has to know which original items were sent so later turns do not replay already-sent input.
+- Structured-output helper validation is not enough by itself for runtime parity: output-schema data must be threaded through `Agent`/runner request preparation and into provider payload builders before the runtime can claim structured-output support.
 
 ### Voice and realtime flow
 

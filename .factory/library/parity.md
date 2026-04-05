@@ -42,6 +42,11 @@ How parity is evaluated and maintained in this mission.
 
 - Python's MCP manager starts with the full configured server list in its active set before any connection attempts. For Rust parity, preserving the "prior active set" on strict failures when `drop_failed_servers = false` must therefore include the fresh-manager first-failure case, not just reconnect/retry flows.
 
+## MCP transport parity notes
+
+- Python streamable-HTTP resumption is header-based (`Mcp-Session-Id`), while the JS SDK also exposes a first-class `sessionId` transport option. Rust parity work needs to preserve those real transport/session semantics rather than collapsing them into a name-derived synthetic session id.
+- Client-factory parity means a hook that can influence the actual transport client/request pipeline, not a side-effect-only callback that observes config and returns `()`.
+
 ## Session callback provenance notes
 
 - `session_input_callback` operates on public `InputItem` values, so provenance bookkeeping must stay completely out of user-visible JSON value space.
