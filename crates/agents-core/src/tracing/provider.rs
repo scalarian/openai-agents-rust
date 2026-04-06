@@ -225,7 +225,12 @@ impl TraceProvider for DefaultTraceProvider {
             ended_at: None,
             error: None,
             data: span_data,
-            disabled,
+            disabled: disabled
+                || *self.disabled.read().expect("trace disabled lock")
+                || trace.is_some_and(|trace| trace.disabled)
+                || parent.is_some_and(|span| span.disabled)
+                || self.get_current_trace().is_some_and(|trace| trace.disabled)
+                || self.get_current_span().is_some_and(|span| span.disabled),
         }
     }
 
@@ -234,12 +239,16 @@ impl TraceProvider for DefaultTraceProvider {
         if mark_as_current {
             Scope::set_current_trace(Some(trace.clone()));
         }
-        self.processors.on_trace_start(trace);
+        if !trace.disabled {
+            self.processors.on_trace_start(trace);
+        }
     }
 
     fn finish_trace(&self, trace: &mut Trace, reset_current: bool) {
         trace.finish();
-        self.processors.on_trace_end(trace);
+        if !trace.disabled {
+            self.processors.on_trace_end(trace);
+        }
         if reset_current {
             Scope::set_current_trace(None);
         }
@@ -250,12 +259,16 @@ impl TraceProvider for DefaultTraceProvider {
         if mark_as_current {
             Scope::set_current_span(Some(span.clone()));
         }
-        self.processors.on_span_start(span);
+        if !span.disabled {
+            self.processors.on_span_start(span);
+        }
     }
 
     fn finish_span(&self, span: &mut Span, reset_current: bool) {
         span.finish();
-        self.processors.on_span_end(span);
+        if !span.disabled {
+            self.processors.on_span_end(span);
+        }
         if reset_current {
             Scope::set_current_span(None);
         }

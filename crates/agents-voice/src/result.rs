@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agents_core::{AgentsError, Result};
 use futures::StreamExt;
@@ -20,6 +21,7 @@ struct LiveAudioStreamState {
     snapshot: Mutex<StreamedAudioSnapshot>,
     completion: Mutex<Option<std::result::Result<StreamedAudioSnapshot, String>>>,
     notify: Notify,
+    revision: AtomicU64,
 }
 
 impl LiveAudioStreamState {
@@ -30,6 +32,7 @@ impl LiveAudioStreamState {
         }
         snapshot.events.push(event);
         drop(snapshot);
+        self.revision.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
     }
 
@@ -42,6 +45,7 @@ impl LiveAudioStreamState {
                 text,
             }));
         drop(snapshot);
+        self.revision.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
     }
 
@@ -51,6 +55,7 @@ impl LiveAudioStreamState {
 
     async fn set_completion(&self, completion: std::result::Result<StreamedAudioSnapshot, String>) {
         *self.completion.lock().await = Some(completion);
+        self.revision.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
     }
 
@@ -58,8 +63,21 @@ impl LiveAudioStreamState {
         self.completion.lock().await.clone()
     }
 
-    async fn wait_for_change(&self) {
-        self.notify.notified().await;
+    fn revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
+    async fn wait_for_change_since(&self, revision: u64) {
+        loop {
+            let notified = self.notify.notified();
+            if self.revision() != revision {
+                return;
+            }
+            notified.await;
+            if self.revision() != revision {
+                return;
+            }
+        }
     }
 }
 
@@ -102,7 +120,8 @@ impl StreamedAudioResult {
                     if shared_state.completion().await.is_some() {
                         return None;
                     }
-                    shared_state.wait_for_change().await;
+                    let revision = shared_state.revision();
+                    shared_state.wait_for_change_since(revision).await;
                 }
             })
             .boxed()
@@ -126,7 +145,8 @@ impl StreamedAudioResult {
                     .map(StreamedAudioResult::from_snapshot)
                     .map_err(AgentsError::message);
             }
-            shared_state.wait_for_change().await;
+            let revision = shared_state.revision();
+            shared_state.wait_for_change_since(revision).await;
         }
     }
 }
@@ -170,5 +190,54 @@ impl VoiceStreamRecorder {
         self.shared_state
             .set_completion(Err(error.to_string()))
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::StreamExt;
+    use tokio::time::{Duration, timeout};
+
+    use super::*;
+    use crate::events::{VoiceStreamEventAudio, VoiceStreamEventLifecycle};
+
+    #[tokio::test]
+    async fn streamed_audio_wait_for_completion_does_not_miss_completed_state() {
+        let recorder = VoiceStreamRecorder::new(true);
+        let result = recorder.result();
+
+        recorder.push_transcript("hello".to_owned()).await;
+        recorder.complete().await;
+
+        let completed = timeout(Duration::from_millis(100), result.wait_for_completion())
+            .await
+            .expect("wait should observe completed audio stream")
+            .expect("completion should succeed");
+        assert_eq!(completed.transcript, vec!["hello".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn streamed_audio_events_do_not_miss_preexisting_revisions() {
+        let recorder = VoiceStreamRecorder::new(true);
+        let result = recorder.result();
+        recorder
+            .push_events(vec![
+                VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
+                    event: "turn_started".to_owned(),
+                }),
+                VoiceStreamEvent::Audio(VoiceStreamEventAudio {
+                    data: Some(vec![0.25, 0.5]),
+                }),
+            ])
+            .await;
+        recorder.complete().await;
+
+        let events = timeout(
+            Duration::from_millis(100),
+            result.stream_events().collect::<Vec<_>>(),
+        )
+        .await
+        .expect("stream should observe preexisting events");
+        assert_eq!(events.len(), 2);
     }
 }

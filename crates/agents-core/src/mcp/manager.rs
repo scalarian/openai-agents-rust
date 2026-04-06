@@ -45,63 +45,55 @@ impl MCPServerManager {
             .collect()
     }
 
-    async fn connect_server(&mut self, server: &Arc<dyn MCPServer>) -> Result<bool> {
-        match server.connect().await {
-            Ok(()) => {
-                self.connected_server_names.insert(server.name().to_owned());
-                Ok(true)
-            }
-            Err(error) => {
-                let name = server.name().to_owned();
-                if !self.failed_servers.iter().any(|failed| failed == &name) {
-                    self.failed_servers.push(name.clone());
-                }
-                self.errors.insert(name, error.to_string());
-                if self.strict {
-                    return Err(error);
-                }
-                Ok(false)
-            }
-        }
-    }
-
     pub async fn connect_all(&mut self) -> Result<Vec<Arc<dyn MCPServer>>> {
         let previous_connected_server_names = self.connected_server_names.clone();
         let previous_active_servers = self.active_servers.clone();
-        self.failed_servers.clear();
-        self.errors.clear();
-        self.connected_server_names.clear();
-
         let servers = self.all_servers.clone();
-        let mut active = Vec::new();
+        let mut next_connected_server_names = HashSet::new();
+        let mut next_failed_servers = Vec::new();
+        let mut next_errors = HashMap::new();
+        let mut next_active_servers = Vec::new();
+        let mut newly_connected_servers = Vec::new();
+
         for server in &servers {
-            match self.connect_server(server).await {
-                Ok(true) => active.push(server.clone()),
-                Ok(false) => {
-                    if !self.drop_failed_servers {
-                        active.push(server.clone());
-                    }
+            match server.connect().await {
+                Ok(()) => {
+                    next_connected_server_names.insert(server.name().to_owned());
+                    newly_connected_servers.push(server.clone());
+                    next_active_servers.push(server.clone());
                 }
                 Err(error) => {
-                    let _ = self.cleanup_connected_servers(Some(server.clone())).await;
-                    self.connected_server_names.clear();
-                    self.active_servers = if self.drop_failed_servers {
-                        self.all_servers
-                            .iter()
-                            .filter(|server| {
-                                previous_connected_server_names.contains(server.name())
-                            })
-                            .cloned()
-                            .collect()
-                    } else {
-                        previous_active_servers
-                    };
-                    return Err(error);
+                    let name = server.name().to_owned();
+                    if !next_failed_servers.iter().any(|failed| failed == &name) {
+                        next_failed_servers.push(name.clone());
+                    }
+                    next_errors.insert(name, error.to_string());
+                    if self.strict {
+                        for connected in newly_connected_servers.iter().rev() {
+                            connected.cleanup().await?;
+                        }
+                        self.connected_server_names = previous_connected_server_names;
+                        self.active_servers = restore_active_servers(
+                            &self.all_servers,
+                            &previous_active_servers,
+                            &self.connected_server_names,
+                            self.drop_failed_servers,
+                        );
+                        self.failed_servers = next_failed_servers;
+                        self.errors = next_errors;
+                        return Err(error);
+                    }
+                    if !self.drop_failed_servers {
+                        next_active_servers.push(server.clone());
+                    }
                 }
             }
         }
 
-        self.active_servers = active;
+        self.failed_servers = next_failed_servers;
+        self.errors = next_errors;
+        self.connected_server_names = next_connected_server_names;
+        self.active_servers = next_active_servers;
         Ok(self.active_servers())
     }
 
@@ -118,24 +110,61 @@ impl MCPServerManager {
             .filter(|server| failed.contains(server.name()))
             .cloned()
             .collect::<Vec<_>>();
-        self.failed_servers.clear();
-        self.errors.clear();
+        let previous_connected_server_names = self.connected_server_names.clone();
+        let previous_active_servers = self.active_servers.clone();
+        let previous_failed_servers = self.failed_servers.clone();
+        let previous_errors = self.errors.clone();
 
-        let mut retried_active = Vec::new();
-        for server in retry_servers {
-            if self.connect_server(&server).await? {
-                retried_active.push(server);
-            }
-        }
-
-        let mut active = self
+        let mut next_connected_server_names = self
+            .connected_server_names
+            .iter()
+            .filter(|name| !failed.contains(name.as_str()))
+            .cloned()
+            .collect::<HashSet<_>>();
+        let mut next_active_servers = self
             .active_servers
             .iter()
             .filter(|server| !failed.contains(server.name()))
             .cloned()
             .collect::<Vec<_>>();
-        active.extend(retried_active);
-        self.active_servers = active;
+        let mut next_failed_servers = Vec::new();
+        let mut next_errors = HashMap::new();
+        let mut newly_connected_servers = Vec::new();
+
+        for server in retry_servers {
+            match server.connect().await {
+                Ok(()) => {
+                    next_connected_server_names.insert(server.name().to_owned());
+                    newly_connected_servers.push(server.clone());
+                    next_active_servers.push(server);
+                }
+                Err(error) => {
+                    let name = server.name().to_owned();
+                    next_failed_servers.push(name.clone());
+                    next_errors.insert(name, error.to_string());
+                    if self.strict {
+                        for connected in newly_connected_servers.iter().rev() {
+                            connected.cleanup().await?;
+                        }
+                        self.connected_server_names = previous_connected_server_names;
+                        self.active_servers = restore_active_servers(
+                            &self.all_servers,
+                            &previous_active_servers,
+                            &self.connected_server_names,
+                            self.drop_failed_servers,
+                        );
+                        self.failed_servers = previous_failed_servers;
+                        self.errors = previous_errors;
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        self.connected_server_names = next_connected_server_names;
+        self.active_servers = next_active_servers;
+        self.failed_servers = next_failed_servers;
+        self.errors = next_errors;
         Ok(self.active_servers())
     }
 
@@ -173,6 +202,22 @@ impl MCPServerManager {
         }
 
         Ok(())
+    }
+}
+
+fn restore_active_servers(
+    all_servers: &[Arc<dyn MCPServer>],
+    previous_active_servers: &[Arc<dyn MCPServer>],
+    previous_connected_server_names: &HashSet<String>,
+    drop_failed_servers: bool,
+) -> Vec<Arc<dyn MCPServer>> {
+    if !previous_connected_server_names.is_empty() {
+        return previous_active_servers.to_vec();
+    }
+    if drop_failed_servers {
+        Vec::new()
+    } else {
+        all_servers.to_vec()
     }
 }
 
@@ -366,7 +411,7 @@ mod tests {
         assert_eq!(manager.active_server_names(), vec!["stable".to_owned()]);
         assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
         assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -411,7 +456,7 @@ mod tests {
         );
         assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
         assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -446,7 +491,7 @@ mod tests {
         );
         assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
         assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

@@ -179,7 +179,7 @@ impl Default for RunConfig {
             max_turns: DEFAULT_MAX_TURNS,
             nest_handoff_history: false,
             tracing_disabled: false,
-            trace_include_sensitive_data: true,
+            trace_include_sensitive_data: false,
             workflow_name: "Agent workflow".to_owned(),
             trace_id: None,
             group_id: None,

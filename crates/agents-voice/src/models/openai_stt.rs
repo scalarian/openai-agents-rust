@@ -87,11 +87,7 @@ impl StreamedTranscriptionSession for OpenAISTTTranscriptionSession {
             ));
         }
         self.finished = true;
-        Ok(format!(
-            "{}{}",
-            std::mem::take(&mut self.transcript),
-            self.settings_stream_suffix()
-        ))
+        Ok(std::mem::take(&mut self.transcript))
     }
 }
 
@@ -119,24 +115,6 @@ impl OpenAISTTTranscriptionSession {
         ))
     }
 
-    fn settings_stream_suffix(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(model) = &self.settings.model {
-            parts.push(format!("model={model}"));
-        }
-        if let Some(language) = &self.settings.language {
-            parts.push(format!("language={language}"));
-        }
-        if let Some(prompt) = &self.settings.prompt {
-            parts.push(format!("prompt={prompt}"));
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!("|{}", parts.join("|"))
-        }
-    }
-
     #[cfg(test)]
     fn fail_with(&mut self, message: impl Into<String>) {
         self.failure = Some(message.into());
@@ -157,17 +135,12 @@ impl OpenAISTTModel {
 #[async_trait]
 impl STTModel for OpenAISTTModel {
     async fn transcribe(&self, input: &AudioInput, settings: &STTModelSettings) -> Result<String> {
-        let mut transcript = format!("transcribed:{}:{}", input.mime_type, input.bytes.len());
-        if let Some(model) = &settings.model {
-            transcript.push_str(&format!(":model={model}"));
-        }
-        if let Some(language) = &settings.language {
-            transcript.push_str(&format!(":language={language}"));
-        }
-        if let Some(prompt) = &settings.prompt {
-            transcript.push_str(&format!(":prompt={prompt}"));
-        }
-        Ok(transcript)
+        let _ = settings;
+        Ok(format!(
+            "transcribed:{}:{}",
+            input.mime_type,
+            input.bytes.len()
+        ))
     }
 
     async fn start_session(
@@ -214,10 +187,7 @@ mod tests {
         session.push_audio(&[3]).await.expect("second chunk");
         let transcript = session.finish().await.expect("session should complete");
 
-        assert_eq!(
-            transcript,
-            "[2][1]|model=whisper-1|language=en|prompt=transcribe carefully"
-        );
+        assert_eq!(transcript, "[2][1]");
         let error = session
             .push_audio(&[4])
             .await
@@ -274,10 +244,7 @@ mod tests {
             .expect("chunk should be accepted");
         let transcript = session.finish().await.expect("session should finish");
 
-        assert_eq!(
-            transcript,
-            "[3]|model=gpt-4o-mini-transcribe|language=fr|prompt=écoute attentivement"
-        );
+        assert_eq!(transcript, "[3]");
     }
 
     #[tokio::test]
@@ -300,10 +267,10 @@ mod tests {
             .await
             .expect("buffered transcription should succeed");
 
-        assert_eq!(
-            transcript,
-            "transcribed:audio/wav:3:model=whisper-1:language=en:prompt=be precise"
-        );
+        assert_eq!(transcript, "transcribed:audio/wav:3");
+        assert!(!transcript.contains("whisper-1"));
+        assert!(!transcript.contains("language"));
+        assert!(!transcript.contains("be precise"));
     }
 
     #[tokio::test]

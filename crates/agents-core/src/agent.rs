@@ -101,7 +101,7 @@ pub type AgentToolFailureFormatter =
     Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
 fn default_agent_tool_failure_formatter() -> AgentToolFailureFormatter {
-    Arc::new(|message| async move { Some(format!("Agent tool failed: {message}")) }.boxed())
+    Arc::new(|_message| async move { Some("Agent tool failed.".to_owned()) }.boxed())
 }
 
 fn default_agent_tool_output_text(result: &RunResult) -> String {
@@ -410,7 +410,7 @@ impl Agent {
     pub fn find_handoff(&self, target: &str) -> Option<&Handoff> {
         self.handoffs
             .iter()
-            .find(|handoff| handoff.target == target)
+            .find(|handoff| handoff.enabled && handoff.target == target)
     }
 
     pub fn clone_with<F>(&self, apply: F) -> Self
@@ -751,6 +751,9 @@ impl AgentBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, OnceLock};
+
+    use async_trait::async_trait;
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
@@ -758,9 +761,13 @@ mod tests {
     use crate::agent_tool_state::{
         drop_agent_tool_run_result, peek_agent_tool_run_result, set_agent_tool_state_scope,
     };
+    use crate::errors::Result;
+    use crate::items::OutputItem;
+    use crate::run::{AgentRunner, get_default_agent_runner, set_default_agent_runner};
     use crate::run_context::{ApprovalRecord, RunContext};
     use crate::tool::Tool;
     use crate::tool::function_tool;
+    use crate::{Model, ModelProvider, ModelRequest, ModelResponse, Usage};
 
     use super::*;
 
@@ -820,6 +827,11 @@ mod tests {
 
     #[tokio::test]
     async fn agent_as_tool_records_nested_run_result_with_scope() {
+        let _guard = default_runner_test_lock().lock().await;
+        let previous_runner = get_default_agent_runner();
+        let _runner_reset = DefaultRunnerReset(previous_runner);
+        set_default_agent_runner(Some(AgentRunner::new()));
+
         let agent = Agent::builder("assistant").build();
         let tool = agent
             .as_tool::<AgentAsToolInput>(
@@ -835,6 +847,10 @@ mod tests {
             ApprovalRecord {
                 approved: true,
                 reason: Some("approved in parent".to_owned()),
+                approval_id: Some("approval-123".to_owned()),
+                call_id: Some("call-123".to_owned()),
+                tool_name: Some("delegate".to_owned()),
+                namespace: None,
             },
         );
         run_context.tool_input = Some(json!({"stale": true}));
@@ -874,8 +890,57 @@ mod tests {
         target: String,
     }
 
+    #[derive(Clone, Default)]
+    struct NestedApprovalModel;
+
+    #[async_trait]
+    impl Model for NestedApprovalModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::ToolCall {
+                    call_id: "call-1".to_owned(),
+                    tool_name: "search".to_owned(),
+                    arguments: json!({"query":"rust"}),
+                    namespace: None,
+                }],
+                usage: Usage::default(),
+                response_id: Some("resp-nested-1".to_owned()),
+                request_id: Some("req-nested-1".to_owned()),
+            })
+        }
+    }
+
+    struct NestedApprovalProvider {
+        model: Arc<dyn Model>,
+    }
+
+    impl ModelProvider for NestedApprovalProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    fn default_runner_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    struct DefaultRunnerReset(AgentRunner);
+
+    impl Drop for DefaultRunnerReset {
+        fn drop(&mut self) {
+            set_default_agent_runner(Some(self.0.clone()));
+        }
+    }
+
     #[tokio::test]
     async fn agent_as_tool_captures_structured_tool_input_in_nested_context() {
+        let _guard = default_runner_test_lock().lock().await;
+        let previous_runner = get_default_agent_runner();
+        let _runner_reset = DefaultRunnerReset(previous_runner);
+        set_default_agent_runner(Some(AgentRunner::new()));
+
         let agent = Agent::builder("translator").build();
         let tool = agent
             .as_tool::<TranslateArgs>(
@@ -908,5 +973,87 @@ mod tests {
         );
 
         drop_agent_tool_run_result("call-translate", Some("scope-structured".to_owned()));
+    }
+
+    #[test]
+    fn disabled_handoffs_are_not_discoverable() {
+        let specialist = Agent::builder("specialist").build();
+        let agent = Agent::builder("assistant")
+            .handoff(crate::handoff::handoff(specialist).with_enabled(false))
+            .build();
+
+        assert!(agent.find_handoff("specialist").is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_as_tool_does_not_inherit_parent_approvals_for_nested_runs() {
+        let _guard = default_runner_test_lock().lock().await;
+        let previous_runner = get_default_agent_runner();
+        let _runner_reset = DefaultRunnerReset(previous_runner);
+        set_default_agent_runner(Some(AgentRunner::new().with_model_provider(Arc::new(
+            NestedApprovalProvider {
+                model: Arc::new(NestedApprovalModel),
+            },
+        ))));
+
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, _args: SearchArgs| async move {
+                Ok::<_, crate::errors::AgentsError>("approved tool output".to_owned())
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+        let nested_agent = Agent::builder("nested").function_tool(search_tool).build();
+        let tool = nested_agent
+            .as_tool::<AgentAsToolInput>(
+                Some("delegate"),
+                Some("Delegate to nested agent"),
+                AgentAsToolOptions::default(),
+            )
+            .expect("agent tool should build");
+
+        let mut run_context = RunContextWrapper::new(RunContext::default());
+        set_agent_tool_state_scope(&mut run_context, Some("scope-approval".to_owned()));
+        run_context.approvals.insert(
+            "call-1".to_owned(),
+            ApprovalRecord {
+                approved: true,
+                reason: Some("approved in parent".to_owned()),
+                approval_id: Some("approval-parent".to_owned()),
+                call_id: Some("call-1".to_owned()),
+                tool_name: Some("search".to_owned()),
+                namespace: None,
+            },
+        );
+
+        let output = tool
+            .invoke(
+                ToolContext::new(
+                    run_context,
+                    "delegate",
+                    "parent-call",
+                    "{\"input\":\"hello\"}",
+                ),
+                json!({"input":"hello"}),
+            )
+            .await
+            .expect("nested agent tool invocation should complete");
+        assert_eq!(output, ToolOutput::from(""));
+
+        let stored = peek_agent_tool_run_result("parent-call", Some("scope-approval".to_owned()))
+            .expect("nested run result should be recorded");
+        assert!(stored.final_output.is_none());
+        assert_eq!(stored.interruptions.len(), 1);
+        assert!(
+            stored
+                .new_items
+                .iter()
+                .all(|item| { !matches!(item, crate::items::RunItem::ToolCallOutput { .. }) })
+        );
+        assert!(stored.context_snapshot.approvals.is_empty());
+
+        drop_agent_tool_run_result("parent-call", Some("scope-approval".to_owned()));
     }
 }

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agents_core::Result;
 use futures::StreamExt;
@@ -30,6 +31,7 @@ struct RealtimeSessionState {
 struct LiveRealtimeSessionState {
     state: Mutex<RealtimeSessionState>,
     notify: Notify,
+    revision: AtomicU64,
 }
 
 impl LiveRealtimeSessionState {
@@ -62,6 +64,7 @@ impl LiveRealtimeSessionState {
         }
         state.events.push(event);
         drop(state);
+        self.revision.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_waiters();
     }
 
@@ -79,8 +82,21 @@ impl LiveRealtimeSessionState {
         self.state.lock().await.closed
     }
 
-    async fn wait_for_change(&self) {
-        self.notify.notified().await;
+    fn revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
+    async fn wait_for_change_since(&self, revision: u64) {
+        loop {
+            let notified = self.notify.notified();
+            if self.revision() != revision {
+                return;
+            }
+            notified.await;
+            if self.revision() != revision {
+                return;
+            }
+        }
     }
 }
 
@@ -130,7 +146,8 @@ impl RealtimeSession {
                 if shared_state.is_closed().await {
                     return None;
                 }
-                shared_state.wait_for_change().await;
+                let revision = shared_state.revision();
+                shared_state.wait_for_change_since(revision).await;
             }
         })
         .boxed()
@@ -347,7 +364,7 @@ fn realtime_events_from_model_events(events: Vec<RealtimeModelEvent>) -> Vec<Rea
                     payload: serde_json::json!({
                         "call_id": call.call_id,
                         "name": call.name,
-                        "arguments": call.arguments,
+                        "arguments_redacted": true,
                     }),
                 }),
             ],
@@ -385,4 +402,58 @@ fn realtime_events_from_model_events(events: Vec<RealtimeModelEvent>) -> Vec<Rea
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::time::{Duration, timeout};
+
+    use super::*;
+    use crate::model_events::RealtimeModelToolCallEvent;
+
+    #[test]
+    fn tool_call_raw_events_redact_arguments() {
+        let events = realtime_events_from_model_events(vec![RealtimeModelEvent::ToolCall(
+            RealtimeModelToolCallEvent {
+                call_id: "call-1".to_owned(),
+                name: "search".to_owned(),
+                arguments: "{\"secret\":\"value\"}".to_owned(),
+            },
+        )]);
+
+        let raw_event = events
+            .iter()
+            .find_map(|event| match event {
+                RealtimeEvent::RawModelEvent(raw) => Some(raw),
+                _ => None,
+            })
+            .expect("raw tool event should be emitted");
+        assert_eq!(raw_event.payload["call_id"], "call-1");
+        assert_eq!(raw_event.payload["name"], "search");
+        assert_eq!(raw_event.payload["arguments_redacted"], true);
+        assert!(raw_event.payload.get("arguments").is_none());
+    }
+
+    #[tokio::test]
+    async fn realtime_session_wait_for_change_does_not_miss_completed_revisions() {
+        let session = RealtimeSession::new(Some("gpt-realtime".to_owned()));
+        let revision = session.shared_state.revision();
+
+        session
+            .shared_state
+            .push_event(RealtimeEvent::TranscriptDelta(
+                RealtimeTranscriptDeltaEvent {
+                    text: "hello".to_owned(),
+                },
+            ))
+            .await;
+
+        timeout(
+            Duration::from_millis(100),
+            session.shared_state.wait_for_change_since(revision),
+        )
+        .await
+        .expect("wait should observe realtime state changes");
+        assert_eq!(session.transcript().await, "hello");
+    }
 }

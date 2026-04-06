@@ -151,11 +151,17 @@ pub struct TwilioRealtimeTransportLayer {
     audio_chunk_count: usize,
     last_played_chunk_count: u64,
     previous_item_id: Option<String>,
+    max_decoded_payload_bytes: usize,
 }
 
 impl TwilioRealtimeTransportLayer {
+    pub const DEFAULT_MAX_DECODED_PAYLOAD_BYTES: usize = 64 * 1024;
+
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            max_decoded_payload_bytes: Self::DEFAULT_MAX_DECODED_PAYLOAD_BYTES,
+            ..Self::default()
+        }
     }
 
     pub fn stream_sid(&self) -> Option<&str> {
@@ -164,6 +170,11 @@ impl TwilioRealtimeTransportLayer {
 
     pub fn last_played_chunk_count(&self) -> u64 {
         self.last_played_chunk_count
+    }
+
+    pub fn with_max_decoded_payload_bytes(mut self, max_decoded_payload_bytes: usize) -> Self {
+        self.max_decoded_payload_bytes = max_decoded_payload_bytes;
+        self
     }
 
     pub fn normalize_session_config(
@@ -200,9 +211,22 @@ impl TwilioRealtimeTransportLayer {
                         .and_then(|media| media.get("payload"))
                         .and_then(Value::as_str)
                     {
+                        let estimated_decoded_bytes = payload.len().div_ceil(4).saturating_mul(3);
+                        if estimated_decoded_bytes > self.max_decoded_payload_bytes {
+                            return Err(AgentsError::message(format!(
+                                "Twilio media payload exceeds {} decoded bytes",
+                                self.max_decoded_payload_bytes
+                            )));
+                        }
                         let bytes = BASE64.decode(payload).map_err(|error| {
                             AgentsError::message(format!("Invalid Twilio media payload: {error}"))
                         })?;
+                        if bytes.len() > self.max_decoded_payload_bytes {
+                            return Err(AgentsError::message(format!(
+                                "Twilio media payload exceeds {} decoded bytes",
+                                self.max_decoded_payload_bytes
+                            )));
+                        }
                         actions.push(TwilioRealtimeTransportAction::ForwardInputAudio { bytes });
                     }
                 }
@@ -519,5 +543,24 @@ mod tests {
                 "mark":{"name":"b:1"}
             }))
         );
+    }
+
+    #[test]
+    fn twilio_rejects_oversized_media_payloads_before_and_after_decode() {
+        let mut transport = TwilioRealtimeTransportLayer::new().with_max_decoded_payload_bytes(8);
+        let oversized_payload = BASE64.encode([0u8; 9]);
+        let message = serde_json::json!({
+            "event": "media",
+            "media": {
+                "payload": oversized_payload,
+            }
+        })
+        .to_string();
+
+        let error = transport
+            .handle_incoming_message(&message, true)
+            .expect_err("oversized media payload should be rejected");
+
+        assert!(error.to_string().contains("Twilio media payload exceeds"));
     }
 }

@@ -1,7 +1,7 @@
 use crate::items::RunItem;
 use crate::memory::OpenAIConversationSessionState;
 use crate::model::ModelResponse;
-use crate::run_config::RunConfig;
+use crate::run_config::{ReasoningItemIdPolicy, RunConfig};
 use crate::run_state::RunState;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -77,6 +77,7 @@ impl OpenAIServerConversationTracker {
         &mut self,
         original_input: &[crate::items::InputItem],
         generated_items: &[RunItem],
+        reasoning_item_id_policy: ReasoningItemIdPolicy,
     ) -> Vec<crate::items::InputItem> {
         let mut prepared = Vec::new();
 
@@ -97,7 +98,9 @@ impl OpenAIServerConversationTracker {
         }
 
         for run_item in generated_items {
-            let Some(item) = run_item.to_input_item() else {
+            let Some(item) =
+                crate::internal::items::run_item_to_input_item(run_item, reasoning_item_id_policy)
+            else {
                 continue;
             };
             if self
@@ -554,8 +557,8 @@ fn json_value_identity(value: &serde_json::Value) -> Option<InputItemIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::items::InputItem;
-    use crate::run_config::RunConfig;
+    use crate::items::{InputItem, RunItem};
+    use crate::run_config::{ReasoningItemIdPolicy, RunConfig};
 
     #[test]
     fn tracker_only_replays_unsent_filtered_deltas() {
@@ -565,12 +568,13 @@ mod tests {
         });
         let original_input = vec![InputItem::from("first"), InputItem::from("second")];
 
-        let first_prepared = tracker.prepare_input(&original_input, &[]);
+        let first_prepared =
+            tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         assert_eq!(first_prepared, original_input);
 
         tracker.mark_input_as_sent(&[InputItem::from("first")]);
 
-        let retried = tracker.prepare_input(&original_input, &[]);
+        let retried = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         assert_eq!(retried, vec![InputItem::from("second")]);
     }
 
@@ -582,12 +586,13 @@ mod tests {
         });
         let original_input = vec![InputItem::from("first"), InputItem::from("second")];
 
-        let first_prepared = tracker.prepare_input(&original_input, &[]);
+        let first_prepared =
+            tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         tracker.mark_input_as_sent(&first_prepared);
 
         tracker.rewind_input(&first_prepared);
 
-        let retried = tracker.prepare_input(&original_input, &[]);
+        let retried = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         assert_eq!(
             retried,
             vec![InputItem::from("first"), InputItem::from("second")]
@@ -602,13 +607,13 @@ mod tests {
         });
         let original_input = vec![InputItem::from("hello")];
 
-        let prepared = tracker.prepare_input(&original_input, &[]);
+        let prepared = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         let filtered = vec![InputItem::from("filtered-hello")];
 
         tracker.register_filtered_input_sources(&prepared, &filtered);
         tracker.mark_input_as_sent(&filtered);
 
-        let retried = tracker.prepare_input(&original_input, &[]);
+        let retried = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         assert!(retried.is_empty());
     }
 
@@ -630,7 +635,8 @@ mod tests {
             },
         ];
 
-        let mut prepared = tracker.prepare_input(&original_input, &[]);
+        let mut prepared =
+            tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         let prepared_snapshot = prepared.clone();
         let mut reordered = std::mem::take(&mut prepared);
         let mut rewritten_third = reordered.pop().expect("third prepared item");
@@ -646,7 +652,7 @@ mod tests {
         tracker.register_filtered_input_sources(&prepared_snapshot, &filtered);
         tracker.mark_input_as_sent(&filtered);
 
-        let retried = tracker.prepare_input(&original_input, &[]);
+        let retried = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         assert_eq!(
             retried,
             vec![InputItem::Json {
@@ -673,7 +679,7 @@ mod tests {
             },
         ];
 
-        let prepared = tracker.prepare_input(&original_input, &[]);
+        let prepared = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         let filtered = vec![
             prepared[1].clone(),
             InputItem::Json {
@@ -692,12 +698,38 @@ mod tests {
             .collect::<Vec<_>>();
         tracker.mark_input_as_sent_with_sources(&filtered, Some(&source_refs));
 
-        let retried = tracker.prepare_input(&original_input, &[]);
+        let retried = tracker.prepare_input(&original_input, &[], ReasoningItemIdPolicy::Preserve);
         assert_eq!(
             retried,
             vec![InputItem::Json {
                 value: serde_json::json!({"type": "message", "content": "first"}),
             }]
         );
+    }
+
+    #[test]
+    fn tracker_omits_reasoning_items_from_server_conversation_replay_when_policy_is_omit() {
+        let mut tracker = OpenAIServerConversationTracker::new(&RunConfig {
+            conversation_id: Some("conv-1".to_owned()),
+            ..RunConfig::default()
+        });
+        let prepared = tracker.prepare_input(
+            &[InputItem::from("hello")],
+            &[
+                RunItem::Reasoning {
+                    text: "sensitive chain of thought".to_owned(),
+                },
+                RunItem::MessageOutput {
+                    content: crate::items::OutputItem::Text {
+                        text: "visible".to_owned(),
+                    },
+                },
+            ],
+            ReasoningItemIdPolicy::Omit,
+        );
+
+        assert_eq!(prepared.len(), 2);
+        assert_eq!(prepared[0], InputItem::from("hello"));
+        assert_eq!(prepared[1], InputItem::from("visible"));
     }
 }

@@ -220,7 +220,8 @@ impl RunResultStreaming {
                     if shared_state.completion().await.is_some() {
                         return None;
                     }
-                    shared_state.wait_for_change().await;
+                    let revision = shared_state.revision();
+                    shared_state.wait_for_change_since(revision).await;
                 }
             })
             .boxed()

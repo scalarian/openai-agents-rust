@@ -29,7 +29,8 @@ pub struct OpenAIProvider {
     pub api: Option<OpenAIApi>,
     pub use_responses: Option<bool>,
     pub use_responses_websocket: bool,
-    websocket_model_cache: Arc<Mutex<HashMap<String, Arc<OpenAIResponsesWsModel>>>>,
+    websocket_model_cache:
+        Arc<Mutex<HashMap<(String, OpenAIClientOptions), Arc<OpenAIResponsesWsModel>>>>,
 }
 
 impl Default for OpenAIProvider {
@@ -135,16 +136,17 @@ impl OpenAIProvider {
     }
 
     fn resolve_responses_ws_model(&self, model_name: &str) -> Arc<dyn Model> {
+        let client_options = self.client_options();
         let mut cache = self
             .websocket_model_cache
             .lock()
             .expect("openai provider websocket cache");
         let entry = cache
-            .entry(model_name.to_owned())
+            .entry((model_name.to_owned(), client_options.clone()))
             .or_insert_with(|| {
                 Arc::new(OpenAIResponsesWsModel::new(
                     model_name.to_owned(),
-                    self.client_options(),
+                    client_options,
                 ))
             })
             .clone();
@@ -320,6 +322,26 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert!(!Arc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn does_not_reuse_websocket_models_across_different_client_options() {
+        let provider = OpenAIProvider::new()
+            .with_api_key("sk-test-a")
+            .with_base_url("https://api-a.example/v1")
+            .with_use_responses(true)
+            .with_use_responses_websocket(true);
+        let first = provider.resolve(Some("gpt-5"));
+
+        let mut provider_with_new_credentials = provider.clone();
+        provider_with_new_credentials.api_key = Some("sk-test-b".to_owned());
+        provider_with_new_credentials.base_url = Some("https://api-b.example/v1".to_owned());
+        let second = provider_with_new_credentials.resolve(Some("gpt-5"));
+
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "websocket models should not be reused across distinct client identities"
+        );
     }
 
     #[test]

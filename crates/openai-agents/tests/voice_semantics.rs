@@ -202,8 +202,10 @@ async fn voice_pipeline_forwards_configured_stt_settings_to_runtime_models() {
 
     assert_eq!(
         completed.transcript,
-        vec!["transcribed:audio/wav:3:model=whisper-1:language=en:prompt=be precise".to_owned()]
+        vec!["transcribed:audio/wav:3".to_owned()]
     );
+    assert!(!completed.transcript[0].contains("whisper-1"));
+    assert!(!completed.transcript[0].contains("be precise"));
 }
 
 #[tokio::test]

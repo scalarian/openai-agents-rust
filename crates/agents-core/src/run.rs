@@ -540,8 +540,11 @@ impl Runner {
                     .await;
             }
             let prepared_input = if conversation_tracker.is_active() {
-                conversation_tracker
-                    .prepare_input(&current_input_history, &normalized_generated_items)
+                conversation_tracker.prepare_input(
+                    &current_input_history,
+                    &normalized_generated_items,
+                    self.config.reasoning_item_id_policy,
+                )
             } else {
                 internal_items::prepare_model_input_items(
                     &current_input_history,
@@ -723,6 +726,7 @@ impl Runner {
                 &context,
                 tool_calls,
                 stream_recorder.as_ref(),
+                None,
             )
             .await?;
             if let Some(recorder) = &stream_recorder {
@@ -1069,6 +1073,9 @@ impl Runner {
         let interruption = state.current_step.clone().ok_or_else(|| UserError {
             message: "cannot resume a pending approval without an interruption record".to_owned(),
         })?;
+        let approval_id = interruption.approval_id.clone().ok_or_else(|| UserError {
+            message: "cannot resume a pending approval without an approval id".to_owned(),
+        })?;
         let call_id = interruption.call_id.clone().ok_or_else(|| UserError {
             message: "cannot resume a pending approval without a tool call id".to_owned(),
         })?;
@@ -1077,10 +1084,16 @@ impl Runner {
             .ok_or_else(|| ModelBehaviorError {
                 message: format!("cannot find pending tool call `{call_id}` in run state"),
             })?;
-        let approval = state.approval(&call_id).cloned().ok_or_else(|| UserError {
-            message: format!("approval decision for `{call_id}` is missing"),
-        })?;
-        if approval.tool_name.as_deref() != Some(tool_call.name.as_str()) {
+        let approval = state
+            .approval(&approval_id)
+            .cloned()
+            .ok_or_else(|| UserError {
+                message: format!("approval decision for `{call_id}` is missing"),
+            })?;
+        if approval.call_id.as_deref() != Some(call_id.as_str())
+            || approval.tool_name.as_deref() != Some(tool_call.name.as_str())
+            || approval.namespace != tool_call.namespace
+        {
             return Err(UserError {
                 message: format!(
                     "approval decision for `{call_id}` is not bound to tool `{}`",
@@ -1097,6 +1110,7 @@ impl Runner {
             &context,
             vec![tool_call],
             None,
+            Some((&interruption, &approval)),
         )
         .await?;
         if !tool_outcome.interruptions.is_empty() {
@@ -1111,7 +1125,7 @@ impl Runner {
         continued_state
             .context_snapshot
             .approvals
-            .insert(call_id, approval);
+            .remove(&approval_id);
         continued_state.extend_generated_items(tool_outcome.new_items.clone());
         continued_state.extend_session_items(tool_outcome.new_items.clone());
         for result in tool_outcome.input_guardrail_results.iter().cloned() {
@@ -1748,6 +1762,68 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct NamedToolModel {
+        tool_name: String,
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl Model for NamedToolModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            let mut calls = self.calls.lock().expect("named tool model lock");
+            *calls += 1;
+
+            if *calls == 1 {
+                return Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "call-1".to_owned(),
+                        tool_name: self.tool_name.clone(),
+                        arguments: json!({"query":"rust"}),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("resp-named-tool-1".to_owned()),
+                    request_id: Some("req-named-tool-1".to_owned()),
+                });
+            }
+
+            let tool_result = request
+                .input
+                .iter()
+                .filter_map(|item| match item {
+                    InputItem::Json { value } => Some(value),
+                    InputItem::Text { .. } => None,
+                })
+                .find_map(|value| {
+                    value
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .filter(|kind| *kind == "tool_call_output")
+                        .and_then(|_| {
+                            value
+                                .get("output")
+                                .and_then(Value::as_object)
+                                .and_then(|output| output.get("text"))
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        })
+                })
+                .unwrap_or_else(|| "missing".to_owned());
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: format!("final:{tool_result}"),
+                }],
+                usage: Usage::default(),
+                response_id: Some("resp-named-tool-2".to_owned()),
+                request_id: Some("req-named-tool-2".to_owned()),
+            })
+        }
+    }
+
     struct FakeProvider {
         model: Arc<FakeModel>,
     }
@@ -2265,7 +2341,41 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct RecordingTraceProcessor {
+        spans: Arc<Mutex<Vec<crate::tracing::Span>>>,
+        traces: Arc<Mutex<Vec<crate::tracing::Trace>>>,
+    }
+
+    impl RecordingTraceProcessor {
+        fn spans(&self) -> Vec<crate::tracing::Span> {
+            self.spans.lock().expect("trace spans lock").clone()
+        }
+    }
+
+    impl crate::tracing::TracingProcessor for RecordingTraceProcessor {
+        fn on_trace_start(&self, _trace: &crate::tracing::Trace) {}
+
+        fn on_trace_end(&self, trace: &crate::tracing::Trace) {
+            self.traces.lock().expect("traces lock").push(trace.clone());
+        }
+
+        fn on_span_start(&self, _span: &crate::tracing::Span) {}
+
+        fn on_span_end(&self, span: &crate::tracing::Span) {
+            self.spans
+                .lock()
+                .expect("trace spans lock")
+                .push(span.clone());
+        }
+    }
+
     fn default_runner_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    fn trace_provider_test_lock() -> &'static tokio::sync::Mutex<()> {
         static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
     }
@@ -2275,6 +2385,14 @@ mod tests {
     impl Drop for DefaultRunnerReset {
         fn drop(&mut self) {
             set_default_agent_runner(Some(self.0.clone()));
+        }
+    }
+
+    struct TraceProviderReset(Arc<dyn crate::tracing::TraceProvider>);
+
+    impl Drop for TraceProviderReset {
+        fn drop(&mut self) {
+            crate::tracing::set_trace_provider(self.0.clone());
         }
     }
 
@@ -2673,6 +2791,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_consumes_bound_tool_approval_after_resume() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let initial = Runner::new()
+            .with_model_provider(provider.clone())
+            .run(&agent, "hello")
+            .await
+            .expect("initial run should succeed");
+        let mut state = initial
+            .durable_state()
+            .cloned()
+            .expect("state should exist");
+        let approval_id = state
+            .pending_approval_id()
+            .expect("pending approval id should exist")
+            .to_owned();
+        state.approve_for_tool(
+            "call-1",
+            Some("search".to_owned()),
+            Some("approved".to_owned()),
+        );
+
+        let resumed = Runner::new()
+            .with_model_provider(provider)
+            .resume_with_agent(&state, &agent)
+            .await
+            .expect("resume should succeed");
+
+        assert_eq!(resumed.final_output.as_deref(), Some("final:result:rust"));
+        assert!(
+            resumed
+                .durable_state()
+                .expect("resumed state should exist")
+                .context_snapshot
+                .approvals
+                .get(&approval_id)
+                .is_none(),
+            "one-shot approvals must be consumed after resume"
+        );
+    }
+
+    #[tokio::test]
     async fn runner_rejects_unbound_tool_approval_on_resume() {
         let provider = Arc::new(FakeProvider {
             model: Arc::new(FakeModel::default()),
@@ -2711,6 +2885,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_rejects_disabled_handoff_targets() {
+        let provider = Arc::new(FakeHandoffProvider {
+            model: Arc::new(FakeHandoffModel::default()),
+        });
+        let specialist = Agent::builder("specialist").build();
+        let agent = Agent::builder("assistant")
+            .handoff(crate::handoff::handoff(specialist).with_enabled(false))
+            .build();
+
+        let error = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect_err("disabled handoff should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("model requested unknown handoff target `specialist`")
+        );
+    }
+
+    #[tokio::test]
     async fn runner_follows_runtime_handoffs() {
         let provider = Arc::new(FakeHandoffProvider {
             model: Arc::new(FakeHandoffModel::default()),
@@ -2745,6 +2942,138 @@ mod tests {
                 RunItem::HandoffOutput { source_agent } if source_agent == "assistant"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn runner_sanitizes_default_tool_error_messages() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, _args: SearchArgs| async move {
+                Err::<String, _>(AgentsError::message("sensitive backend detail"))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(
+            result.final_output.as_deref(),
+            Some("final:Tool `search` failed: Tool execution failed.")
+        );
+        assert!(!result.to_input_list().iter().any(|item| match item {
+            InputItem::Text { text } => text.contains("sensitive backend detail"),
+            InputItem::Json { value } => value.to_string().contains("sensitive backend detail"),
+        }));
+    }
+
+    #[tokio::test]
+    async fn runner_redacts_tool_span_payloads_by_default() {
+        let _trace_guard = trace_provider_test_lock().lock().await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        let model_provider = Arc::new(StaticProvider {
+            model: Arc::new(NamedToolModel {
+                tool_name: "security_redacted_search".to_owned(),
+                calls: Arc::new(Mutex::new(0)),
+            }),
+        });
+        let search_tool = function_tool(
+            "security_redacted_search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        Runner::new()
+            .with_model_provider(model_provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        let function_span = processor
+            .spans()
+            .into_iter()
+            .find_map(|span| match span.data {
+                crate::tracing::SpanData::Function(data)
+                    if span.name == "security_redacted_search" =>
+                {
+                    Some(data)
+                }
+                _ => None,
+            })
+            .expect("function span should be exported");
+        assert!(function_span.input.is_none());
+        assert!(function_span.output.is_none());
+    }
+
+    #[tokio::test]
+    async fn runner_tracing_disabled_suppresses_trace_exports() {
+        let _trace_guard = trace_provider_test_lock().lock().await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        let model_provider = Arc::new(StaticProvider {
+            model: Arc::new(NamedToolModel {
+                tool_name: "security_disabled_trace_search".to_owned(),
+                calls: Arc::new(Mutex::new(0)),
+            }),
+        });
+        let search_tool = function_tool(
+            "security_disabled_trace_search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        Runner::new()
+            .with_model_provider(model_provider)
+            .with_config(RunConfig {
+                tracing_disabled: true,
+                trace_include_sensitive_data: true,
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert!(
+            !processor
+                .spans()
+                .into_iter()
+                .any(|span| { span.name == "security_disabled_trace_search" })
+        );
     }
 
     #[tokio::test]

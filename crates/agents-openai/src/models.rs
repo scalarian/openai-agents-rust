@@ -25,7 +25,7 @@ struct OpenAIHttpResponse {
 }
 
 /// Client options shared across OpenAI-backed transports.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OpenAIClientOptions {
     pub api_key: Option<String>,
     pub base_url: String,
@@ -117,7 +117,7 @@ impl OpenAIResponsesModel {
         }
     }
 
-    pub fn build_payload(&self, request: &ModelRequest) -> Value {
+    pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
         let mut payload = serde_json::Map::new();
         payload.insert("model".to_owned(), Value::String(self.model.clone()));
         if let Some(instructions) = &request.instructions {
@@ -157,15 +157,15 @@ impl OpenAIResponsesModel {
         if let Some(text_config) = openai_responses_text_config(request) {
             payload.insert("text".to_owned(), text_config);
         }
-        apply_responses_model_settings(&mut payload, &request.settings);
-        Value::Object(payload)
+        apply_responses_model_settings(&mut payload, &request.settings)?;
+        Ok(Value::Object(payload))
     }
 }
 
 #[async_trait]
 impl Model for OpenAIResponsesModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let payload = self.build_payload(&request);
+        let payload = self.build_payload(&request)?;
         let response = post_json(
             &self.options.api_url("/responses"),
             &self.options,
@@ -196,7 +196,7 @@ impl OpenAIChatCompletionsModel {
         }
     }
 
-    pub fn build_payload(&self, request: &ModelRequest) -> Value {
+    pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
         let mut payload = serde_json::Map::new();
         payload.insert("model".to_owned(), Value::String(self.model.clone()));
         let mut messages = Vec::new();
@@ -216,15 +216,15 @@ impl OpenAIChatCompletionsModel {
         if let Some(response_format) = openai_chat_response_format(request) {
             payload.insert("response_format".to_owned(), response_format);
         }
-        apply_chat_model_settings(&mut payload, &request.settings, has_tools);
-        Value::Object(payload)
+        apply_chat_model_settings(&mut payload, &request.settings, has_tools)?;
+        Ok(Value::Object(payload))
     }
 }
 
 #[async_trait]
 impl Model for OpenAIChatCompletionsModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
-        let payload = self.build_payload(&request);
+        let payload = self.build_payload(&request)?;
         let response = post_json(
             &self.options.api_url("/chat/completions"),
             &self.options,
@@ -294,7 +294,7 @@ impl Model for OpenAIResponsesWsModel {
             .map_err(|error| AgentsError::message(error.to_string()))?;
         websocket
             .send(Message::Text(
-                session.request_frame(&request).to_string().into(),
+                session.request_frame(&request)?.to_string().into(),
             ))
             .await
             .map_err(|error| AgentsError::message(error.to_string()))?;
@@ -413,7 +413,29 @@ async fn post_json(
 fn apply_responses_model_settings(
     payload: &mut serde_json::Map<String, Value>,
     settings: &agents_core::ModelSettings,
-) {
+) -> Result<()> {
+    validate_extra_body_keys(
+        &settings.extra_body,
+        &[
+            "model",
+            "instructions",
+            "previous_response_id",
+            "conversation",
+            "input",
+            "tools",
+            "text",
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "parallel_tool_calls",
+            "tool_choice",
+            "truncation",
+            "store",
+            "include",
+            "metadata",
+            "reasoning",
+        ],
+    )?;
     if let Some(value) = settings.temperature {
         payload.insert("temperature".to_owned(), json!(value));
     }
@@ -471,13 +493,32 @@ fn apply_responses_model_settings(
     for (key, value) in &settings.extra_body {
         payload.insert(key.clone(), value.clone());
     }
+    Ok(())
 }
 
 fn apply_chat_model_settings(
     payload: &mut serde_json::Map<String, Value>,
     settings: &agents_core::ModelSettings,
     has_tools: bool,
-) {
+) -> Result<()> {
+    validate_extra_body_keys(
+        &settings.extra_body,
+        &[
+            "model",
+            "messages",
+            "tools",
+            "response_format",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "frequency_penalty",
+            "presence_penalty",
+            "parallel_tool_calls",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs",
+        ],
+    )?;
     if let Some(value) = settings.temperature {
         payload.insert("temperature".to_owned(), json!(value));
     }
@@ -508,6 +549,22 @@ fn apply_chat_model_settings(
     for (key, value) in &settings.extra_body {
         payload.insert(key.clone(), value.clone());
     }
+    Ok(())
+}
+
+fn validate_extra_body_keys(
+    extra_body: &std::collections::BTreeMap<String, Value>,
+    reserved: &[&str],
+) -> Result<()> {
+    if let Some(key) = extra_body
+        .keys()
+        .find(|key| reserved.contains(&key.as_str()))
+    {
+        return Err(AgentsError::message(format!(
+            "extra_body cannot override reserved request field `{key}`"
+        )));
+    }
+    Ok(())
 }
 
 fn json_value_to_string(value: &Value) -> String {
@@ -954,36 +1011,38 @@ mod tests {
             "gpt-5",
             OpenAIClientOptions::new(Some("sk-test".to_owned())),
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-5".to_owned()),
-            instructions: Some("Be precise".to_owned()),
-            previous_response_id: None,
-            conversation_id: None,
-            settings: agents_core::ModelSettings {
-                temperature: Some(0.3),
-                max_output_tokens: Some(256),
-                store: Some(true),
-                tool_choice: Some("required".to_owned()),
-                response_include: vec!["reasoning".to_owned()],
-                extra_body: std::collections::BTreeMap::from([(
-                    "service_tier".to_owned(),
-                    json!("priority"),
-                )]),
-                ..Default::default()
-            },
-            input: vec![InputItem::from("hello")],
-            tools: vec![
-                ToolDefinition::new("search", "Search").with_input_json_schema(json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"}
-                    },
-                    "required": ["query"]
-                })),
-            ],
-            output_schema: None,
-            trace_id: None,
-        });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: Some("Be precise".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    temperature: Some(0.3),
+                    max_output_tokens: Some(256),
+                    store: Some(true),
+                    tool_choice: Some("required".to_owned()),
+                    response_include: vec!["reasoning".to_owned()],
+                    extra_body: std::collections::BTreeMap::from([(
+                        "service_tier".to_owned(),
+                        json!("priority"),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("search", "Search").with_input_json_schema(json!({
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"}
+                        },
+                        "required": ["query"]
+                    })),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
 
         assert_eq!(payload["model"], "gpt-5");
         assert_eq!(payload["input"][0]["role"], "user");
@@ -997,42 +1056,77 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_rejects_reserved_extra_body_fields() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    extra_body: std::collections::BTreeMap::from([(
+                        "model".to_owned(),
+                        json!("override"),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("reserved responses fields should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("extra_body cannot override reserved request field `model`")
+        );
+    }
+
+    #[test]
     fn chat_payload_includes_tool_choice() {
         let model = OpenAIChatCompletionsModel::new(
             "gpt-4.1",
             OpenAIClientOptions::new(Some("sk-test".to_owned())),
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-4.1".to_owned()),
-            instructions: Some("Be brief".to_owned()),
-            previous_response_id: None,
-            conversation_id: None,
-            settings: agents_core::ModelSettings {
-                frequency_penalty: Some(0.4),
-                presence_penalty: Some(0.2),
-                parallel_tool_calls: Some(true),
-                top_logprobs: Some(3),
-                ..Default::default()
-            },
-            input: vec![
-                InputItem::from("hello"),
-                InputItem::Json {
-                    value: json!({
-                        "type": "tool_call",
-                        "tool_name": "search",
-                        "call_id": "call-1",
-                        "arguments": {"query": "rust"},
-                    }),
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: Some("Be brief".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    frequency_penalty: Some(0.4),
+                    presence_penalty: Some(0.2),
+                    parallel_tool_calls: Some(true),
+                    top_logprobs: Some(3),
+                    ..Default::default()
                 },
-            ],
-            tools: vec![
-                ToolDefinition::new("search", "Search").with_input_json_schema(json!({
-                    "type": "object"
-                })),
-            ],
-            output_schema: None,
-            trace_id: None,
-        });
+                input: vec![
+                    InputItem::from("hello"),
+                    InputItem::Json {
+                        value: json!({
+                            "type": "tool_call",
+                            "tool_name": "search",
+                            "call_id": "call-1",
+                            "arguments": {"query": "rust"},
+                        }),
+                    },
+                ],
+                tools: vec![
+                    ToolDefinition::new("search", "Search").with_input_json_schema(json!({
+                        "type": "object"
+                    })),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("chat payload should build");
 
         assert_eq!(payload["messages"][0]["role"], "system");
         assert_eq!(payload["messages"][1]["content"], "hello");
@@ -1045,6 +1139,39 @@ mod tests {
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_rejects_reserved_extra_body_fields() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: Some("Be brief".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    extra_body: std::collections::BTreeMap::from([(
+                        "messages".to_owned(),
+                        json!(["override"]),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("reserved chat fields should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("extra_body cannot override reserved request field `messages`")
+        );
     }
 
     #[test]
@@ -1065,17 +1192,19 @@ mod tests {
             }),
             true,
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-5".to_owned()),
-            instructions: Some("Be precise".to_owned()),
-            previous_response_id: None,
-            conversation_id: None,
-            settings: Default::default(),
-            input: vec![InputItem::from("hello")],
-            tools: Vec::new(),
-            output_schema: Some(output_schema.clone()),
-            trace_id: None,
-        });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: Some("Be precise".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: Some(output_schema.clone()),
+                trace_id: None,
+            })
+            .expect("responses payload should build");
 
         assert_eq!(payload["text"]["format"]["type"], "json_schema");
         assert_eq!(payload["text"]["format"]["name"], output_schema.name);
@@ -1101,17 +1230,19 @@ mod tests {
             }),
             true,
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-4.1".to_owned()),
-            instructions: Some("Be brief".to_owned()),
-            previous_response_id: None,
-            conversation_id: None,
-            settings: Default::default(),
-            input: vec![InputItem::from("hello")],
-            tools: Vec::new(),
-            output_schema: Some(output_schema.clone()),
-            trace_id: None,
-        });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: Some("Be brief".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: Some(output_schema.clone()),
+                trace_id: None,
+            })
+            .expect("chat payload should build");
 
         assert_eq!(payload["response_format"]["type"], "json_schema");
         assert_eq!(
@@ -1134,26 +1265,28 @@ mod tests {
             "gpt-5",
             OpenAIClientOptions::new(Some("sk-test".to_owned())),
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-5".to_owned()),
-            instructions: None,
-            previous_response_id: None,
-            conversation_id: None,
-            settings: Default::default(),
-            input: vec![InputItem::Json {
-                value: json!({
-                    "type": "tool_call_output",
-                    "call_id": "call-1",
-                    "output": {
-                        "type": "text",
-                        "text": "found it"
-                    }
-                }),
-            }],
-            tools: Vec::new(),
-            output_schema: None,
-            trace_id: None,
-        });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "tool_call_output",
+                        "call_id": "call-1",
+                        "output": {
+                            "type": "text",
+                            "text": "found it"
+                        }
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
 
         assert_eq!(payload["input"][0]["type"], "function_call_output");
         assert_eq!(payload["input"][0]["output"], "found it");
@@ -1165,17 +1298,19 @@ mod tests {
             "gpt-5",
             OpenAIClientOptions::new(Some("sk-test".to_owned())),
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-5".to_owned()),
-            instructions: None,
-            previous_response_id: Some("resp_123".to_owned()),
-            conversation_id: Some("conv_123".to_owned()),
-            settings: Default::default(),
-            input: vec![InputItem::from("hello")],
-            tools: Vec::new(),
-            output_schema: None,
-            trace_id: None,
-        });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: Some("resp_123".to_owned()),
+                conversation_id: Some("conv_123".to_owned()),
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
 
         assert_eq!(payload["conversation"], "conv_123");
         assert!(payload.get("previous_response_id").is_none());
@@ -1187,17 +1322,19 @@ mod tests {
             "gpt-5",
             OpenAIClientOptions::new(Some("sk-test".to_owned())),
         );
-        let payload = model.build_payload(&ModelRequest {
-            model: Some("gpt-5".to_owned()),
-            instructions: None,
-            previous_response_id: Some("resp_123".to_owned()),
-            conversation_id: None,
-            settings: Default::default(),
-            input: vec![InputItem::from("hello")],
-            tools: Vec::new(),
-            output_schema: None,
-            trace_id: None,
-        });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: Some("resp_123".to_owned()),
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
 
         assert_eq!(payload["previous_response_id"], "resp_123");
         assert!(payload.get("conversation").is_none());

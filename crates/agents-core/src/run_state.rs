@@ -16,7 +16,7 @@ use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult
 use crate::tracing::Trace;
 use crate::usage::Usage;
 
-pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.6";
+pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.7";
 
 /// Serializable snapshot of the runtime context carried across a run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -46,8 +46,10 @@ pub enum RunInterruptionKind {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RunInterruption {
     pub kind: Option<RunInterruptionKind>,
+    pub approval_id: Option<String>,
     pub call_id: Option<String>,
     pub tool_name: Option<String>,
+    pub namespace: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -206,7 +208,8 @@ impl RunState {
     }
 
     pub fn approval(&self, id: &str) -> Option<&ApprovalRecord> {
-        self.context_snapshot.approvals.get(id)
+        let lookup_key = self.resolve_approval_key(id);
+        self.context_snapshot.approvals.get(&lookup_key)
     }
 
     pub fn approve(&mut self, id: impl Into<String>, reason: Option<String>) {
@@ -219,12 +222,18 @@ impl RunState {
         tool_name: Option<String>,
         reason: Option<String>,
     ) {
+        let raw_id = id.into();
+        let approval_key = self.resolve_approval_key(&raw_id);
+        let current_step = self.current_step.clone();
         self.context_snapshot.approvals.insert(
-            id.into(),
+            approval_key.clone(),
             ApprovalRecord {
                 approved: true,
                 reason,
+                approval_id: Some(approval_key),
+                call_id: current_step.as_ref().and_then(|step| step.call_id.clone()),
                 tool_name,
+                namespace: current_step.and_then(|step| step.namespace),
             },
         );
     }
@@ -239,12 +248,18 @@ impl RunState {
         tool_name: Option<String>,
         reason: Option<String>,
     ) {
+        let raw_id = id.into();
+        let approval_key = self.resolve_approval_key(&raw_id);
+        let current_step = self.current_step.clone();
         self.context_snapshot.approvals.insert(
-            id.into(),
+            approval_key.clone(),
             ApprovalRecord {
                 approved: false,
                 reason,
+                approval_id: Some(approval_key),
+                call_id: current_step.as_ref().and_then(|step| step.call_id.clone()),
                 tool_name,
+                namespace: current_step.and_then(|step| step.namespace),
             },
         );
     }
@@ -258,10 +273,18 @@ impl RunState {
     ) {
         self.current_step = Some(RunInterruption {
             kind: Some(kind),
+            approval_id: None,
             call_id,
             tool_name,
+            namespace: None,
             reason,
         });
+    }
+
+    pub fn pending_approval_id(&self) -> Option<&str> {
+        self.current_step
+            .as_ref()
+            .and_then(|step| step.approval_id.as_deref())
     }
 
     pub fn clear_interruption(&mut self) {
@@ -300,6 +323,24 @@ impl RunState {
 
     pub fn from_json_str(value: &str) -> Result<Self> {
         serde_json::from_str(value).map_err(|error| AgentsError::message(error.to_string()))
+    }
+
+    fn resolve_approval_key(&self, id: &str) -> String {
+        self.current_step
+            .as_ref()
+            .filter(|step| matches!(step.kind, Some(RunInterruptionKind::ToolApproval)))
+            .and_then(|step| {
+                step.approval_id.as_ref().and_then(|approval_id| {
+                    let matches_call = step.call_id.as_deref() == Some(id);
+                    let matches_approval = approval_id == id;
+                    if matches_call || matches_approval {
+                        Some(approval_id.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_else(|| id.to_owned())
     }
 }
 

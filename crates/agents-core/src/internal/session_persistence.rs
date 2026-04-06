@@ -233,11 +233,11 @@ fn session_item_key(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputItemIdentity {
-    Text(usize),
-    JsonString(usize),
-    JsonArray(usize),
+    Text(u64),
+    JsonString(u64),
+    JsonArray(u64),
     EmptyJsonObject(Uuid),
-    JsonObject { first_key: usize, len: usize },
+    JsonObject(u64),
 }
 
 fn input_item_identity(
@@ -245,7 +245,7 @@ fn input_item_identity(
     generated_empty_json_sidecars: &HashMap<String, Uuid>,
 ) -> Option<InputItemIdentity> {
     match item {
-        InputItem::Text { text } => Some(InputItemIdentity::Text(text.as_ptr() as usize)),
+        InputItem::Text { text } => Some(InputItemIdentity::Text(stable_hash(text))),
         InputItem::Json { value } => json_value_identity(value, generated_empty_json_sidecars),
     }
 }
@@ -255,12 +255,10 @@ fn json_value_identity(
     generated_empty_json_sidecars: &HashMap<String, Uuid>,
 ) -> Option<InputItemIdentity> {
     match value {
-        serde_json::Value::String(text) => {
-            Some(InputItemIdentity::JsonString(text.as_ptr() as usize))
-        }
-        serde_json::Value::Array(values) => {
-            Some(InputItemIdentity::JsonArray(values.as_ptr() as usize))
-        }
+        serde_json::Value::String(text) => Some(InputItemIdentity::JsonString(stable_hash(text))),
+        serde_json::Value::Array(values) => Some(InputItemIdentity::JsonArray(stable_hash_json(
+            &serde_json::Value::Array(values.clone()),
+        ))),
         serde_json::Value::Object(map) => {
             if let Some(identity) = empty_json_object_identity(map, generated_empty_json_sidecars) {
                 return Some(InputItemIdentity::EmptyJsonObject(identity));
@@ -268,15 +266,27 @@ fn json_value_identity(
             if map.is_empty() {
                 return None;
             }
-            map.iter()
-                .next()
-                .map(|(key, _)| InputItemIdentity::JsonObject {
-                    first_key: key.as_ptr() as usize,
-                    len: map.len(),
-                })
+            Some(InputItemIdentity::JsonObject(stable_hash_json(
+                &serde_json::Value::Object(map.clone()),
+            )))
         }
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => None,
     }
+}
+
+fn stable_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn stable_hash_json(value: &serde_json::Value) -> u64 {
+    stable_hash(
+        &serde_json::to_string(value).expect("json identity values should serialize consistently"),
+    )
 }
 
 fn seed_empty_json_object_identity(
@@ -463,7 +473,7 @@ mod tests {
                 .expect("prepared input should build");
 
         assert_eq!(prepared, vec![InputItem::from("same")]);
-        assert!(session_items.is_empty());
+        assert_eq!(session_items, vec![InputItem::from("same")]);
     }
 
     #[tokio::test]

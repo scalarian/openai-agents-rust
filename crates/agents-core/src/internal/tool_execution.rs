@@ -3,7 +3,7 @@ use crate::errors::Result;
 use crate::exceptions::{ModelBehaviorError, UserError};
 use crate::items::{OutputItem, RunItem};
 use crate::run_config::RunConfig;
-use crate::run_context::RunContextWrapper;
+use crate::run_context::{ApprovalRecord, RunContextWrapper};
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
 use crate::tool::{FunctionToolResult, Tool, ToolOutput, default_tool_error_function};
 use crate::tool_context::{ToolCall, ToolContext};
@@ -11,6 +11,7 @@ use crate::tool_guardrails::{
     ToolGuardrailBehavior, ToolInputGuardrailResult, ToolOutputGuardrailResult,
 };
 use crate::tracing::{SpanData, function_span, get_trace_provider};
+use uuid::Uuid;
 
 use super::approvals::append_approval_error_output;
 use super::streaming::StreamRecorder;
@@ -29,6 +30,7 @@ pub(crate) async fn execute_local_function_tools(
     context: &RunContextWrapper,
     tool_calls: Vec<ToolCall>,
     stream_recorder: Option<&StreamRecorder>,
+    approved_execution: Option<(&RunInterruption, &ApprovalRecord)>,
 ) -> Result<ToolExecutionOutcome> {
     let runtime_tools = agent.get_all_function_tools(context).await?;
     let mut new_items = Vec::new();
@@ -55,9 +57,11 @@ pub(crate) async fn execute_local_function_tools(
             .with_agent(agent.clone())
             .with_run_config(run_config.clone());
         let provider = get_trace_provider();
+        let trace_sensitive =
+            !run_config.tracing_disabled && run_config.trace_include_sensitive_data;
         let mut span = function_span(
             &tool_context.trace_name(),
-            Some(tool_call.arguments.clone()),
+            trace_sensitive.then(|| tool_call.arguments.clone()),
             None,
         );
         if let Some(recorder) = stream_recorder {
@@ -85,54 +89,10 @@ pub(crate) async fn execute_local_function_tools(
         provider.start_span(&mut span, true);
 
         if function_tool.needs_approval {
-            match context.approvals.get(&tool_call.id) {
-                None => {
-                    provider.finish_span(&mut span, true);
-                    if let Some(recorder) = stream_recorder {
-                        recorder
-                            .push_lifecycle(
-                                "tool_approval_required",
-                                Some(serde_json::json!({
-                                    "tool_name": tool_call.name.clone(),
-                                    "call_id": tool_call.id.clone(),
-                                    "namespace": tool_call.namespace.clone(),
-                                })),
-                            )
-                            .await;
-                    }
-                    interruptions.push(RunInterruption {
-                        kind: Some(RunInterruptionKind::ToolApproval),
-                        call_id: Some(tool_call.id.clone()),
-                        tool_name: Some(tool_call.name.clone()),
-                        reason: Some("tool approval required".to_owned()),
-                    });
-                    break;
-                }
-                Some(approval)
-                    if approval.tool_name.as_deref() != Some(tool_call.name.as_str()) =>
-                {
-                    provider.finish_span(&mut span, true);
-                    if let Some(recorder) = stream_recorder {
-                        recorder
-                            .push_lifecycle(
-                                "tool_approval_required",
-                                Some(serde_json::json!({
-                                    "tool_name": tool_call.name.clone(),
-                                    "call_id": tool_call.id.clone(),
-                                    "namespace": tool_call.namespace.clone(),
-                                })),
-                            )
-                            .await;
-                    }
-                    interruptions.push(RunInterruption {
-                        kind: Some(RunInterruptionKind::ToolApproval),
-                        call_id: Some(tool_call.id.clone()),
-                        tool_name: Some(tool_call.name.clone()),
-                        reason: Some("tool approval required".to_owned()),
-                    });
-                    break;
-                }
-                Some(approval) if !approval.approved => {
+            match approved_execution {
+                Some((interruption, approval))
+                    if approval_matches_tool_call(interruption, approval, &tool_call) => {}
+                Some((_, approval)) if !approval.approved => {
                     append_approval_error_output(
                         &mut new_items,
                         tool_call.name.clone(),
@@ -161,7 +121,32 @@ pub(crate) async fn execute_local_function_tools(
                     provider.finish_span(&mut span, true);
                     continue;
                 }
-                Some(_) => {}
+                _ => {
+                    let approval_id = Uuid::new_v4().to_string();
+                    provider.finish_span(&mut span, true);
+                    if let Some(recorder) = stream_recorder {
+                        recorder
+                            .push_lifecycle(
+                                "tool_approval_required",
+                                Some(serde_json::json!({
+                                    "approval_id": approval_id,
+                                    "tool_name": tool_call.name.clone(),
+                                    "call_id": tool_call.id.clone(),
+                                    "namespace": tool_call.namespace.clone(),
+                                })),
+                            )
+                            .await;
+                    }
+                    interruptions.push(RunInterruption {
+                        kind: Some(RunInterruptionKind::ToolApproval),
+                        approval_id: Some(approval_id),
+                        call_id: Some(tool_call.id.clone()),
+                        tool_name: Some(tool_call.name.clone()),
+                        namespace: tool_call.namespace.clone(),
+                        reason: Some("tool approval required".to_owned()),
+                    });
+                    break;
+                }
             }
         }
 
@@ -205,7 +190,7 @@ pub(crate) async fn execute_local_function_tools(
             {
                 Ok(output) => output,
                 Err(error) => {
-                    let default_message = error.to_string();
+                    let default_message = "Tool execution failed.".to_owned();
                     let formatted = if let Some(formatter) = &run_config.tool_error_formatter {
                         formatter(crate::run_config::ToolErrorFormatterArgs {
                             kind: "invoke_error",
@@ -326,7 +311,11 @@ pub(crate) async fn execute_local_function_tools(
                 .await;
         }
         if let SpanData::Function(data) = &mut span.data {
-            data.output = output_text;
+            data.output = trace_sensitive.then(|| {
+                output_text
+                    .clone()
+                    .unwrap_or_else(|| "[tool output omitted]".to_owned())
+            });
         }
         provider.finish_span(&mut span, true);
         if let Some(recorder) = stream_recorder {
@@ -349,6 +338,21 @@ pub(crate) async fn execute_local_function_tools(
         output_guardrail_results,
         interruptions,
     })
+}
+
+fn approval_matches_tool_call(
+    interruption: &RunInterruption,
+    approval: &ApprovalRecord,
+    tool_call: &ToolCall,
+) -> bool {
+    approval.approved
+        && approval.approval_id == interruption.approval_id
+        && approval.call_id.as_deref() == Some(tool_call.id.as_str())
+        && approval.tool_name.as_deref() == Some(tool_call.name.as_str())
+        && approval.namespace == tool_call.namespace
+        && interruption.call_id.as_deref() == Some(tool_call.id.as_str())
+        && interruption.tool_name.as_deref() == Some(tool_call.name.as_str())
+        && interruption.namespace == tool_call.namespace
 }
 
 pub(crate) fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {

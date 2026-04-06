@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify};
@@ -18,6 +19,7 @@ pub(crate) struct LiveRunStreamState {
     events: Mutex<Vec<StreamEvent>>,
     completion: Mutex<Option<std::result::Result<RunResult, String>>>,
     notify: Notify,
+    revision: AtomicU64,
 }
 
 impl LiveRunStreamState {
@@ -34,12 +36,26 @@ impl LiveRunStreamState {
             if let Some(result) = self.completion().await {
                 return result.map_err(AgentsError::message);
             }
-            self.notify.notified().await;
+            let revision = self.revision();
+            self.wait_for_change_since(revision).await;
         }
     }
 
-    pub(crate) async fn wait_for_change(&self) {
-        self.notify.notified().await;
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision.load(Ordering::SeqCst)
+    }
+
+    pub(crate) async fn wait_for_change_since(&self, revision: u64) {
+        loop {
+            let notified = self.notify.notified();
+            if self.revision() != revision {
+                return;
+            }
+            notified.await;
+            if self.revision() != revision {
+                return;
+            }
+        }
     }
 }
 
@@ -61,6 +77,7 @@ impl StreamRecorder {
 
     pub(crate) async fn push_event(&self, event: StreamEvent) {
         self.state.events.lock().await.push(event);
+        self.state.revision.fetch_add(1, Ordering::SeqCst);
         self.state.notify.notify_waiters();
     }
 
@@ -122,6 +139,7 @@ impl StreamRecorder {
 
         let stored = result.map_err(|error| error.to_string());
         *self.state.completion.lock().await = Some(stored);
+        self.state.revision.fetch_add(1, Ordering::SeqCst);
         self.state.notify.notify_waiters();
     }
 }
@@ -189,5 +207,49 @@ fn run_item_name(item: &crate::items::RunItem) -> String {
         crate::items::RunItem::HandoffCall { .. } => "handoff_call".to_owned(),
         crate::items::RunItem::HandoffOutput { .. } => "handoff_output".to_owned(),
         crate::items::RunItem::Reasoning { .. } => "reasoning".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::time::{Duration, timeout};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn live_run_stream_wait_for_change_does_not_miss_completed_event_revisions() {
+        let recorder = StreamRecorder::new();
+        let state = recorder.shared_state();
+        let revision = state.revision();
+
+        recorder.push_lifecycle("tool_start", None).await;
+
+        timeout(
+            Duration::from_millis(100),
+            state.wait_for_change_since(revision),
+        )
+        .await
+        .expect("wait should observe completed revision change");
+        assert!(state.event_at(0).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn live_run_stream_wait_for_completion_does_not_miss_completed_results() {
+        let recorder = StreamRecorder::new();
+        let state = recorder.shared_state();
+
+        recorder
+            .complete(Ok(RunResult {
+                agent_name: "assistant".to_owned(),
+                final_output: Some("done".to_owned()),
+                ..RunResult::default()
+            }))
+            .await;
+
+        let result = timeout(Duration::from_millis(100), state.wait_for_completion())
+            .await
+            .expect("wait should observe completed result")
+            .expect("completion should succeed");
+        assert_eq!(result.final_output.as_deref(), Some("done"));
     }
 }

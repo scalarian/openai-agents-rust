@@ -83,12 +83,12 @@ impl ResponsesWebSocketSession {
         self.client_options.auth_headers()
     }
 
-    pub fn request_payload(&self, request: &ModelRequest) -> Value {
+    pub fn request_payload(&self, request: &ModelRequest) -> Result<Value> {
         let model = OpenAIResponsesModel::new(
             self.model.clone().unwrap_or_else(|| "gpt-5".to_owned()),
             self.client_options.clone(),
         );
-        let mut payload = model.build_payload(request);
+        let mut payload = model.build_payload(request)?;
         if let (Some(response_id), Value::Object(payload_object)) =
             (&self.response_id, &mut payload)
         {
@@ -101,11 +101,11 @@ impl ResponsesWebSocketSession {
                 payload_object.remove("previous_response_id");
             }
         }
-        payload
+        Ok(payload)
     }
 
-    pub fn request_frame(&self, request: &ModelRequest) -> Value {
-        let mut payload = self.request_payload(request);
+    pub fn request_frame(&self, request: &ModelRequest) -> Result<Value> {
+        let mut payload = self.request_payload(request)?;
         if let Value::Object(ref mut payload_object) = payload {
             payload_object.insert(
                 "type".to_owned(),
@@ -113,7 +113,7 @@ impl ResponsesWebSocketSession {
             );
             payload_object.insert("stream".to_owned(), Value::Bool(true));
         }
-        payload
+        Ok(payload)
     }
 }
 
@@ -150,22 +150,24 @@ mod tests {
             OpenAIClientOptions::new(Some("sk-test".to_owned())),
         )
         .with_response_id("resp_123");
-        let payload = session.request_frame(&ModelRequest {
-            trace_id: None,
-            model: Some("gpt-5".to_owned()),
-            instructions: Some("Be precise".to_owned()),
-            previous_response_id: None,
-            conversation_id: None,
-            settings: Default::default(),
-            input: vec![
-                InputItem::from("hello"),
-                InputItem::Json {
-                    value: json!({"type":"tool_call_output"}),
-                },
-            ],
-            tools: Vec::new(),
-            output_schema: None,
-        });
+        let payload = session
+            .request_frame(&ModelRequest {
+                trace_id: None,
+                model: Some("gpt-5".to_owned()),
+                instructions: Some("Be precise".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![
+                    InputItem::from("hello"),
+                    InputItem::Json {
+                        value: json!({"type":"tool_call_output"}),
+                    },
+                ],
+                tools: Vec::new(),
+                output_schema: None,
+            })
+            .expect("request frame should build");
 
         assert_eq!(payload["model"], "gpt-5");
         assert_eq!(payload["type"], "response.create");
@@ -219,17 +221,19 @@ mod tests {
         )
         .with_response_id("resp_123");
 
-        let payload = session.request_frame(&ModelRequest {
-            trace_id: None,
-            model: Some("gpt-5".to_owned()),
-            instructions: None,
-            previous_response_id: Some("resp_request".to_owned()),
-            conversation_id: Some("conv_123".to_owned()),
-            settings: Default::default(),
-            input: vec![InputItem::from("hello")],
-            tools: Vec::new(),
-            output_schema: None,
-        });
+        let payload = session
+            .request_frame(&ModelRequest {
+                trace_id: None,
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: Some("resp_request".to_owned()),
+                conversation_id: Some("conv_123".to_owned()),
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+            })
+            .expect("request frame should build");
 
         assert_eq!(payload["conversation"], "conv_123");
         assert!(payload.get("previous_response_id").is_none());
