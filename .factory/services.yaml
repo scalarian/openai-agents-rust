@@ -1,0 +1,11 @@
+commands:
+  install: cargo fetch --locked
+  typecheck: cargo check --workspace
+  build: cargo build --workspace --examples
+  test: cargo test --workspace -- --test-threads=5
+  lint: cargo fmt --all --check
+  docs_check: docs/scripts/check_links.sh
+  docs_export: docs/scripts/generate_llms_exports.sh && git diff --exit-code -- docs/llms.txt docs/llms-full.txt
+  package: cargo package --workspace --allow-dirty --no-verify
+
+services: {}
