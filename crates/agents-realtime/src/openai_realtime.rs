@@ -178,6 +178,15 @@ impl OpenAIRealtimeWebSocketModel {
     }
 
     fn session_payload_from_settings(&self, settings: &RealtimeSessionModelSettings) -> Value {
+        let settings = settings.normalize_effective();
+        let input_config = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.input.as_ref());
+        let output_config = settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref());
         let input_audio_format = settings
             .audio
             .as_ref()
@@ -253,22 +262,41 @@ impl OpenAIRealtimeWebSocketModel {
 
         let mut audio = serde_json::Map::new();
         let mut input = serde_json::Map::new();
-        if let Some(input_audio_format) = input_audio_format {
+        if settings.clear_input_audio_format
+            || input_config.is_some_and(|config| config.clear_format)
+        {
+            input.insert("format".to_owned(), Value::Null);
+        } else if let Some(input_audio_format) = input_audio_format {
             input.insert(
                 "format".to_owned(),
                 Self::audio_format_payload(&input_audio_format),
             );
         }
-        if let Some(transcription) = input_transcription.as_ref().and_then(Self::config_payload) {
+        if settings.clear_input_audio_transcription
+            || input_config.is_some_and(|config| config.clear_transcription)
+        {
+            input.insert("transcription".to_owned(), Value::Null);
+        } else if let Some(transcription) =
+            input_transcription.as_ref().and_then(Self::config_payload)
+        {
             input.insert("transcription".to_owned(), transcription);
         }
-        if let Some(noise_reduction) = input_noise_reduction
+        if settings.clear_input_audio_noise_reduction
+            || input_config.is_some_and(|config| config.clear_noise_reduction)
+        {
+            input.insert("noise_reduction".to_owned(), Value::Null);
+        } else if let Some(noise_reduction) = input_noise_reduction
             .as_ref()
             .and_then(Self::config_payload)
         {
             input.insert("noise_reduction".to_owned(), noise_reduction);
         }
-        if let Some(turn_detection) = turn_detection.as_ref().and_then(Self::config_payload) {
+        if settings.clear_turn_detection
+            || input_config.is_some_and(|config| config.clear_turn_detection)
+        {
+            input.insert("turn_detection".to_owned(), Value::Null);
+        } else if let Some(turn_detection) = turn_detection.as_ref().and_then(Self::config_payload)
+        {
             input.insert("turn_detection".to_owned(), turn_detection);
         }
         if !input.is_empty() {
@@ -276,16 +304,24 @@ impl OpenAIRealtimeWebSocketModel {
         }
 
         let mut output = serde_json::Map::new();
-        if let Some(output_audio_format) = output_audio_format {
+        if settings.clear_output_audio_format
+            || output_config.is_some_and(|config| config.clear_format)
+        {
+            output.insert("format".to_owned(), Value::Null);
+        } else if let Some(output_audio_format) = output_audio_format {
             output.insert(
                 "format".to_owned(),
                 Self::audio_format_payload(&output_audio_format),
             );
         }
-        if let Some(output_voice) = output_voice {
+        if settings.clear_voice || output_config.is_some_and(|config| config.clear_voice) {
+            output.insert("voice".to_owned(), Value::Null);
+        } else if let Some(output_voice) = output_voice {
             output.insert("voice".to_owned(), Value::String(output_voice));
         }
-        if let Some(output_speed) = output_speed {
+        if settings.clear_speed || output_config.is_some_and(|config| config.clear_speed) {
+            output.insert("speed".to_owned(), Value::Null);
+        } else if let Some(output_speed) = output_speed {
             output.insert("speed".to_owned(), serde_json::json!(output_speed));
         }
         if !output.is_empty() {
@@ -364,13 +400,14 @@ impl RealtimeModel for OpenAIRealtimeWebSocketModel {
             .applied_settings
             .as_ref()
             .map(|current| current.merge(settings))
-            .unwrap_or_else(|| settings.clone());
+            .unwrap_or_else(|| settings.clone())
+            .normalize_effective();
         if let Some(model_name) = &merged_settings.model_name {
             self.config.model = Some(model_name.clone());
         }
         let payload = self.session_payload_from_settings(&merged_settings);
         self.last_session_payload = Self::normalize_session_payload(&payload);
-        self.applied_settings = Some(merged_settings);
+        self.applied_settings = Some(merged_settings.without_clear_markers());
         Ok(Vec::new())
     }
 }
@@ -471,7 +508,8 @@ impl RealtimeModel for OpenAIRealtimeSIPModel {
             .applied_settings
             .as_ref()
             .map(|current| current.merge(settings))
-            .unwrap_or_else(|| settings.clone());
+            .unwrap_or_else(|| settings.clone())
+            .normalize_effective();
         if let Some(model_name) = &merged_settings.model_name {
             self.config.model = Some(model_name.clone());
         }
@@ -486,7 +524,7 @@ impl RealtimeModel for OpenAIRealtimeSIPModel {
         .session_payload_from_settings(&merged_settings);
         self.last_session_payload =
             OpenAIRealtimeWebSocketModel::normalize_session_payload(&payload);
-        self.applied_settings = Some(merged_settings);
+        self.applied_settings = Some(merged_settings.without_clear_markers());
         Ok(Vec::new())
     }
 }

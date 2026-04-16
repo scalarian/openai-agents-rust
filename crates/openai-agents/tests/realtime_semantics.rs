@@ -423,4 +423,221 @@ async fn partial_session_updates_preserve_prior_settings() {
         updated,
         RealtimeEvent::SessionUpdated(event) if event.model.as_deref() == Some("gpt-realtime-1.5")
     ));
+    assert_eq!(settings.voice.as_deref(), Some("verse"));
+    assert_eq!(settings.speed, Some(1.25));
+}
+
+#[tokio::test]
+async fn partial_session_updates_can_clear_and_normalize_state() {
+    let mut model = OpenAIRealtimeWebSocketModel {
+        config: RealtimeModelConfig {
+            model: Some("gpt-realtime-1.5".to_owned()),
+        },
+        transport: TransportConfig {
+            api_key: Some("sk-test".to_owned()),
+            websocket_url: Some("https://example.com/realtime".to_owned()),
+            call_id: None,
+            query_params: BTreeMap::new(),
+        },
+        ..OpenAIRealtimeWebSocketModel::default()
+    };
+    model.connect().await.expect("connect should succeed");
+
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            model_name: Some("gpt-realtime-1.5".to_owned()),
+            voice: Some("alloy".to_owned()),
+            speed: Some(1.25),
+            output_audio_format: Some(RealtimeAudioFormat::Pcm16),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("initial model update should succeed");
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            audio: Some(RealtimeAudioConfig {
+                output: Some(RealtimeAudioOutputConfig {
+                    voice: Some("verse".to_owned()),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeAudioConfig::default()
+            }),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("mixed model update should succeed");
+
+    let payload = model
+        .runtime_state()
+        .last_session_payload
+        .expect("mixed update should record a payload")
+        .payload;
+    assert_eq!(
+        payload
+            .get("audio")
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("voice"))
+            .and_then(serde_json::Value::as_str),
+        Some("verse")
+    );
+    assert_eq!(
+        payload
+            .get("audio")
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("speed"))
+            .and_then(serde_json::Value::as_f64),
+        Some(1.25)
+    );
+    assert_eq!(
+        model
+            .applied_settings
+            .as_ref()
+            .and_then(|settings| settings.voice.as_deref()),
+        Some("verse")
+    );
+    assert_eq!(
+        model
+            .applied_settings
+            .as_ref()
+            .and_then(|settings| settings.speed),
+        Some(1.25)
+    );
+    assert_eq!(
+        model
+            .applied_settings
+            .as_ref()
+            .and_then(|settings| settings.audio.as_ref())
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.voice.as_deref()),
+        Some("verse")
+    );
+
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            audio: Some(RealtimeAudioConfig {
+                output: Some(RealtimeAudioOutputConfig::default().cleared_voice()),
+                ..RealtimeAudioConfig::default()
+            }),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("clear update should succeed");
+
+    let cleared_payload = model
+        .runtime_state()
+        .last_session_payload
+        .expect("clear update should record a payload")
+        .payload;
+    assert_eq!(
+        cleared_payload
+            .get("audio")
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("voice")),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        cleared_payload
+            .get("audio")
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("speed"))
+            .and_then(serde_json::Value::as_f64),
+        Some(1.25)
+    );
+    assert_eq!(
+        model
+            .applied_settings
+            .as_ref()
+            .and_then(|settings| settings.voice.as_deref()),
+        None
+    );
+    assert_eq!(
+        model
+            .applied_settings
+            .as_ref()
+            .and_then(|settings| settings.speed),
+        Some(1.25)
+    );
+
+    let runner = RealtimeRunner::new(RealtimeAgent::new("assistant"));
+    let session = runner.run().await.expect("session should start");
+    session
+        .update_agent({
+            let mut configured = RealtimeAgent::new("assistant");
+            configured.model_settings = Some(RealtimeSessionModelSettings {
+                model_name: Some("gpt-realtime-1.5".to_owned()),
+                voice: Some("alloy".to_owned()),
+                speed: Some(1.25),
+                output_audio_format: Some(RealtimeAudioFormat::Pcm16),
+                ..RealtimeSessionModelSettings::default()
+            });
+            configured
+        })
+        .await
+        .expect("initial session update should succeed");
+    session
+        .update_agent({
+            let mut mixed = RealtimeAgent::new("assistant");
+            mixed.model_settings = Some(RealtimeSessionModelSettings {
+                audio: Some(RealtimeAudioConfig {
+                    output: Some(RealtimeAudioOutputConfig {
+                        voice: Some("verse".to_owned()),
+                        ..RealtimeAudioOutputConfig::default()
+                    }),
+                    ..RealtimeAudioConfig::default()
+                }),
+                ..RealtimeSessionModelSettings::default()
+            });
+            mixed
+        })
+        .await
+        .expect("mixed session update should succeed");
+    session
+        .update_agent({
+            let mut cleared = RealtimeAgent::new("assistant");
+            cleared.model_settings = Some(RealtimeSessionModelSettings {
+                audio: Some(RealtimeAudioConfig {
+                    output: Some(RealtimeAudioOutputConfig::default().cleared_voice()),
+                    ..RealtimeAudioConfig::default()
+                }),
+                ..RealtimeSessionModelSettings::default()
+            });
+            cleared
+        })
+        .await
+        .expect("clear session update should succeed");
+
+    let settings = session
+        .model_settings()
+        .await
+        .expect("session should expose normalized settings");
+    assert_eq!(settings.voice.as_deref(), None);
+    assert_eq!(settings.speed, Some(1.25));
+    assert_eq!(
+        settings.output_audio_format,
+        Some(RealtimeAudioFormat::Pcm16)
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.voice.as_deref()),
+        None
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.speed),
+        Some(1.25)
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.format.clone()),
+        Some(RealtimeAudioFormat::Pcm16)
+    );
 }

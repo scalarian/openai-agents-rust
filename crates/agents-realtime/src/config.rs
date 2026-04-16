@@ -78,31 +78,98 @@ pub struct RealtimeAudioInputConfig {
     pub noise_reduction: Option<RealtimeInputAudioNoiseReductionConfig>,
     pub transcription: Option<RealtimeInputAudioTranscriptionConfig>,
     pub turn_detection: Option<RealtimeTurnDetectionConfig>,
+    #[serde(skip)]
+    pub clear_format: bool,
+    #[serde(skip)]
+    pub clear_noise_reduction: bool,
+    #[serde(skip)]
+    pub clear_transcription: bool,
+    #[serde(skip)]
+    pub clear_turn_detection: bool,
 }
 
 impl RealtimeAudioInputConfig {
+    pub fn cleared_format(mut self) -> Self {
+        self.format = None;
+        self.clear_format = true;
+        self
+    }
+
+    pub fn cleared_noise_reduction(mut self) -> Self {
+        self.noise_reduction = None;
+        self.clear_noise_reduction = true;
+        self
+    }
+
+    pub fn cleared_transcription(mut self) -> Self {
+        self.transcription = None;
+        self.clear_transcription = true;
+        self
+    }
+
+    pub fn cleared_turn_detection(mut self) -> Self {
+        self.turn_detection = None;
+        self.clear_turn_detection = true;
+        self
+    }
+
     pub fn merge(&self, update: &Self) -> Self {
         Self {
-            format: update.format.clone().or_else(|| self.format.clone()),
+            format: if update.clear_format {
+                None
+            } else {
+                update.format.clone().or_else(|| self.format.clone())
+            },
             noise_reduction: match (&self.noise_reduction, &update.noise_reduction) {
+                (_, _) if update.clear_noise_reduction => None,
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
             transcription: match (&self.transcription, &update.transcription) {
+                (_, _) if update.clear_transcription => None,
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
             turn_detection: match (&self.turn_detection, &update.turn_detection) {
+                (_, _) if update.clear_turn_detection => None,
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
+            clear_format: update.clear_format,
+            clear_noise_reduction: update.clear_noise_reduction,
+            clear_transcription: update.clear_transcription,
+            clear_turn_detection: update.clear_turn_detection,
         }
+    }
+
+    pub(crate) fn has_values_or_clears(&self) -> bool {
+        self.clear_format
+            || self.clear_noise_reduction
+            || self.clear_transcription
+            || self.clear_turn_detection
+            || self.format.is_some()
+            || self.noise_reduction.is_some()
+            || self.transcription.is_some()
+            || self.turn_detection.is_some()
+    }
+
+    pub(crate) fn without_clear_markers(&self) -> Option<Self> {
+        let mut cleaned = self.clone();
+        cleaned.clear_format = false;
+        cleaned.clear_noise_reduction = false;
+        cleaned.clear_transcription = false;
+        cleaned.clear_turn_detection = false;
+        (cleaned.format.is_some()
+            || cleaned.noise_reduction.is_some()
+            || cleaned.transcription.is_some()
+            || cleaned.turn_detection.is_some())
+        .then_some(cleaned)
     }
 }
 
@@ -111,15 +178,72 @@ pub struct RealtimeAudioOutputConfig {
     pub format: Option<RealtimeAudioFormat>,
     pub voice: Option<String>,
     pub speed: Option<f32>,
+    #[serde(skip)]
+    pub clear_format: bool,
+    #[serde(skip)]
+    pub clear_voice: bool,
+    #[serde(skip)]
+    pub clear_speed: bool,
 }
 
 impl RealtimeAudioOutputConfig {
+    pub fn cleared_format(mut self) -> Self {
+        self.format = None;
+        self.clear_format = true;
+        self
+    }
+
+    pub fn cleared_voice(mut self) -> Self {
+        self.voice = None;
+        self.clear_voice = true;
+        self
+    }
+
+    pub fn cleared_speed(mut self) -> Self {
+        self.speed = None;
+        self.clear_speed = true;
+        self
+    }
+
     pub fn merge(&self, update: &Self) -> Self {
         Self {
-            format: update.format.clone().or_else(|| self.format.clone()),
-            voice: update.voice.clone().or_else(|| self.voice.clone()),
-            speed: update.speed.or(self.speed),
+            format: if update.clear_format {
+                None
+            } else {
+                update.format.clone().or_else(|| self.format.clone())
+            },
+            voice: if update.clear_voice {
+                None
+            } else {
+                update.voice.clone().or_else(|| self.voice.clone())
+            },
+            speed: if update.clear_speed {
+                None
+            } else {
+                update.speed.or(self.speed)
+            },
+            clear_format: update.clear_format,
+            clear_voice: update.clear_voice,
+            clear_speed: update.clear_speed,
         }
+    }
+
+    pub(crate) fn has_values_or_clears(&self) -> bool {
+        self.clear_format
+            || self.clear_voice
+            || self.clear_speed
+            || self.format.is_some()
+            || self.voice.is_some()
+            || self.speed.is_some()
+    }
+
+    pub(crate) fn without_clear_markers(&self) -> Option<Self> {
+        let mut cleaned = self.clone();
+        cleaned.clear_format = false;
+        cleaned.clear_voice = false;
+        cleaned.clear_speed = false;
+        (cleaned.format.is_some() || cleaned.voice.is_some() || cleaned.speed.is_some())
+            .then_some(cleaned)
     }
 }
 
@@ -145,6 +269,18 @@ impl RealtimeAudioConfig {
                 (None, None) => None,
             },
         }
+    }
+
+    pub(crate) fn without_clear_markers(&self) -> Option<Self> {
+        let input = self
+            .input
+            .as_ref()
+            .and_then(RealtimeAudioInputConfig::without_clear_markers);
+        let output = self
+            .output
+            .as_ref()
+            .and_then(RealtimeAudioOutputConfig::without_clear_markers);
+        (input.is_some() || output.is_some()).then_some(Self { input, output })
     }
 }
 
@@ -184,9 +320,65 @@ pub struct RealtimeSessionModelSettings {
     pub turn_detection: Option<RealtimeTurnDetectionConfig>,
     pub tool_choice: Option<String>,
     pub tracing: Option<RealtimeModelTracingConfig>,
+    #[serde(skip)]
+    pub clear_voice: bool,
+    #[serde(skip)]
+    pub clear_speed: bool,
+    #[serde(skip)]
+    pub clear_input_audio_format: bool,
+    #[serde(skip)]
+    pub clear_output_audio_format: bool,
+    #[serde(skip)]
+    pub clear_input_audio_transcription: bool,
+    #[serde(skip)]
+    pub clear_input_audio_noise_reduction: bool,
+    #[serde(skip)]
+    pub clear_turn_detection: bool,
 }
 
 impl RealtimeSessionModelSettings {
+    pub fn cleared_voice(mut self) -> Self {
+        self.voice = None;
+        self.clear_voice = true;
+        self
+    }
+
+    pub fn cleared_speed(mut self) -> Self {
+        self.speed = None;
+        self.clear_speed = true;
+        self
+    }
+
+    pub fn cleared_input_audio_format(mut self) -> Self {
+        self.input_audio_format = None;
+        self.clear_input_audio_format = true;
+        self
+    }
+
+    pub fn cleared_output_audio_format(mut self) -> Self {
+        self.output_audio_format = None;
+        self.clear_output_audio_format = true;
+        self
+    }
+
+    pub fn cleared_input_audio_transcription(mut self) -> Self {
+        self.input_audio_transcription = None;
+        self.clear_input_audio_transcription = true;
+        self
+    }
+
+    pub fn cleared_input_audio_noise_reduction(mut self) -> Self {
+        self.input_audio_noise_reduction = None;
+        self.clear_input_audio_noise_reduction = true;
+        self
+    }
+
+    pub fn cleared_turn_detection(mut self) -> Self {
+        self.turn_detection = None;
+        self.clear_turn_detection = true;
+        self
+    }
+
     pub fn merge(&self, update: &Self) -> Self {
         Self {
             model_name: update
@@ -211,20 +403,37 @@ impl RealtimeSessionModelSettings {
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
-            voice: update.voice.clone().or_else(|| self.voice.clone()),
-            speed: update.speed.or(self.speed),
-            input_audio_format: update
-                .input_audio_format
-                .clone()
-                .or_else(|| self.input_audio_format.clone()),
-            output_audio_format: update
-                .output_audio_format
-                .clone()
-                .or_else(|| self.output_audio_format.clone()),
+            voice: if update.clear_voice {
+                None
+            } else {
+                update.voice.clone().or_else(|| self.voice.clone())
+            },
+            speed: if update.clear_speed {
+                None
+            } else {
+                update.speed.or(self.speed)
+            },
+            input_audio_format: if update.clear_input_audio_format {
+                None
+            } else {
+                update
+                    .input_audio_format
+                    .clone()
+                    .or_else(|| self.input_audio_format.clone())
+            },
+            output_audio_format: if update.clear_output_audio_format {
+                None
+            } else {
+                update
+                    .output_audio_format
+                    .clone()
+                    .or_else(|| self.output_audio_format.clone())
+            },
             input_audio_transcription: match (
                 &self.input_audio_transcription,
                 &update.input_audio_transcription,
             ) {
+                (_, _) if update.clear_input_audio_transcription => None,
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),
                 (Some(current), None) => Some(current.clone()),
@@ -234,12 +443,14 @@ impl RealtimeSessionModelSettings {
                 &self.input_audio_noise_reduction,
                 &update.input_audio_noise_reduction,
             ) {
+                (_, _) if update.clear_input_audio_noise_reduction => None,
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
             turn_detection: match (&self.turn_detection, &update.turn_detection) {
+                (_, _) if update.clear_turn_detection => None,
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),
                 (Some(current), None) => Some(current.clone()),
@@ -255,7 +466,135 @@ impl RealtimeSessionModelSettings {
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
+            clear_voice: update.clear_voice,
+            clear_speed: update.clear_speed,
+            clear_input_audio_format: update.clear_input_audio_format,
+            clear_output_audio_format: update.clear_output_audio_format,
+            clear_input_audio_transcription: update.clear_input_audio_transcription,
+            clear_input_audio_noise_reduction: update.clear_input_audio_noise_reduction,
+            clear_turn_detection: update.clear_turn_detection,
         }
+    }
+
+    pub fn normalize_effective(&self) -> Self {
+        let mut normalized = self.clone();
+        let mut audio = normalized.audio.clone().unwrap_or_default();
+        let mut input = audio.input.clone().unwrap_or_default();
+        let mut output = audio.output.clone().unwrap_or_default();
+
+        if normalized.clear_input_audio_format || input.clear_format {
+            normalized.input_audio_format = None;
+            input.format = None;
+            normalized.clear_input_audio_format = true;
+            input.clear_format = true;
+        } else {
+            let effective = input
+                .format
+                .clone()
+                .or_else(|| normalized.input_audio_format.clone());
+            input.format = effective.clone();
+            normalized.input_audio_format = effective;
+        }
+
+        if normalized.clear_input_audio_transcription || input.clear_transcription {
+            normalized.input_audio_transcription = None;
+            input.transcription = None;
+            normalized.clear_input_audio_transcription = true;
+            input.clear_transcription = true;
+        } else {
+            let effective = input
+                .transcription
+                .clone()
+                .or_else(|| normalized.input_audio_transcription.clone());
+            input.transcription = effective.clone();
+            normalized.input_audio_transcription = effective;
+        }
+
+        if normalized.clear_input_audio_noise_reduction || input.clear_noise_reduction {
+            normalized.input_audio_noise_reduction = None;
+            input.noise_reduction = None;
+            normalized.clear_input_audio_noise_reduction = true;
+            input.clear_noise_reduction = true;
+        } else {
+            let effective = input
+                .noise_reduction
+                .clone()
+                .or_else(|| normalized.input_audio_noise_reduction.clone());
+            input.noise_reduction = effective.clone();
+            normalized.input_audio_noise_reduction = effective;
+        }
+
+        if normalized.clear_turn_detection || input.clear_turn_detection {
+            normalized.turn_detection = None;
+            input.turn_detection = None;
+            normalized.clear_turn_detection = true;
+            input.clear_turn_detection = true;
+        } else {
+            let effective = input
+                .turn_detection
+                .clone()
+                .or_else(|| normalized.turn_detection.clone());
+            input.turn_detection = effective.clone();
+            normalized.turn_detection = effective;
+        }
+
+        if normalized.clear_output_audio_format || output.clear_format {
+            normalized.output_audio_format = None;
+            output.format = None;
+            normalized.clear_output_audio_format = true;
+            output.clear_format = true;
+        } else {
+            let effective = output
+                .format
+                .clone()
+                .or_else(|| normalized.output_audio_format.clone());
+            output.format = effective.clone();
+            normalized.output_audio_format = effective;
+        }
+
+        if normalized.clear_voice || output.clear_voice {
+            normalized.voice = None;
+            output.voice = None;
+            normalized.clear_voice = true;
+            output.clear_voice = true;
+        } else {
+            let effective = output.voice.clone().or_else(|| normalized.voice.clone());
+            output.voice = effective.clone();
+            normalized.voice = effective;
+        }
+
+        if normalized.clear_speed || output.clear_speed {
+            normalized.speed = None;
+            output.speed = None;
+            normalized.clear_speed = true;
+            output.clear_speed = true;
+        } else {
+            let effective = output.speed.or(normalized.speed);
+            output.speed = effective;
+            normalized.speed = effective;
+        }
+
+        audio.input = input.has_values_or_clears().then_some(input);
+        audio.output = output.has_values_or_clears().then_some(output);
+        normalized.audio = (audio.input.is_some() || audio.output.is_some()).then_some(audio);
+
+        normalized
+    }
+
+    pub fn without_clear_markers(&self) -> Self {
+        let mut cleaned = self.clone();
+        cleaned.clear_voice = false;
+        cleaned.clear_speed = false;
+        cleaned.clear_input_audio_format = false;
+        cleaned.clear_output_audio_format = false;
+        cleaned.clear_input_audio_transcription = false;
+        cleaned.clear_input_audio_noise_reduction = false;
+        cleaned.clear_turn_detection = false;
+        cleaned.audio = cleaned
+            .audio
+            .as_ref()
+            .and_then(RealtimeAudioConfig::without_clear_markers);
+        cleaned
     }
 }
 

@@ -264,12 +264,15 @@ impl RealtimeSession {
         let merged_model_settings = {
             let current_settings = self.model_settings().await;
             match (&current_settings, &agent.model_settings) {
-                (Some(current), Some(update)) => Some(current.merge(update)),
-                (None, Some(update)) => Some(update.clone()),
+                (Some(current), Some(update)) => Some(current.merge(update).normalize_effective()),
+                (None, Some(update)) => Some(update.normalize_effective()),
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             }
         };
+        let persisted_model_settings = merged_model_settings
+            .as_ref()
+            .map(RealtimeSessionModelSettings::without_clear_markers);
 
         if let Some(model_settings) = &merged_model_settings {
             if let Some(model_driver) = self.model_driver.lock().await.as_mut() {
@@ -281,12 +284,12 @@ impl RealtimeSession {
         }
 
         let mut updated_agent = agent.clone();
-        updated_agent.model_settings = merged_model_settings.clone();
+        updated_agent.model_settings = persisted_model_settings.clone();
 
         {
             let mut state = self.shared_state.state.lock().await;
             state.active_agent = Some(updated_agent.clone());
-            state.model_settings = merged_model_settings.clone();
+            state.model_settings = persisted_model_settings.clone();
         }
 
         if previous_agent.as_ref().map(|current| current.name.as_str())
