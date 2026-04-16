@@ -312,4 +312,89 @@ mod tests {
         let seen = custom_capture.seen.lock().expect("seen lock");
         assert_eq!(seen.as_slice(), &[Some("gpt-5".to_owned())]);
     }
+
+    #[tokio::test]
+    async fn multi_provider_routes_models_predictably() {
+        let default_capture = Arc::new(CaptureModel::default());
+        let openrouter_capture = Arc::new(CaptureModel::default());
+        let explicit_openai_capture = Arc::new(CaptureModel::default());
+
+        let mut provider_map = MultiProviderMap::default();
+        provider_map.add_provider(
+            "openrouter",
+            Arc::new(CaptureProvider::new(openrouter_capture.clone())),
+        );
+        provider_map.add_provider(
+            "openai",
+            Arc::new(CaptureProvider::new(explicit_openai_capture.clone())),
+        );
+
+        let alias_provider =
+            MultiProvider::new(Arc::new(CaptureProvider::new(default_capture.clone())));
+        alias_provider
+            .resolve(Some("openai/gpt-5"))
+            .generate(ModelRequest::default())
+            .await
+            .expect("openai alias should resolve through the default provider");
+
+        let literal_provider =
+            MultiProvider::new(Arc::new(CaptureProvider::new(default_capture.clone())))
+                .with_openai_prefix_mode(MultiProviderOpenAIPrefixMode::ModelId)
+                .with_unknown_prefix_mode(MultiProviderUnknownPrefixMode::ModelId);
+        literal_provider
+            .resolve(Some("openai/gpt-5"))
+            .generate(ModelRequest::default())
+            .await
+            .expect("model-id mode should preserve the openai prefix");
+        literal_provider
+            .resolve(Some("unknown/gpt-5"))
+            .generate(ModelRequest::default())
+            .await
+            .expect("unknown prefixes should be passed through in model-id mode");
+
+        let unknown_error =
+            MultiProvider::new(Arc::new(CaptureProvider::new(default_capture.clone())))
+                .resolve(Some("unknown/gpt-5"))
+                .generate(ModelRequest::default())
+                .await
+                .expect_err("unknown prefixes should error by default");
+        assert!(
+            unknown_error
+                .to_string()
+                .contains("unknown model provider prefix `unknown`")
+        );
+
+        let mapped_provider =
+            MultiProvider::new(Arc::new(CaptureProvider::new(default_capture.clone())))
+                .with_provider_map(provider_map)
+                .with_openai_prefix_mode(MultiProviderOpenAIPrefixMode::ModelId);
+        mapped_provider
+            .resolve(Some("openrouter/gpt-5"))
+            .generate(ModelRequest::default())
+            .await
+            .expect("explicit provider-map entries should route by prefix");
+        mapped_provider
+            .resolve(Some("openai/gpt-5"))
+            .generate(ModelRequest::default())
+            .await
+            .expect("provider-map openai entries should override built-in prefix handling");
+
+        let default_seen = default_capture.seen.lock().expect("seen lock");
+        assert_eq!(
+            default_seen.as_slice(),
+            &[
+                Some("gpt-5".to_owned()),
+                Some("openai/gpt-5".to_owned()),
+                Some("unknown/gpt-5".to_owned()),
+            ]
+        );
+        drop(default_seen);
+
+        let openrouter_seen = openrouter_capture.seen.lock().expect("seen lock");
+        assert_eq!(openrouter_seen.as_slice(), &[Some("gpt-5".to_owned())]);
+        drop(openrouter_seen);
+
+        let explicit_openai_seen = explicit_openai_capture.seen.lock().expect("seen lock");
+        assert_eq!(explicit_openai_seen.as_slice(), &[Some("gpt-5".to_owned())]);
+    }
 }
