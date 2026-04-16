@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify};
 
 use crate::agent::Agent;
-use crate::errors::{AgentsError, Result};
+use crate::errors::Result;
 use crate::items::RunItem;
 use crate::model::ModelResponse;
 use crate::result::RunResult;
@@ -17,7 +17,7 @@ use crate::stream_events::{
 #[derive(Debug, Default)]
 pub(crate) struct LiveRunStreamState {
     events: Mutex<Vec<StreamEvent>>,
-    completion: Mutex<Option<std::result::Result<RunResult, String>>>,
+    completion: Mutex<Option<Result<RunResult>>>,
     notify: Notify,
     revision: AtomicU64,
 }
@@ -27,14 +27,14 @@ impl LiveRunStreamState {
         self.events.lock().await.get(index).cloned()
     }
 
-    pub(crate) async fn completion(&self) -> Option<std::result::Result<RunResult, String>> {
+    pub(crate) async fn completion(&self) -> Option<Result<RunResult>> {
         self.completion.lock().await.clone()
     }
 
     pub(crate) async fn wait_for_completion(&self) -> Result<RunResult> {
         loop {
             if let Some(result) = self.completion().await {
-                return result.map_err(AgentsError::message);
+                return result;
             }
             let revision = self.revision();
             self.wait_for_change_since(revision).await;
@@ -137,8 +137,7 @@ impl StreamRecorder {
             }
         }
 
-        let stored = result.map_err(|error| error.to_string());
-        *self.state.completion.lock().await = Some(stored);
+        *self.state.completion.lock().await = Some(result);
         self.state.revision.fetch_add(1, Ordering::SeqCst);
         self.state.notify.notify_waiters();
     }

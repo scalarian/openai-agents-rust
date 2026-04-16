@@ -1682,6 +1682,7 @@ mod tests {
     use crate::errors::AgentsError;
     use crate::guardrail::{GuardrailFunctionOutput, input_guardrail, output_guardrail};
     use crate::lifecycle::{AgentHooks, RunHooks};
+    use crate::memory::SessionSettings;
     use crate::model::Model;
     use crate::run_config::ReasoningItemIdPolicy;
     use crate::run_context::{RunContext, RunContextWrapper};
@@ -3240,7 +3241,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_does_not_replay_filter_rewritten_initial_input_in_server_conversations() {
+    async fn conversation_id_only_sends_new_items_after_first_turn() {
         let model = Arc::new(ConversationDeltaCaptureModel::default());
         let provider = Arc::new(StaticProvider {
             model: model.clone(),
@@ -3256,19 +3257,7 @@ mod tests {
         let runner = Runner::new()
             .with_model_provider(provider)
             .with_config(RunConfig {
-                conversation_id: Some("conv-filtered".to_owned()),
-                auto_previous_response_id: true,
-                call_model_input_filter: Some(Arc::new(|mut data| {
-                    async move {
-                        if let Some(first) = data.model_data.input.first_mut() {
-                            if first.as_text() == Some("hello") {
-                                *first = InputItem::from("filtered-hello");
-                            }
-                        }
-                        Ok::<_, AgentsError>(data.model_data)
-                    }
-                    .boxed()
-                })),
+                conversation_id: Some("conv-delta".to_owned()),
                 ..RunConfig::default()
             });
         let agent = Agent::builder("assistant")
@@ -3278,7 +3267,7 @@ mod tests {
         let result = runner
             .run(&agent, "hello")
             .await
-            .expect("server-managed filtered run should succeed");
+            .expect("conversation-backed run should succeed");
 
         assert_eq!(result.final_output.as_deref(), Some("done"));
 
@@ -3288,22 +3277,34 @@ mod tests {
             .expect("conversation delta requests lock")
             .clone();
         assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].conversation_id.as_deref(), Some("conv-delta"));
+        assert_eq!(requests[1].conversation_id.as_deref(), Some("conv-delta"));
         assert_eq!(
             requests[0]
                 .input
                 .iter()
                 .filter_map(InputItem::as_text)
                 .collect::<Vec<_>>(),
-            vec!["filtered-hello"]
+            vec!["hello"]
         );
-        assert!(requests[1].input.iter().all(
-            |item| item.as_text() != Some("hello") && item.as_text() != Some("filtered-hello")
-        ));
+        assert!(
+            requests[1]
+                .input
+                .iter()
+                .all(|item| item.as_text() != Some("hello"))
+        );
         assert!(requests[1].input.iter().any(|item| matches!(
             item,
             InputItem::Json { value }
                 if value.get("type").and_then(Value::as_str) == Some("tool_call_output")
         )));
+        assert_eq!(result.conversation_id(), Some("conv-delta"));
+        assert_eq!(
+            result
+                .durable_state()
+                .and_then(|state| state.conversation_id.as_deref()),
+            Some("conv-delta")
+        );
     }
 
     #[tokio::test]
@@ -3618,7 +3619,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_advances_auto_previous_response_id_across_turns() {
+    async fn auto_previous_response_id_chains_across_turns() {
         let model = Arc::new(AutoPreviousResponseModel::default());
         let provider = Arc::new(AutoPreviousResponseProvider {
             model: model.clone(),
@@ -3732,6 +3733,128 @@ mod tests {
                 .map(|state| state.persisted_item_count),
             Some(2)
         );
+    }
+
+    #[tokio::test]
+    async fn session_persistence_rejects_server_managed_state() {
+        let agent = Agent::builder("assistant").build();
+        let session: Arc<dyn Session + Sync> = Arc::new(MemorySession::new("session"));
+
+        for runner in [
+            Runner::new().with_config(RunConfig {
+                conversation_id: Some("conv_123".to_owned()),
+                ..RunConfig::default()
+            }),
+            Runner::new().with_config(RunConfig {
+                previous_response_id: Some("resp_123".to_owned()),
+                ..RunConfig::default()
+            }),
+            Runner::new().with_config(RunConfig {
+                auto_previous_response_id: true,
+                ..RunConfig::default()
+            }),
+        ] {
+            let error = runner
+                .run_with_session(&agent, "hello", session.as_ref())
+                .await
+                .expect_err("session-backed runs should reject server-managed conversation state");
+            assert!(matches!(error, AgentsError::User(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Session persistence cannot be combined"),
+                "unexpected error: {error}"
+            );
+        }
+
+        let streamed_error = Runner::new()
+            .with_config(RunConfig {
+                conversation_id: Some("conv_streamed".to_owned()),
+                ..RunConfig::default()
+            })
+            .run_streamed_with_options(
+                &agent,
+                vec![InputItem::from("hello")],
+                RunOptions {
+                    session: Some(session.clone()),
+                    ..RunOptions::default()
+                },
+            )
+            .await
+            .expect("streamed session-backed run should start")
+            .wait_for_completion()
+            .await
+            .expect_err("streamed session-backed run should reject server-managed state");
+        assert!(matches!(streamed_error, AgentsError::User(_)));
+        assert!(
+            streamed_error
+                .to_string()
+                .contains("Session persistence cannot be combined"),
+            "unexpected streamed error: {streamed_error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_settings_limit_bounds_injected_history() {
+        let agent = Agent::builder("assistant").build();
+
+        for (label, session, expected) in [
+            (
+                "limit-zero",
+                MemorySession::new("session-zero")
+                    .with_settings(SessionSettings { limit: Some(0) }),
+                vec!["hello"],
+            ),
+            (
+                "limit-two",
+                MemorySession::new("session-two").with_settings(SessionSettings { limit: Some(2) }),
+                vec!["b", "c", "hello"],
+            ),
+            (
+                "limit-none",
+                MemorySession::new("session-none").with_settings(SessionSettings { limit: None }),
+                vec!["a", "b", "c", "hello"],
+            ),
+        ] {
+            let model = Arc::new(SessionCaptureModel::default());
+            let provider = Arc::new(SessionCaptureProvider {
+                model: model.clone(),
+            });
+            session
+                .add_items(vec![
+                    InputItem::from("a"),
+                    InputItem::from("b"),
+                    InputItem::from("c"),
+                ])
+                .await
+                .expect("history should be stored");
+
+            let result = Runner::new()
+                .with_model_provider(provider)
+                .run_with_session(&agent, "hello", &session)
+                .await
+                .expect("session-backed run should succeed");
+
+            assert_eq!(
+                result.final_output.as_deref(),
+                Some("session-ok"),
+                "{label}"
+            );
+            assert_eq!(
+                model
+                    .seen_inputs
+                    .lock()
+                    .expect("session seen inputs lock")
+                    .first()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(InputItem::as_text)
+                    .collect::<Vec<_>>(),
+                expected,
+                "{label}"
+            );
+        }
     }
 
     #[tokio::test]

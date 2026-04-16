@@ -7,7 +7,7 @@ use crate::exceptions::{
 };
 
 /// Errors produced by the Rust Agents SDK scaffold.
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum AgentsError {
     #[error("model provider is not configured")]
     ModelProviderNotConfigured,

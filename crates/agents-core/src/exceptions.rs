@@ -29,19 +29,19 @@ pub struct MaxTurnsExceeded {
     pub message: String,
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 #[error("{message}")]
 pub struct ModelBehaviorError {
     pub message: String,
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 #[error("{message}")]
 pub struct UserError {
     pub message: String,
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 #[error("tool `{tool_name}` timed out after {timeout_seconds} seconds")]
 pub struct ToolTimeoutError {
     pub tool_name: String,
