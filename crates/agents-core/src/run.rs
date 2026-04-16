@@ -850,6 +850,7 @@ impl Runner {
                 if let Some(handler_result) = handler_result {
                     internal_error_handlers::validate_handler_final_output(
                         &handler_result.final_output,
+                        current_agent.output_schema.as_ref(),
                     )?;
                     if let Some((text, output_item, include_in_history)) =
                         internal_error_handlers::resolve_run_error_handler_result(Some(
@@ -4286,6 +4287,71 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, OutputItem::Json { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn max_turn_handler_validates_structured_output_schema() {
+        let output_schema =
+            crate::OutputSchemaDefinition::from_output_type::<StructuredAnswer>(true)
+                .expect("structured output schema should build");
+        let search_tool =
+            function_tool(
+                "search",
+                "Search documents",
+                |_ctx, args: SearchArgs| async move {
+                    Ok::<_, AgentsError>(format!("loop:{}", args.query))
+                },
+            )
+            .expect("function tool should build");
+        let build_runner = |final_output: Value| {
+            Runner::new()
+                .with_model_provider(Arc::new(LoopingToolProvider {
+                    model: Arc::new(LoopingToolModel::default()),
+                }))
+                .with_config(RunConfig {
+                    max_turns: 1,
+                    run_error_handlers: crate::run_error_handlers::RunErrorHandlers {
+                        max_turns: Some(Arc::new(move |_input| {
+                            let final_output = final_output.clone();
+                            async move {
+                                Some(crate::run_error_handlers::RunErrorHandlerResult {
+                                    final_output,
+                                    include_in_history: true,
+                                })
+                            }
+                            .boxed()
+                        })),
+                    },
+                    ..RunConfig::default()
+                })
+        };
+        let agent = Agent::builder("assistant")
+            .output_schema(output_schema)
+            .function_tool(search_tool)
+            .build();
+
+        let valid = build_runner(json!({"answer":"done"}))
+            .run(&agent, "hello")
+            .await
+            .expect("schema-valid handler output should be accepted");
+        assert_eq!(
+            valid.final_output.as_deref(),
+            Some("{\n  \"answer\": \"done\"\n}")
+        );
+        assert!(valid.output.iter().any(
+            |item| matches!(item, OutputItem::Json { value } if value == &json!({"answer":"done"}))
+        ));
+
+        let error = build_runner(json!({"answer":"done","unexpected":true}))
+            .run(&agent, "hello")
+            .await
+            .expect_err("schema-invalid handler output should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("did not match structured output schema")
+        );
+        assert!(error.to_string().contains("unexpected"));
     }
 
     #[tokio::test]

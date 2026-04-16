@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::OutputSchemaDefinition;
+use crate::exceptions::ModelBehaviorError;
 use crate::items::OutputItem;
 use crate::run_error_handlers::RunErrorHandlerResult;
 
@@ -31,11 +33,34 @@ pub(crate) fn resolve_run_error_handler_result(
     })
 }
 
-pub(crate) fn validate_handler_final_output(result: &Value) -> crate::errors::Result<()> {
-    match result {
-        Value::Null => Err(crate::errors::AgentsError::message(
+pub(crate) fn validate_handler_final_output(
+    result: &Value,
+    output_schema: Option<&OutputSchemaDefinition>,
+) -> crate::errors::Result<()> {
+    if matches!(result, Value::Null) {
+        return Err(crate::errors::AgentsError::message(
             "run error handler must return a non-null final_output",
-        )),
-        _ => Ok(()),
+        ));
     }
+
+    if let Some(output_schema) = output_schema {
+        let validator = jsonschema::validator_for(&output_schema.schema).map_err(|error| {
+            crate::errors::AgentsError::from(ModelBehaviorError {
+                message: format!(
+                    "run error handler final_output could not compile structured output schema `{}`: {error}",
+                    output_schema.name
+                ),
+            })
+        })?;
+        validator.validate(result).map_err(|error| {
+            crate::errors::AgentsError::from(ModelBehaviorError {
+                message: format!(
+                    "run error handler final_output did not match structured output schema `{}`: {error}",
+                    output_schema.name
+                ),
+            })
+        })?;
+    }
+
+    Ok(())
 }

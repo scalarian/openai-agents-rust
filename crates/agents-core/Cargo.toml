@@ -19,6 +19,7 @@ name = "agents_core"
 [dependencies]
 async-trait.workspace = true
 futures.workspace = true
+jsonschema.workspace = true
 log.workspace = true
 schemars.workspace = true
 serde.workspace = true
