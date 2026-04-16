@@ -42,11 +42,140 @@ pub(crate) fn compose_replay_input_items(
     generated_items: &[RunItem],
     reasoning_item_id_policy: ReasoningItemIdPolicy,
 ) -> Vec<InputItem> {
-    let mut replay = copy_input_items(base_items);
+    let mut replay = sanitize_hosted_tool_replay_items(base_items);
     let generated_inputs = run_items_to_input_items(generated_items, reasoning_item_id_policy);
     let overlap = trailing_generated_overlap(base_items, &generated_inputs);
     replay.extend(generated_inputs.into_iter().skip(overlap));
     replay
+}
+
+fn sanitize_hosted_tool_replay_items(items: &[InputItem]) -> Vec<InputItem> {
+    let hosted_pairs = hosted_pairing_info(items);
+    items
+        .iter()
+        .enumerate()
+        .filter(|(index, item)| should_keep_hosted_replay_item(*index, item, &hosted_pairs))
+        .map(|(_, item)| item.clone())
+        .collect()
+}
+
+#[derive(Default)]
+struct HostedPairingInfo {
+    shell_call_ids: std::collections::BTreeSet<String>,
+    shell_output_ids: std::collections::BTreeSet<String>,
+    tool_search_call_ids: std::collections::BTreeSet<String>,
+    tool_search_output_ids: std::collections::BTreeSet<String>,
+    matched_anonymous_tool_search_call_indexes: std::collections::BTreeSet<usize>,
+    matched_anonymous_tool_search_output_indexes: std::collections::BTreeSet<usize>,
+}
+
+fn hosted_pairing_info(items: &[InputItem]) -> HostedPairingInfo {
+    let mut info = HostedPairingInfo::default();
+    let mut anonymous_tool_search_calls = Vec::new();
+
+    for (index, item) in items.iter().enumerate() {
+        let Some(value) = input_item_json(item) else {
+            continue;
+        };
+
+        match item_type(value) {
+            Some("shell_call") => {
+                if let Some(call_id) = call_id(value) {
+                    info.shell_call_ids.insert(call_id.to_owned());
+                }
+            }
+            Some("shell_call_output") => {
+                if let Some(call_id) = call_id(value) {
+                    info.shell_output_ids.insert(call_id.to_owned());
+                }
+            }
+            Some("tool_search_call") => match call_id(value) {
+                Some(call_id) => {
+                    info.tool_search_call_ids.insert(call_id.to_owned());
+                }
+                None => anonymous_tool_search_calls.push(index),
+            },
+            Some("tool_search_output") => match call_id(value) {
+                Some(call_id) => {
+                    info.tool_search_output_ids.insert(call_id.to_owned());
+                }
+                None => {
+                    if let Some(call_index) = anonymous_tool_search_calls.pop() {
+                        info.matched_anonymous_tool_search_call_indexes
+                            .insert(call_index);
+                        info.matched_anonymous_tool_search_output_indexes
+                            .insert(index);
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    info
+}
+
+fn should_keep_hosted_replay_item(
+    index: usize,
+    item: &InputItem,
+    pairing: &HostedPairingInfo,
+) -> bool {
+    let Some(value) = input_item_json(item) else {
+        return true;
+    };
+
+    match item_type(value) {
+        Some("shell_call") => {
+            if !is_completed_hosted_item(value) {
+                return true;
+            }
+            call_id(value).is_some_and(|call_id| pairing.shell_output_ids.contains(call_id))
+        }
+        Some("shell_call_output") => {
+            call_id(value).is_some_and(|call_id| pairing.shell_call_ids.contains(call_id))
+        }
+        Some("tool_search_call") => {
+            if !is_completed_hosted_item(value) {
+                return true;
+            }
+            match call_id(value) {
+                Some(call_id) => pairing.tool_search_output_ids.contains(call_id),
+                None => pairing
+                    .matched_anonymous_tool_search_call_indexes
+                    .contains(&index),
+            }
+        }
+        Some("tool_search_output") => match call_id(value) {
+            Some(call_id) => pairing.tool_search_call_ids.contains(call_id),
+            None => pairing
+                .matched_anonymous_tool_search_output_indexes
+                .contains(&index),
+        },
+        _ => true,
+    }
+}
+
+fn input_item_json(item: &InputItem) -> Option<&Value> {
+    match item {
+        InputItem::Text { .. } => None,
+        InputItem::Json { value } => Some(value),
+    }
+}
+
+fn item_type(value: &Value) -> Option<&str> {
+    value.get("type").and_then(Value::as_str)
+}
+
+fn call_id(value: &Value) -> Option<&str> {
+    value
+        .get("call_id")
+        .or_else(|| value.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn is_completed_hosted_item(value: &Value) -> bool {
+    value.get("status").and_then(Value::as_str) == Some("completed")
 }
 
 fn trailing_generated_overlap(base_items: &[InputItem], generated_inputs: &[InputItem]) -> usize {
@@ -268,5 +397,108 @@ mod tests {
             replay,
             vec![InputItem::from("done"), InputItem::from("done")]
         );
+    }
+
+    #[test]
+    fn drops_orphan_hosted_tool_artifacts_and_keeps_pending_calls() {
+        let replay = compose_replay_input_items(
+            &[
+                InputItem::Json {
+                    value: json!({
+                        "type": "shell_call",
+                        "call_id": "shell-orphan",
+                        "status": "completed",
+                        "action": {"command": "echo orphan"},
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "tool_search_call",
+                        "call_id": "search-keep",
+                        "status": "completed",
+                        "arguments": {"query": "rust"},
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "tool_search_output",
+                        "call_id": "search-keep",
+                        "status": "completed",
+                        "tools": [],
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "tool_search_output",
+                        "call_id": "search-orphan-output",
+                        "status": "completed",
+                        "tools": [],
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "function_call",
+                        "call_id": "pending-user-call",
+                        "name": "lookup",
+                        "arguments": "{}",
+                    }),
+                },
+            ],
+            &[],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert_eq!(replay.len(), 3);
+        assert!(replay.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("tool_search_call")
+                    && value.get("call_id").and_then(Value::as_str) == Some("search-keep")
+        )));
+        assert!(replay.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("tool_search_output")
+                    && value.get("call_id").and_then(Value::as_str) == Some("search-keep")
+        )));
+        assert!(replay.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("function_call")
+                    && value.get("call_id").and_then(Value::as_str) == Some("pending-user-call")
+        )));
+        assert!(!replay.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("call_id").and_then(Value::as_str) == Some("shell-orphan")
+        )));
+        assert!(!replay.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("call_id").and_then(Value::as_str) == Some("search-orphan-output")
+        )));
+    }
+
+    #[test]
+    fn keeps_pending_hosted_tool_calls_without_outputs() {
+        let replay = compose_replay_input_items(
+            &[InputItem::Json {
+                value: json!({
+                    "type": "tool_search_call",
+                    "call_id": "pending-tool-search",
+                    "status": "pending",
+                    "arguments": {"query": "continue"},
+                }),
+            }],
+            &[],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert_eq!(replay.len(), 1);
+        assert!(matches!(
+            &replay[0],
+            InputItem::Json { value }
+                if value.get("call_id").and_then(Value::as_str) == Some("pending-tool-search")
+        ));
     }
 }
