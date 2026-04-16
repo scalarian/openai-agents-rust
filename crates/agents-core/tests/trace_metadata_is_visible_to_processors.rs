@@ -83,7 +83,8 @@ async fn trace_metadata_is_visible_to_processors() {
         .traces
         .lock()
         .expect("traces lock")
-        .last()
+        .iter()
+        .find(|trace| trace.id == trace_id)
         .cloned()
         .expect("trace should be exported");
     assert_eq!(finished_trace.id, trace_id);
@@ -103,7 +104,7 @@ async fn trace_metadata_is_visible_to_processors() {
         .lock()
         .expect("spans lock")
         .iter()
-        .find(|span| span.name == "generation")
+        .find(|span| span.name == "generation" && span.trace_id == trace_id)
         .cloned()
         .expect("generation span should be exported");
     assert_eq!(generation_span.trace_id, trace_id);

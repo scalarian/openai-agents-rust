@@ -43,8 +43,14 @@ pub fn flush_traces() {
 }
 
 #[cfg(test)]
+pub(crate) fn trace_provider_test_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::tracing::TracingProcessor;
@@ -119,14 +125,19 @@ mod tests {
         }
     }
 
-    fn provider_test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    struct TraceProviderReset(Arc<dyn TraceProvider>);
+
+    impl Drop for TraceProviderReset {
+        fn drop(&mut self) {
+            set_trace_provider(self.0.clone());
+        }
     }
 
     #[test]
     fn replaces_global_provider() {
-        let _guard = provider_test_lock().lock().expect("provider test lock");
+        let _guard = trace_provider_test_lock().blocking_lock();
+        let previous_provider = get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
         let provider = Arc::new(DummyProvider::default());
         let provider_trait: Arc<dyn TraceProvider> = provider.clone();
         set_trace_provider(provider_trait);
@@ -139,7 +150,9 @@ mod tests {
 
     #[test]
     fn forwards_disable_and_flush_to_provider() {
-        let _guard = provider_test_lock().lock().expect("provider test lock");
+        let _guard = trace_provider_test_lock().blocking_lock();
+        let previous_provider = get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
         let provider = Arc::new(DummyProvider::default());
         let provider_trait: Arc<dyn TraceProvider> = provider.clone();
         set_trace_provider(provider_trait);

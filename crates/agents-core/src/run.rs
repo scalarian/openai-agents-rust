@@ -2385,11 +2385,6 @@ mod tests {
         LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
     }
 
-    fn trace_provider_test_lock() -> &'static tokio::sync::Mutex<()> {
-        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-    }
-
     struct DefaultRunnerReset(AgentRunner);
 
     impl Drop for DefaultRunnerReset {
@@ -2989,7 +2984,9 @@ mod tests {
 
     #[tokio::test]
     async fn runner_redacts_tool_span_payloads_by_default() {
-        let _trace_guard = trace_provider_test_lock().lock().await;
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
         let previous_provider = crate::tracing::get_trace_provider();
         let _provider_reset = TraceProviderReset(previous_provider);
         let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
@@ -3040,7 +3037,9 @@ mod tests {
 
     #[tokio::test]
     async fn runner_tracing_disabled_suppresses_trace_exports() {
-        let _trace_guard = trace_provider_test_lock().lock().await;
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
         let previous_provider = crate::tracing::get_trace_provider();
         let _provider_reset = TraceProviderReset(previous_provider);
         let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
@@ -3088,7 +3087,9 @@ mod tests {
 
     #[tokio::test]
     async fn trace_metadata_is_visible_to_processors() {
-        let _trace_guard = trace_provider_test_lock().lock().await;
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
         let previous_provider = crate::tracing::get_trace_provider();
         let _provider_reset = TraceProviderReset(previous_provider);
         let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
@@ -3120,7 +3121,8 @@ mod tests {
             .traces
             .lock()
             .expect("traces lock")
-            .last()
+            .iter()
+            .find(|trace| trace.id == trace_id)
             .cloned()
             .expect("trace should be exported");
         assert_eq!(finished_trace.id, trace_id);
@@ -3138,7 +3140,7 @@ mod tests {
         let generation_span = processor
             .spans()
             .into_iter()
-            .find(|span| span.name == "generation")
+            .find(|span| span.name == "generation" && span.trace_id == trace_id)
             .expect("generation span should be exported");
         assert_eq!(generation_span.trace_id, trace_id);
         assert_eq!(
