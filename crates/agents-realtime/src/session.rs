@@ -261,7 +261,17 @@ impl RealtimeSession {
 
     pub async fn update_agent(&self, agent: RealtimeAgent) -> Result<RealtimeEvent> {
         let previous_agent = self.active_agent().await;
-        if let Some(model_settings) = &agent.model_settings {
+        let merged_model_settings = {
+            let current_settings = self.model_settings().await;
+            match (&current_settings, &agent.model_settings) {
+                (Some(current), Some(update)) => Some(current.merge(update)),
+                (None, Some(update)) => Some(update.clone()),
+                (Some(current), None) => Some(current.clone()),
+                (None, None) => None,
+            }
+        };
+
+        if let Some(model_settings) = &merged_model_settings {
             if let Some(model_driver) = self.model_driver.lock().await.as_mut() {
                 let model_events = model_driver.update_session(model_settings).await?;
                 self.shared_state
@@ -270,13 +280,17 @@ impl RealtimeSession {
             }
         }
 
+        let mut updated_agent = agent.clone();
+        updated_agent.model_settings = merged_model_settings.clone();
+
         {
             let mut state = self.shared_state.state.lock().await;
-            state.active_agent = Some(agent.clone());
-            state.model_settings = agent.model_settings.clone();
+            state.active_agent = Some(updated_agent.clone());
+            state.model_settings = merged_model_settings.clone();
         }
 
-        if previous_agent.as_ref().map(|current| current.name.as_str()) != Some(agent.name.as_str())
+        if previous_agent.as_ref().map(|current| current.name.as_str())
+            != Some(updated_agent.name.as_str())
         {
             if let Some(previous_agent) = previous_agent {
                 self.shared_state
@@ -292,7 +306,7 @@ impl RealtimeSession {
                 .push_event(RealtimeEvent::AgentStart(RealtimeAgentStartEvent {
                     info: RealtimeEventInfo {
                         session_id: Some(self.session_id.clone()),
-                        agent_name: Some(agent.name.clone()),
+                        agent_name: Some(updated_agent.name.clone()),
                     },
                 }))
                 .await;
@@ -301,9 +315,9 @@ impl RealtimeSession {
         let event = RealtimeEvent::SessionUpdated(RealtimeSessionUpdatedEvent {
             info: RealtimeEventInfo {
                 session_id: Some(self.session_id.clone()),
-                agent_name: Some(agent.name),
+                agent_name: Some(updated_agent.name),
             },
-            model: agent
+            model: updated_agent
                 .model_settings
                 .as_ref()
                 .and_then(|settings| settings.model_name.clone())

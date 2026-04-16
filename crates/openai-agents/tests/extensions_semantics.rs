@@ -124,3 +124,78 @@ fn twilio_transport_resets_stream_state_on_new_start() {
         }]
     );
 }
+
+#[test]
+fn cloudflare_and_twilio_transport_contracts() {
+    let transport =
+        CloudflareRealtimeTransportLayer::new("wss://api.openai.com/v1/realtime?model=foo");
+    let expected_sdk_header = format!("openai-agents-sdk.{VERSION}");
+    let socket = transport
+        .connect_with("ek_test", |request| {
+            assert_eq!(request.url, "https://api.openai.com/v1/realtime?model=foo");
+            assert_eq!(
+                request.headers.get("Authorization").map(String::as_str),
+                Some("Bearer ek_test")
+            );
+            assert_eq!(
+                request
+                    .headers
+                    .get("X-OpenAI-Agents-SDK")
+                    .map(String::as_str),
+                Some(expected_sdk_header.as_str())
+            );
+            Ok(FakeCloudflareSocket::default())
+        })
+        .expect("cloudflare upgrade should succeed");
+    assert!(socket.accepted);
+
+    let mut twilio = TwilioRealtimeTransportLayer::new();
+    let normalized = twilio.normalize_session_config(None);
+    assert_eq!(
+        normalized.input_audio_format,
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+    assert_eq!(
+        normalized.output_audio_format,
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+
+    let started = twilio
+        .handle_incoming_message(r#"{"event":"start","start":{"streamSid":"sid-1"}}"#, true)
+        .expect("start should parse");
+    assert_eq!(
+        started,
+        vec![TwilioRealtimeTransportAction::StreamStarted {
+            stream_sid: "sid-1".to_owned()
+        }]
+    );
+
+    let first = twilio.audio_messages(Some("response"), &[0; 16]);
+    assert_eq!(
+        first.last().map(TwilioOutboundMessage::to_json_value),
+        Some(serde_json::json!({
+            "event":"mark",
+            "streamSid":"sid-1",
+            "mark":{"name":"response:2"}
+        }))
+    );
+
+    twilio
+        .handle_incoming_message(r#"{"event":"start","start":{"streamSid":"sid-2"}}"#, true)
+        .expect("second start should parse");
+    let second = twilio.audio_messages(Some("response"), &[0; 8]);
+    assert_eq!(
+        second.last().map(TwilioOutboundMessage::to_json_value),
+        Some(serde_json::json!({
+            "event":"mark",
+            "streamSid":"sid-2",
+            "mark":{"name":"response:1"}
+        }))
+    );
+    assert_eq!(
+        twilio.interrupt_decision(true).messages,
+        vec![TwilioOutboundMessage::Clear {
+            stream_sid: Some("sid-2".to_owned())
+        }]
+    );
+}

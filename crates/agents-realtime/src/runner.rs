@@ -50,6 +50,7 @@ impl RealtimeRunner {
                 connected: false,
                 last_connection_url: None,
                 last_session_payload: None,
+                applied_settings: None,
             }))
             .await;
         session.connect(Some(effective_agent.clone())).await?;

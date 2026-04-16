@@ -69,6 +69,7 @@ pub struct OpenAIRealtimeWebSocketModel {
     pub connected: bool,
     pub last_connection_url: Option<String>,
     pub last_session_payload: Option<NormalizedRealtimeSessionPayload>,
+    pub applied_settings: Option<RealtimeSessionModelSettings>,
 }
 
 impl OpenAIRealtimeWebSocketModel {
@@ -359,11 +360,17 @@ impl RealtimeModel for OpenAIRealtimeWebSocketModel {
         &mut self,
         settings: &RealtimeSessionModelSettings,
     ) -> Result<Vec<RealtimeModelEvent>> {
-        if let Some(model_name) = &settings.model_name {
+        let merged_settings = self
+            .applied_settings
+            .as_ref()
+            .map(|current| current.merge(settings))
+            .unwrap_or_else(|| settings.clone());
+        if let Some(model_name) = &merged_settings.model_name {
             self.config.model = Some(model_name.clone());
         }
-        let payload = self.session_payload_from_settings(settings);
+        let payload = self.session_payload_from_settings(&merged_settings);
         self.last_session_payload = Self::normalize_session_payload(&payload);
+        self.applied_settings = Some(merged_settings);
         Ok(Vec::new())
     }
 }
@@ -375,6 +382,7 @@ pub struct OpenAIRealtimeSIPModel {
     pub connected: bool,
     pub last_connection_url: Option<String>,
     pub last_session_payload: Option<NormalizedRealtimeSessionPayload>,
+    pub applied_settings: Option<RealtimeSessionModelSettings>,
 }
 
 impl OpenAIRealtimeSIPModel {
@@ -385,6 +393,7 @@ impl OpenAIRealtimeSIPModel {
             connected: self.connected,
             last_connection_url: self.last_connection_url.clone(),
             last_session_payload: self.last_session_payload.clone(),
+            applied_settings: self.applied_settings.clone(),
         }
         .connection_url()
     }
@@ -458,7 +467,12 @@ impl RealtimeModel for OpenAIRealtimeSIPModel {
         &mut self,
         settings: &RealtimeSessionModelSettings,
     ) -> Result<Vec<RealtimeModelEvent>> {
-        if let Some(model_name) = &settings.model_name {
+        let merged_settings = self
+            .applied_settings
+            .as_ref()
+            .map(|current| current.merge(settings))
+            .unwrap_or_else(|| settings.clone());
+        if let Some(model_name) = &merged_settings.model_name {
             self.config.model = Some(model_name.clone());
         }
         let payload = OpenAIRealtimeWebSocketModel {
@@ -467,10 +481,12 @@ impl RealtimeModel for OpenAIRealtimeSIPModel {
             connected: self.connected,
             last_connection_url: self.last_connection_url.clone(),
             last_session_payload: self.last_session_payload.clone(),
+            applied_settings: self.applied_settings.clone(),
         }
-        .session_payload_from_settings(settings);
+        .session_payload_from_settings(&merged_settings);
         self.last_session_payload =
             OpenAIRealtimeWebSocketModel::normalize_session_payload(&payload);
+        self.applied_settings = Some(merged_settings);
         Ok(Vec::new())
     }
 }
@@ -511,6 +527,7 @@ mod tests {
             connected: false,
             last_connection_url: None,
             last_session_payload: None,
+            applied_settings: None,
         };
 
         assert_eq!(

@@ -228,3 +228,199 @@ async fn realtime_sip_runtime_state_exposes_call_attachment_and_applied_output_s
         Some(1.5)
     );
 }
+
+#[tokio::test]
+async fn realtime_models_expose_connected_transport_state() {
+    let mut websocket = OpenAIRealtimeWebSocketModel {
+        config: RealtimeModelConfig {
+            model: Some("gpt-realtime-1.5".to_owned()),
+        },
+        transport: TransportConfig {
+            api_key: Some("sk-test".to_owned()),
+            websocket_url: Some("https://example.com/realtime".to_owned()),
+            call_id: None,
+            query_params: BTreeMap::from([
+                ("foo".to_owned(), "bar".to_owned()),
+                ("model".to_owned(), "ignored-by-custom-query".to_owned()),
+            ]),
+        },
+        ..OpenAIRealtimeWebSocketModel::default()
+    };
+    websocket.connect().await.expect("connect should succeed");
+    websocket
+        .update_session(&RealtimeSessionModelSettings {
+            audio: Some(RealtimeAudioConfig {
+                output: Some(RealtimeAudioOutputConfig {
+                    voice: Some("marin".to_owned()),
+                    speed: Some(1.25),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeAudioConfig::default()
+            }),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("websocket session update should succeed");
+
+    let websocket_state = websocket.runtime_state();
+    assert_eq!(
+        websocket_state.transport.connection_url.as_deref(),
+        Some("wss://example.com/realtime?foo=bar&model=ignored-by-custom-query")
+    );
+    assert!(websocket_state.transport.api_key_present);
+    assert_eq!(
+        websocket_state
+            .last_session_payload
+            .as_ref()
+            .and_then(|payload| payload.payload.get("audio"))
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("voice"))
+            .and_then(serde_json::Value::as_str),
+        Some("marin")
+    );
+    assert_eq!(
+        websocket_state
+            .last_session_payload
+            .as_ref()
+            .and_then(|payload| payload.payload.get("audio"))
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("speed"))
+            .and_then(serde_json::Value::as_f64),
+        Some(1.25)
+    );
+
+    let mut sip = OpenAIRealtimeSIPModel {
+        config: RealtimeModelConfig {
+            model: Some("gpt-realtime-1.5".to_owned()),
+        },
+        transport: TransportConfig {
+            api_key: Some("sk-test".to_owned()),
+            websocket_url: Some("https://example.com/realtime".to_owned()),
+            call_id: Some("call_123".to_owned()),
+            query_params: BTreeMap::from([("foo".to_owned(), "bar".to_owned())]),
+        },
+        ..OpenAIRealtimeSIPModel::default()
+    };
+    sip.connect().await.expect("connect should succeed");
+    sip.update_session(&RealtimeSessionModelSettings {
+        audio: Some(RealtimeAudioConfig {
+            output: Some(RealtimeAudioOutputConfig {
+                voice: Some("verse".to_owned()),
+                speed: Some(1.5),
+                ..RealtimeAudioOutputConfig::default()
+            }),
+            ..RealtimeAudioConfig::default()
+        }),
+        ..RealtimeSessionModelSettings::default()
+    })
+    .await
+    .expect("sip session update should succeed");
+
+    let sip_state = sip.runtime_state();
+    assert_eq!(
+        sip_state.transport.connection_url.as_deref(),
+        Some("wss://example.com/realtime?call_id=call_123&foo=bar")
+    );
+    assert_eq!(sip_state.transport.call_id.as_deref(), Some("call_123"));
+    assert_eq!(
+        sip_state
+            .last_session_payload
+            .as_ref()
+            .and_then(|payload| payload.payload.get("audio"))
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("voice"))
+            .and_then(serde_json::Value::as_str),
+        Some("verse")
+    );
+    assert_eq!(
+        sip_state
+            .last_session_payload
+            .as_ref()
+            .and_then(|payload| payload.payload.get("audio"))
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("speed"))
+            .and_then(serde_json::Value::as_f64),
+        Some(1.5)
+    );
+}
+
+#[tokio::test]
+async fn partial_session_updates_preserve_prior_settings() {
+    let runner = RealtimeRunner::new(RealtimeAgent::new("assistant"));
+    let session = runner.run().await.expect("session should start");
+
+    session
+        .update_agent({
+            let mut configured = RealtimeAgent::new("assistant");
+            configured.model_settings = Some(RealtimeSessionModelSettings {
+                model_name: Some("gpt-realtime-1.5".to_owned()),
+                audio: Some(RealtimeAudioConfig {
+                    input: Some(RealtimeAudioInputConfig {
+                        format: Some(RealtimeAudioFormat::G711Ulaw),
+                        ..RealtimeAudioInputConfig::default()
+                    }),
+                    output: Some(RealtimeAudioOutputConfig {
+                        voice: Some("alloy".to_owned()),
+                        speed: Some(1.25),
+                        ..RealtimeAudioOutputConfig::default()
+                    }),
+                }),
+                ..RealtimeSessionModelSettings::default()
+            });
+            configured
+        })
+        .await
+        .expect("initial update should succeed");
+
+    let updated = session
+        .update_agent({
+            let mut partial = RealtimeAgent::new("assistant");
+            partial.model_settings = Some(RealtimeSessionModelSettings {
+                audio: Some(RealtimeAudioConfig {
+                    output: Some(RealtimeAudioOutputConfig {
+                        voice: Some("verse".to_owned()),
+                        ..RealtimeAudioOutputConfig::default()
+                    }),
+                    ..RealtimeAudioConfig::default()
+                }),
+                ..RealtimeSessionModelSettings::default()
+            });
+            partial
+        })
+        .await
+        .expect("partial update should succeed");
+
+    let settings = session
+        .model_settings()
+        .await
+        .expect("session should keep model settings");
+    assert_eq!(settings.model_name.as_deref(), Some("gpt-realtime-1.5"));
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.input.as_ref())
+            .and_then(|input| input.format.clone()),
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.voice.as_deref()),
+        Some("verse")
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.speed),
+        Some(1.25)
+    );
+    assert!(matches!(
+        updated,
+        RealtimeEvent::SessionUpdated(event) if event.model.as_deref() == Some("gpt-realtime-1.5")
+    ));
+}
