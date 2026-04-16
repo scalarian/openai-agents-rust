@@ -214,12 +214,18 @@ impl TraceProvider for DefaultTraceProvider {
             .or_else(|| parent.map(|span| span.trace_id))
             .or_else(|| self.get_current_trace().map(|trace| trace.id))
             .unwrap_or_else(gen_trace_id);
+        let metadata = trace
+            .map(|trace| trace.metadata.clone())
+            .or_else(|| parent.map(|span| span.metadata.clone()))
+            .or_else(|| self.get_current_trace().map(|trace| trace.metadata))
+            .unwrap_or_default();
         Span {
             id: span_id.unwrap_or_else(gen_span_id),
             trace_id,
             parent_id: parent
                 .map(|span| span.id)
                 .or_else(|| self.get_current_span().map(|span| span.id)),
+            metadata,
             name: name.to_owned(),
             started_at: None,
             ended_at: None,

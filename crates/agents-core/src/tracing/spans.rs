@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::tracing::span_data::SpanData;
@@ -18,6 +19,8 @@ pub struct Span {
     pub id: Uuid,
     pub trace_id: Uuid,
     pub parent_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, Value>,
     pub name: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
@@ -32,6 +35,7 @@ impl Span {
             id: gen_span_id(),
             trace_id,
             parent_id: None,
+            metadata: BTreeMap::new(),
             name: name.into(),
             started_at: None,
             ended_at: None,
@@ -43,6 +47,11 @@ impl Span {
 
     pub fn with_parent(mut self, parent_id: Option<Uuid>) -> Self {
         self.parent_id = parent_id;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: BTreeMap<String, Value>) -> Self {
+        self.metadata = metadata;
         self
     }
 

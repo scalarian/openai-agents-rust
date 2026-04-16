@@ -427,11 +427,19 @@ impl Runner {
             .trace_id
             .as_deref()
             .and_then(|value| Uuid::parse_str(value).ok());
+        let trace_metadata = self
+            .model_provider
+            .clone()
+            .or_else(|| self.config.model_provider.clone())
+            .and_then(|provider| {
+                provider.resolve_trace_metadata(self.config.trace_metadata.as_ref())
+            })
+            .or_else(|| self.config.trace_metadata.clone());
         let mut trace_manager = TraceCtxManager::with_options(
             &workflow_name,
             trace_id,
             self.config.group_id.clone(),
-            self.config.trace_metadata.clone(),
+            trace_metadata,
             self.config.tracing.as_ref(),
             self.config.tracing_disabled
                 || self
@@ -1251,6 +1259,7 @@ impl Runner {
                 tools,
                 output_schema: internal_turn_preparation::get_output_schema(agent),
             };
+            let request = model_provider.prepare_request(request);
             let response = model_provider
                 .resolve_with_settings(requested_model.as_deref(), &settings)
                 .generate(request)
@@ -3075,6 +3084,78 @@ mod tests {
                 .into_iter()
                 .any(|span| { span.name == "security_disabled_trace_search" })
         );
+    }
+
+    #[tokio::test]
+    async fn trace_metadata_is_visible_to_processors() {
+        let _trace_guard = trace_provider_test_lock().lock().await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        let model_provider = Arc::new(StaticProvider {
+            model: Arc::new(RequestCaptureModel::default()),
+        });
+        let trace_id = uuid::Uuid::new_v4();
+        let result = Runner::new()
+            .with_model_provider(model_provider)
+            .with_config(RunConfig {
+                trace_id: Some(trace_id.to_string()),
+                group_id: Some("group-explicit".to_owned()),
+                trace_metadata: Some(std::collections::BTreeMap::from([
+                    ("source".to_owned(), json!("integration-test")),
+                    ("nested".to_owned(), json!({"value": 1})),
+                ])),
+                ..RunConfig::default()
+            })
+            .run(&Agent::builder("assistant").build(), "hello")
+            .await
+            .expect("run should succeed");
+
+        let finished_trace = processor
+            .traces
+            .lock()
+            .expect("traces lock")
+            .last()
+            .cloned()
+            .expect("trace should be exported");
+        assert_eq!(finished_trace.id, trace_id);
+        assert_eq!(finished_trace.group_id.as_deref(), Some("group-explicit"));
+        assert_eq!(
+            finished_trace.metadata.get("source"),
+            Some(&json!("integration-test"))
+        );
+        assert_eq!(
+            finished_trace.metadata.get("nested"),
+            Some(&json!({"value": 1}))
+        );
+        assert_eq!(result.trace.as_ref().map(|trace| trace.id), Some(trace_id));
+
+        let generation_span = processor
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "generation")
+            .expect("generation span should be exported");
+        assert_eq!(generation_span.trace_id, trace_id);
+        assert_eq!(
+            generation_span.metadata.get("source"),
+            Some(&json!("integration-test"))
+        );
+        assert_eq!(
+            generation_span.metadata.get("nested"),
+            Some(&json!({"value": 1}))
+        );
+        let exported_span = serde_json::to_value(&generation_span).expect("span should serialize");
+        assert_eq!(exported_span["trace_id"], json!(trace_id));
+        assert_eq!(
+            exported_span["metadata"]["source"],
+            json!("integration-test")
+        );
+        assert_eq!(exported_span["metadata"]["nested"], json!({"value": 1}));
     }
 
     #[tokio::test]

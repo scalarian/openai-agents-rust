@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::OutputSchemaDefinition;
@@ -109,6 +111,17 @@ pub trait Model: Send + Sync {
 /// Resolves models by name.
 pub trait ModelProvider: Send + Sync {
     fn resolve(&self, model: Option<&str>) -> Arc<dyn Model>;
+
+    fn resolve_trace_metadata(
+        &self,
+        metadata: Option<&BTreeMap<String, Value>>,
+    ) -> Option<BTreeMap<String, Value>> {
+        metadata.cloned()
+    }
+
+    fn prepare_request(&self, request: ModelRequest) -> ModelRequest {
+        request
+    }
 
     fn resolve_with_settings(
         &self,

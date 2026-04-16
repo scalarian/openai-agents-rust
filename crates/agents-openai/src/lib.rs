@@ -17,6 +17,7 @@ mod defaults;
 mod fake_id;
 mod memory;
 mod models;
+mod openai_agent_registration;
 mod provider;
 #[path = "models/reasoning_content_replay.rs"]
 mod reasoning_content_replay;
@@ -53,6 +54,12 @@ pub use memory::{
 pub use models::OpenAIResponsesWsModel as OpenAIResponsesWSModel;
 pub use models::{
     OpenAIChatCompletionsModel, OpenAIClientOptions, OpenAIResponsesModel, OpenAIResponsesWsModel,
+};
+pub use openai_agent_registration::{
+    OPENAI_AGENT_HARNESS_ID_ENV_VAR, OPENAI_HARNESS_ID_TRACE_METADATA_KEY,
+    OpenAIAgentRegistrationConfig, ResolvedOpenAIAgentRegistrationConfig,
+    get_default_openai_agent_registration, resolve_openai_agent_registration_config,
+    set_default_openai_agent_registration, set_default_openai_harness,
 };
 pub use provider::{OpenAIProvider, OpenAIResponsesTransport};
 pub use reasoning_content_replay::{

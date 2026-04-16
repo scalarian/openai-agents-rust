@@ -1,12 +1,18 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use agents_core::{Model, ModelProvider, get_default_model};
+use agents_core::{Model, ModelProvider, ModelRequest, get_default_model};
+use serde_json::Value;
 
 use crate::defaults::{OpenAIApi, default_openai_api, default_openai_key};
 use crate::models::{
     OpenAIChatCompletionsModel, OpenAIClientOptions, OpenAIResponsesModel, OpenAIResponsesWsModel,
+};
+use crate::openai_agent_registration::{
+    OpenAIAgentRegistrationConfig, ResolvedOpenAIAgentRegistrationConfig,
+    merge_openai_harness_id_into_metadata, resolve_openai_agent_registration_config,
 };
 use crate::{
     get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
@@ -29,6 +35,7 @@ pub struct OpenAIProvider {
     pub api: Option<OpenAIApi>,
     pub use_responses: Option<bool>,
     pub use_responses_websocket: bool,
+    pub agent_registration: Option<ResolvedOpenAIAgentRegistrationConfig>,
     websocket_model_cache:
         Arc<Mutex<HashMap<(String, OpenAIClientOptions), Arc<OpenAIResponsesWsModel>>>>,
 }
@@ -44,6 +51,7 @@ impl Default for OpenAIProvider {
             api: None,
             use_responses: None,
             use_responses_websocket: get_use_responses_websocket_by_default() == Some(true),
+            agent_registration: None,
             websocket_model_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -91,6 +99,15 @@ impl OpenAIProvider {
 
     pub fn with_use_responses_websocket(mut self, use_responses_websocket: bool) -> Self {
         self.use_responses_websocket = use_responses_websocket;
+        self
+    }
+
+    pub fn with_agent_registration(
+        mut self,
+        agent_registration: OpenAIAgentRegistrationConfig,
+    ) -> Self {
+        self.agent_registration =
+            resolve_openai_agent_registration_config(Some(&agent_registration));
         self
     }
 
@@ -152,9 +169,35 @@ impl OpenAIProvider {
             .clone();
         entry
     }
+
+    pub fn effective_harness_id(&self) -> Option<String> {
+        self.agent_registration
+            .as_ref()
+            .map(|registration| registration.harness_id.clone())
+            .or_else(|| {
+                resolve_openai_agent_registration_config(None)
+                    .map(|registration| registration.harness_id)
+            })
+    }
 }
 
 impl ModelProvider for OpenAIProvider {
+    fn resolve_trace_metadata(
+        &self,
+        metadata: Option<&BTreeMap<String, Value>>,
+    ) -> Option<BTreeMap<String, Value>> {
+        merge_openai_harness_id_into_metadata(metadata, self.effective_harness_id().as_deref())
+    }
+
+    fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
+        request.settings.metadata = merge_openai_harness_id_into_metadata(
+            Some(&request.settings.metadata),
+            self.effective_harness_id().as_deref(),
+        )
+        .unwrap_or_default();
+        request
+    }
+
     fn resolve(&self, model: Option<&str>) -> Arc<dyn Model> {
         let resolved_default_model = get_default_model();
         let model_name = model.unwrap_or(resolved_default_model.as_str());
@@ -178,11 +221,42 @@ impl ModelProvider for OpenAIProvider {
 mod tests {
     use super::*;
     use crate::defaults::{default_openai_base_url, default_openai_websocket_base_url};
+    use crate::openai_agent_registration::{
+        OPENAI_AGENT_HARNESS_ID_ENV_VAR, OPENAI_HARNESS_ID_TRACE_METADATA_KEY,
+        OpenAIAgentRegistrationConfig, get_default_openai_agent_registration,
+        set_default_openai_agent_registration, set_default_openai_harness,
+    };
     use crate::{
         get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
         get_use_responses_websocket_by_default, set_default_openai_websocket_base_url,
         set_openai_base_url, set_use_responses_by_default, set_use_responses_websocket_by_default,
     };
+    use serde_json::json;
+    use std::env;
+
+    fn agent_registration_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    struct DefaultHarnessReset(Option<OpenAIAgentRegistrationConfig>);
+
+    impl Drop for DefaultHarnessReset {
+        fn drop(&mut self) {
+            set_default_openai_agent_registration(self.0.clone());
+        }
+    }
+
+    struct EnvHarnessReset(Option<String>);
+
+    impl Drop for EnvHarnessReset {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => unsafe { env::set_var(OPENAI_AGENT_HARNESS_ID_ENV_VAR, value) },
+                None => unsafe { env::remove_var(OPENAI_AGENT_HARNESS_ID_ENV_VAR) },
+            }
+        }
+    }
 
     #[test]
     fn resolves_defaults_into_client_options() {
@@ -355,5 +429,80 @@ mod tests {
         let explicit = provider.resolve(Some(default_model.as_str()));
 
         assert!(Arc::ptr_eq(&model, &explicit));
+    }
+
+    #[test]
+    fn harness_registration_metadata_follows_override_rules() {
+        let _guard = agent_registration_test_lock().lock().expect("test lock");
+        let _default_reset = DefaultHarnessReset(get_default_openai_agent_registration());
+        let _env_reset = EnvHarnessReset(env::var(OPENAI_AGENT_HARNESS_ID_ENV_VAR).ok());
+
+        unsafe { env::set_var(OPENAI_AGENT_HARNESS_ID_ENV_VAR, "env-harness") };
+        set_default_openai_harness(Some("default-harness"));
+
+        let default_provider = OpenAIProvider::new();
+        assert_eq!(
+            default_provider.effective_harness_id().as_deref(),
+            Some("default-harness")
+        );
+        assert_eq!(
+            default_provider
+                .resolve_trace_metadata(None)
+                .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
+            Some(json!("default-harness"))
+        );
+        assert_eq!(
+            default_provider
+                .prepare_request(ModelRequest::default())
+                .settings
+                .metadata
+                .get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY),
+            Some(&json!("default-harness"))
+        );
+
+        set_default_openai_agent_registration(None);
+        let env_provider = OpenAIProvider::new();
+        assert_eq!(
+            env_provider.effective_harness_id().as_deref(),
+            Some("env-harness")
+        );
+
+        let provider =
+            OpenAIProvider::new().with_agent_registration(OpenAIAgentRegistrationConfig {
+                harness_id: Some("provider-harness".to_owned()),
+            });
+        assert_eq!(
+            provider.effective_harness_id().as_deref(),
+            Some("provider-harness")
+        );
+        assert_eq!(
+            provider
+                .resolve_trace_metadata(Some(&BTreeMap::from([
+                    (
+                        OPENAI_HARNESS_ID_TRACE_METADATA_KEY.to_owned(),
+                        json!("explicit-harness"),
+                    ),
+                    ("source".to_owned(), json!("test")),
+                ])))
+                .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
+            Some(json!("explicit-harness"))
+        );
+        assert_eq!(
+            provider
+                .prepare_request(ModelRequest {
+                    settings: agents_core::ModelSettings {
+                        metadata: BTreeMap::from([(
+                            OPENAI_HARNESS_ID_TRACE_METADATA_KEY.to_owned(),
+                            json!("explicit-harness"),
+                        )]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .settings
+                .metadata
+                .get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY),
+            Some(&json!("explicit-harness"))
+        );
     }
 }
