@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -256,6 +260,25 @@ pub struct LocalSandboxSession {
     inner: Arc<LocalSandboxSessionInner>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalShellOutput {
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+impl LocalShellOutput {
+    pub fn success(&self) -> bool {
+        self.exit_code == 0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalSandboxPtySession {
+    inner: Arc<LocalSandboxPtySessionInner>,
+}
+
 #[derive(Debug)]
 struct LocalSandboxSessionInner {
     workspace_root: PathBuf,
@@ -263,6 +286,13 @@ struct LocalSandboxSessionInner {
     manifest: Manifest,
     runner_owned: bool,
     cleaned: Mutex<bool>,
+}
+
+#[derive(Debug)]
+struct LocalSandboxPtySessionInner {
+    child: Mutex<Child>,
+    output: Arc<Mutex<Vec<u8>>>,
+    reader: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl LocalSandboxSession {
@@ -376,6 +406,127 @@ impl LocalSandboxSession {
             path: operation.path,
         })
     }
+
+    pub fn run_shell(&self, command: &str) -> Result<LocalShellOutput> {
+        validate_shell_command(&self.inner.logical_root, command)?;
+
+        let output = Command::new("/bin/sh")
+            .arg("-lc")
+            .arg(command)
+            .current_dir(&self.inner.workspace_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+
+        Ok(LocalShellOutput {
+            command: command.to_owned(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: output.status.code().unwrap_or_default(),
+        })
+    }
+
+    pub fn open_pty(&self, command: &str) -> Result<LocalSandboxPtySession> {
+        validate_shell_command(&self.inner.logical_root, command)?;
+
+        let mut child = Command::new("/usr/bin/script")
+            .arg("-q")
+            .arg("/dev/null")
+            .arg("/bin/sh")
+            .arg("-lc")
+            .arg(command)
+            .current_dir(&self.inner.workspace_root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AgentsError::message("failed to capture PTY stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| AgentsError::message("failed to capture PTY stderr"))?;
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_stdout = output.clone();
+        let output_for_stderr = output.clone();
+        let reader = thread::spawn(move || {
+            read_process_output(stdout, output_for_stdout);
+            read_process_output(stderr, output_for_stderr);
+        });
+
+        Ok(LocalSandboxPtySession {
+            inner: Arc::new(LocalSandboxPtySessionInner {
+                child: Mutex::new(child),
+                output,
+                reader: Mutex::new(Some(reader)),
+            }),
+        })
+    }
+}
+
+impl LocalSandboxPtySession {
+    pub fn write_stdin(&self, input: impl AsRef<[u8]>) -> Result<()> {
+        let mut child = self.inner.child.lock().expect("sandbox pty child lock");
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| AgentsError::message("PTY stdin is closed"))?;
+        stdin
+            .write_all(input.as_ref())
+            .and_then(|_| stdin.flush())
+            .map_err(|error| AgentsError::message(error.to_string()))
+    }
+
+    pub fn read_output(&self) -> String {
+        let output = self.inner.output.lock().expect("sandbox pty output lock");
+        String::from_utf8_lossy(&output).into_owned()
+    }
+
+    pub fn wait_for_output(&self, needle: &str, timeout: Duration) -> Result<String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let output = self.read_output();
+            if output.contains(needle) {
+                return Ok(output);
+            }
+            if Instant::now() >= deadline {
+                return Err(AgentsError::message(format!(
+                    "timed out waiting for PTY output containing `{needle}`"
+                )));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    pub fn wait(&self) -> Result<i32> {
+        let status = {
+            let mut child = self.inner.child.lock().expect("sandbox pty child lock");
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.flush();
+            }
+            child
+                .wait()
+                .map_err(|error| AgentsError::message(error.to_string()))?
+        };
+
+        if let Some(reader) = self
+            .inner
+            .reader
+            .lock()
+            .expect("sandbox pty reader lock")
+            .take()
+        {
+            let _ = reader.join();
+        }
+
+        Ok(status.code().unwrap_or_default())
+    }
 }
 
 impl Drop for LocalSandboxSessionInner {
@@ -460,6 +611,11 @@ fn default_function_tools(session: LocalSandboxSession) -> Result<Vec<FunctionTo
         replacement: String,
     }
 
+    #[derive(Deserialize, JsonSchema)]
+    struct ShellArgs {
+        command: String,
+    }
+
     let list_session = session.clone();
     let list_tool = function_tool(
         "sandbox_list_files",
@@ -483,10 +639,16 @@ fn default_function_tools(session: LocalSandboxSession) -> Result<Vec<FunctionTo
     let shell_session = session.clone();
     let shell_tool = function_tool(
         "sandbox_run_shell",
-        "Report the sandbox workspace root for shell usage",
-        move |_ctx, _args: PathArgs| {
+        "Run a shell command inside the sandbox workspace and return its exit code, stdout, and stderr",
+        move |_ctx, args: ShellArgs| {
             let session = shell_session.clone();
-            async move { Ok(session.workspace_root().display().to_string()) }
+            async move {
+                let output = session.run_shell(&args.command)?;
+                Ok(format!(
+                    "exit_code: {}\nstdout:\n{}\nstderr:\n{}",
+                    output.exit_code, output.stdout, output.stderr
+                ))
+            }
         },
     )?;
 
@@ -671,4 +833,121 @@ fn ensure_path_stays_within_workspace(workspace_root: &Path, candidate: &Path) -
     }
 
     Ok(())
+}
+
+fn validate_shell_command(logical_root: &str, command: &str) -> Result<()> {
+    let tokens = shell_like_split(command)?;
+    let logical_root = Path::new(logical_root);
+
+    for token in tokens {
+        if token == ".."
+            || token.starts_with("../")
+            || token.contains("/../")
+            || token.ends_with("/..")
+        {
+            return Err(AgentsError::message(
+                "shell command must stay within the sandbox workspace",
+            ));
+        }
+
+        if token.starts_with('/') && !Path::new(&token).starts_with(logical_root) {
+            return Err(AgentsError::message(
+                "shell command must stay within the sandbox workspace",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn shell_like_split(command: &str) -> Result<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = command.chars().peekable();
+    let mut quote = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            Some('"') => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '\\' {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                } else {
+                    current.push(ch);
+                }
+            }
+            _ => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+
+    if quote.is_some() {
+        return Err(AgentsError::message(
+            "shell command contains an unterminated quote",
+        ));
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    Ok(tokens)
+}
+
+fn read_process_output<R>(mut reader: R, output: Arc<Mutex<Vec<u8>>>)
+where
+    R: Read,
+{
+    let mut buffer = [0_u8; 4096];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                output
+                    .lock()
+                    .expect("sandbox pty output lock")
+                    .extend_from_slice(&buffer[..read]);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+impl Drop for LocalSandboxPtySessionInner {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        if let Ok(mut reader) = self.reader.lock() {
+            if let Some(handle) = reader.take() {
+                let _ = handle.join();
+            }
+        }
+    }
 }

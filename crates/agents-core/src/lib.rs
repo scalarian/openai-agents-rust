@@ -168,9 +168,9 @@ pub use run_state::{
     RunStateContextSnapshot,
 };
 pub use sandbox::{
-    Dir, File, LocalDir, LocalSandboxSession, Manifest, ManifestEntry, PreparedSandboxRun,
-    SandboxAgent, SandboxAgentBuilder, SandboxCapability, SandboxConcurrencyLimits,
-    SandboxRunConfig, prepare_sandbox_run,
+    Dir, File, LocalDir, LocalSandboxPtySession, LocalSandboxSession, LocalShellOutput, Manifest,
+    ManifestEntry, PreparedSandboxRun, SandboxAgent, SandboxAgentBuilder, SandboxCapability,
+    SandboxConcurrencyLimits, SandboxRunConfig, prepare_sandbox_run,
 };
 pub use stream_events::{
     AgentUpdatedStreamEvent, RawResponsesStreamEvent, RunItemStreamEvent, StreamEvent,

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -438,4 +439,117 @@ fn sandbox_paths_reject_workspace_escape() {
 
     prepared.session.cleanup().expect("cleanup succeeds");
     fs::remove_file(&host_outside).expect("remove host file");
+}
+
+#[test]
+fn sandbox_local_shell_starts_in_workspace_and_blocks_escape() {
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let host_outside = unique_temp_path("sandbox-shell-outside");
+    if host_outside.exists() {
+        fs::remove_file(&host_outside).expect("remove stale host outside file");
+    }
+
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(Manifest::default().with_entry("notes.txt", File::from_text("hello\n"))),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox prep succeeds");
+
+    let pwd = prepared
+        .session
+        .run_shell("pwd")
+        .expect("pwd should succeed");
+    assert_eq!(pwd.exit_code, 0);
+    let reported_pwd =
+        fs::canonicalize(pwd.stdout.trim()).expect("reported pwd should canonicalize");
+    let workspace_root =
+        fs::canonicalize(prepared.session.workspace_root()).expect("workspace root canonicalizes");
+    assert_eq!(reported_pwd, workspace_root);
+
+    let write_inside = prepared
+        .session
+        .run_shell("printf 'shell-write\\n' > shell-created.txt && cat shell-created.txt")
+        .expect("inside write should succeed");
+    assert_eq!(write_inside.exit_code, 0);
+    assert_eq!(write_inside.stdout, "shell-write\n");
+    assert_eq!(
+        prepared
+            .session
+            .read_file("/workspace/shell-created.txt")
+            .expect("shell-created file is readable"),
+        "shell-write\n"
+    );
+
+    let missing = prepared
+        .session
+        .run_shell("missing-sandbox-command")
+        .expect("missing command should return shell status");
+    assert_eq!(missing.exit_code, 127);
+    assert!(missing.stderr.contains("missing-sandbox-command"));
+
+    let denied_script = prepared.session.workspace_root().join("denied.sh");
+    fs::write(&denied_script, "#!/bin/sh\necho denied\n").expect("write denied script");
+    let denied = prepared
+        .session
+        .run_shell("./denied.sh")
+        .expect("permission denied should surface shell status");
+    assert_eq!(denied.exit_code, 126);
+    assert!(denied.stderr.contains("Permission denied"));
+
+    let escape = prepared
+        .session
+        .run_shell(&format!("printf 'escape\\n' > {}", host_outside.display()))
+        .expect_err("outside write should be blocked");
+    assert!(
+        escape
+            .to_string()
+            .contains("shell command must stay within the sandbox workspace"),
+        "unexpected error: {escape}"
+    );
+    assert!(
+        !host_outside.exists(),
+        "outside path should not be created by sandbox shell"
+    );
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+}
+
+#[test]
+fn unix_local_pty_accepts_stdin_and_surfaces_output() {
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(Manifest::default()),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox prep succeeds");
+
+    let pty = prepared
+        .session
+        .open_pty("pwd; read line; printf 'echo:%s\\n' \"$line\"")
+        .expect("pty should start");
+    let initial_output = pty
+        .wait_for_output(
+            &prepared.session.workspace_root().display().to_string(),
+            Duration::from_secs(2),
+        )
+        .expect("pty should emit workspace path");
+    assert!(initial_output.contains(&prepared.session.workspace_root().display().to_string()));
+
+    pty.write_stdin("rust-pty\n")
+        .expect("stdin write should succeed");
+    let echoed = pty
+        .wait_for_output("echo:rust-pty", Duration::from_secs(2))
+        .expect("pty should surface echoed input");
+    assert!(echoed.contains("echo:rust-pty"));
+
+    let exit_code = pty.wait().expect("pty should exit cleanly");
+    assert_eq!(exit_code, 0);
+
+    prepared.session.cleanup().expect("cleanup succeeds");
 }
