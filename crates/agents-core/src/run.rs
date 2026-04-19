@@ -427,13 +427,18 @@ impl Runner {
             .trace_id
             .as_deref()
             .and_then(|value| Uuid::parse_str(value).ok());
+        let requested_model = self
+            .config
+            .model
+            .clone()
+            .or_else(|| internal_turn_preparation::get_model(agent));
         let trace_metadata = self
             .model_provider
             .clone()
             .or_else(|| self.config.model_provider.clone())
             .and_then(|provider| {
                 provider.resolve_trace_metadata(
-                    self.config.model.as_deref(),
+                    requested_model.as_deref(),
                     self.config.trace_metadata.as_ref(),
                 )
             })
@@ -3265,6 +3270,135 @@ mod tests {
         assert_eq!(
             request_metadata.get("agent_harness_id"),
             Some(&json!("provider-harness"))
+        );
+    }
+
+    #[tokio::test]
+    async fn multiprovider_forwards_harness_metadata_hooks_from_agent_model() {
+        struct DefaultProvider {
+            model: Arc<RequestCaptureModel>,
+        }
+
+        impl ModelProvider for DefaultProvider {
+            fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+                self.model.clone()
+            }
+        }
+
+        struct HarnessMetadataProvider {
+            model: Arc<RequestCaptureModel>,
+        }
+
+        impl ModelProvider for HarnessMetadataProvider {
+            fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+                self.model.clone()
+            }
+
+            fn resolve_trace_metadata(
+                &self,
+                _model: Option<&str>,
+                metadata: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
+            ) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+                let mut metadata = metadata.cloned().unwrap_or_default();
+                metadata.insert("agent_harness_id".to_owned(), json!("provider-harness"));
+                Some(metadata)
+            }
+
+            fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
+                request
+                    .settings
+                    .metadata
+                    .insert("agent_harness_id".to_owned(), json!("provider-harness"));
+                request
+            }
+        }
+
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        let default_model = Arc::new(RequestCaptureModel::default());
+        let routed_model = Arc::new(RequestCaptureModel::default());
+        let mut provider_map = crate::models::MultiProviderMap::default();
+        provider_map.add_provider(
+            "openai",
+            Arc::new(HarnessMetadataProvider {
+                model: routed_model.clone(),
+            }),
+        );
+        let model_provider = Arc::new(
+            crate::models::MultiProvider::new(Arc::new(DefaultProvider {
+                model: default_model.clone(),
+            }))
+            .with_provider_map(provider_map),
+        );
+
+        Runner::new()
+            .with_model_provider(model_provider)
+            .with_config(RunConfig {
+                trace_metadata: Some(std::collections::BTreeMap::from([(
+                    "source".to_owned(),
+                    json!("integration-test"),
+                )])),
+                ..RunConfig::default()
+            })
+            .run(
+                &Agent::builder("assistant").model("openai/gpt-5").build(),
+                "hello",
+            )
+            .await
+            .expect("run should succeed");
+
+        let trace = processor
+            .traces
+            .lock()
+            .expect("trace lock")
+            .iter()
+            .cloned()
+            .find(|trace| {
+                trace.metadata.get("agent_harness_id") == Some(&json!("provider-harness"))
+            })
+            .expect("trace should include provider metadata");
+        assert_eq!(
+            trace.metadata.get("source"),
+            Some(&json!("integration-test"))
+        );
+
+        let generation_span = processor
+            .spans()
+            .into_iter()
+            .find(|span| {
+                span.trace_id == trace.id
+                    && span.metadata.get("agent_harness_id") == Some(&json!("provider-harness"))
+            })
+            .expect("generation span should include provider metadata");
+        assert_eq!(
+            generation_span.metadata.get("source"),
+            Some(&json!("integration-test"))
+        );
+
+        let request_metadata = routed_model
+            .metadata
+            .lock()
+            .expect("request metadata lock")
+            .clone();
+        assert_eq!(
+            request_metadata.get("agent_harness_id"),
+            Some(&json!("provider-harness"))
+        );
+        assert!(
+            default_model
+                .metadata
+                .lock()
+                .expect("request metadata lock")
+                .is_empty()
         );
     }
 
