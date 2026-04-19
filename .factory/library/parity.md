@@ -1,14 +1,14 @@
 # Parity Plan
 
-Mission-specific parity guidance for syncing Rust to `openai/openai-agents-python` `main`.
+Mission-specific parity guidance for syncing Rust to `openai/openai-agents-python` `v0.14.2`.
 
 ## Source of Truth
 - Upstream repo: `openai/openai-agents-python`
-- Branch baseline: current `main`
-- Local clone used for comparison: `/tmp/openai-agents-python-upstream-nph6i2p0`
+- Release baseline: `v0.14.2`
+- Local clone used for comparison: `/private/tmp/openai-agents-python-v0.14.2`
 
 ## Confirmed Scope
-- Full current-`main` parity target
+- Full `v0.14.2` parity target
 - English docs only
 - Publish all Rust crates
 - Hosted sandbox providers are required at the code/package/config parity layer, but live provider validation is out of scope unless extra credentials are later supplied

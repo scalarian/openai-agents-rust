@@ -20,7 +20,7 @@ Environment variables, external dependencies, and setup notes.
 - Hosted sandbox provider credentials are not part of the default validation path for this mission; hosted providers are code-parity-only unless the user later provides provider-specific credentials.
 
 ## Mission-Specific External Context
-- Upstream Python source of truth clone: `/tmp/openai-agents-python-upstream-nph6i2p0`
+- Upstream Python source of truth clone: `/private/tmp/openai-agents-python-v0.14.2`
 - Mission state directory: `/Users/staticpayload/.factory/missions/a79cf586-bde6-417e-92a4-dc7681913eac`
 
 ## Local Boundaries

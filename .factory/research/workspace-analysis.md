@@ -3,7 +3,7 @@
 ## Surface
 - Workspace contains six publishable crates: core, openai, realtime, voice, extensions, and the facade crate.
 - `openai-agents-rs` is the main public import surface and re-exports most runtime/openai APIs plus `realtime`, `voice`, and `extensions` namespaces.
-- Current docs/examples surface is materially smaller than upstream Python main.
+- Current docs/examples surface is materially smaller than upstream Python `v0.14.2`.
 
 ## Validation Commands Observed
 - `cargo fmt --all --check`
