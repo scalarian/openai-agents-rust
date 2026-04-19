@@ -6,6 +6,8 @@ pub mod extensions;
 pub mod memory;
 #[path = "providers/__init__.rs"]
 pub mod providers;
+#[path = "sandbox/__init__.rs"]
+pub mod sandbox;
 
 pub use extensions::{
     CloudflareRealtimeSocket, CloudflareRealtimeTransportLayer, CloudflareUpgradeRequest,
@@ -23,3 +25,5 @@ pub use providers::{
     LiteLLMInternalChatCompletionMessage, LiteLLMInternalToolCall, LitellmConverter, LitellmModel,
     LitellmProvider,
 };
+#[allow(unused_imports)]
+pub use sandbox::*;

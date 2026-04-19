@@ -16,6 +16,16 @@ categories = ["asynchronous", "api-bindings", "development-tools"]
 [lib]
 name = "agents_extensions"
 
+[features]
+default = []
+e2b = []
+modal = []
+daytona = []
+blaxel = []
+cloudflare = []
+runloop = []
+vercel = []
+
 [dependencies]
 agents-core = { package = "openai-agents-core-rs", version = "0.1.2", path = "../agents-core" }
 agents-openai = { package = "openai-agents-openai-rs", version = "0.1.2", path = "../agents-openai" }
