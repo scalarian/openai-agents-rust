@@ -1,22 +1,21 @@
 {
   "featureId": "voice-workflow-and-audio-parity",
-  "reviewedAt": "2026-04-16T16:02:28Z",
-  "commitId": "74521f3",
+  "reviewedAt": "2026-04-19T13:19:50Z",
+  "commitId": "44373e9cf4f226179fce138be34c78d59ec785cb",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "The handoff commit correctly adds the missing exact-name facade regression for the combined STT/TTS check, but the underlying voice pipeline still has a blocking parity gap: disabling output streaming only filters emitted audio events after synthesis instead of skipping TTS generation entirely.",
-    "issues": [
-      {
-        "file": "crates/agents-voice/src/pipeline.rs",
-        "line": 300,
-        "severity": "blocking",
-        "description": "Transcript-only runs still call `tts_model.synthesize()` even when `VoicePipelineConfig.stream_audio` is `false`. Audio suppression happens later in `VoiceStreamRecorder::push_events()` (`crates/agents-voice/src/result.rs:177`), so a disabled-audio pipeline still depends on TTS succeeding and still pays synthesis work. That violates the feature contract to suppress audio when output streaming is disabled; a transcript-only run can currently fail because of TTS even though no audio should be produced."
-      }
-    ]
+    "summary": "Reviewed the prior failing report, latest handoff, commit diff, transcript skeleton, and current voice code/tests. The blocking gap is fixed: `VoicePipeline::run_transcription()` now threads `stream_audio` into `synthesize_chunk()`, and `synthesize_chunk()` records transcript text but returns before `tts_model.synthesize()` when audio streaming is disabled (`crates/agents-voice/src/pipeline.rs:77-129,388-401`). The new crate-local regression (`crates/agents-voice/src/pipeline.rs:354`) and facade regression (`crates/openai-agents/tests/voice_semantics.rs:229`) directly prove transcript-only runs succeed with zero TTS calls while the existing streamed-input, settings, and workflow-state tests still cover the rest of the feature surface.",
+    "issues": []
   },
-  "sharedStateObservations": [],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed the feature handoff, commit `74521f3`, transcript skeleton, skill file, and current voice pipeline/tests. The new regression test is good, but the feature should not be considered complete because `stream_audio = false` does not actually disable TTS execution."
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The mission validation contract still cites `voice_pipeline_suppresses_audio_for_buffered_input_when_streaming_disabled` as evidence that transcript-only runs are independent from TTS, but that older test only proves audio suppression. The new exact regression that actually proves no TTS dependency is `transcript_only_runs_skip_tts_when_stream_audio_disabled`.",
+      "evidence": "/Users/staticpayload/.factory/missions/a79cf586-bde6-417e-92a4-dc7681913eac/validation-contract.md:222-225 still references the older test, while /Users/staticpayload/Mainframe/openai-agents-rust/crates/openai-agents/tests/voice_semantics.rs:229 defines the new exact regression."
+    }
+  ],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/runtime-provider/scrutiny/reviews/voice-workflow-and-audio-parity.json",
+  "summary": "Pass. The re-review confirms the prior blocking issue is resolved: transcript-only voice runs with `stream_audio=false` now skip TTS entirely instead of merely filtering emitted audio afterward, and the changed surface still covers streamed input, settings forwarding, and workflow continuity. I found no remaining blocking or non-blocking code issues in the reviewed surface; the only follow-up worth noting is that the mission validation contract should point at the new exact no-TTS regression."
 }

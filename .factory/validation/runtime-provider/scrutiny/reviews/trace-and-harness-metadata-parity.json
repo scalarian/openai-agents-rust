@@ -1,28 +1,28 @@
 {
   "featureId": "trace-and-harness-metadata-parity",
-  "reviewedAt": "2026-04-16T16:04:44.166527Z",
-  "commitId": "d35c583",
+  "reviewedAt": "2026-04-19T13:20:11.521705Z",
+  "commitId": "a98cf07",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
   "status": "fail",
   "codeReview": {
-    "summary": "Fail. The landed feature correctly propagates explicit trace metadata through the direct `OpenAIProvider` path and the follow-up commit stabilizes the trace-provider tests, but the new provider hook design is incomplete for wrapper providers. `Runner` now calls `ModelProvider::resolve_trace_metadata()` before trace creation and `ModelProvider::prepare_request()` before model execution, yet `MultiProvider` still only overrides `resolve()`. When callers use `MultiProvider` with an OpenAI-backed route (including the public `openai/...` alias), the OpenAI harness-registration metadata never reaches either exported trace metadata or request metadata, so the feature does not fully satisfy the provider-level parity contract on a public code path.",
+    "summary": "Fail. The fix does address the prior blocking issue for the specific `RunConfig.model`-driven `MultiProvider` path by forwarding `resolve_trace_metadata()`, `prepare_request()`, and `resolve_with_settings()` through the routed provider. However, `Runner` still resolves trace metadata before it computes the effective requested model, so routed OpenAI models selected through `Agent.model` never reach the `MultiProvider` trace hook and the exported trace metadata still misses the effective `agent_harness_id` on that public path.",
     "issues": [
       {
-        "file": "crates/agents-core/src/models/multi_provider.rs",
-        "line": 136,
+        "file": "crates/agents-core/src/run.rs",
+        "line": 435,
         "severity": "blocking",
-        "description": "`MultiProvider` was not updated to forward the new `ModelProvider::resolve_trace_metadata()` and `prepare_request()` hooks that this feature added. Because `Runner` invokes those hooks on the top-level provider (`crates/agents-core/src/run.rs:435` and `crates/agents-core/src/run.rs:1262`), a run configured with `MultiProvider` and an OpenAI route such as `openai/gpt-5` skips the OpenAI harness merge entirely: `agent_harness_id` is absent from both the trace metadata and the outbound request metadata even though the selected underlying provider is `OpenAIProvider`. The new tests only cover direct `OpenAIProvider` usage, so this public wrapper-provider path regressed unnoticed."
+        "description": "`Runner` now passes a model name into `ModelProvider::resolve_trace_metadata()`, but this call still uses only `self.config.model` (`crates/agents-core/src/run.rs:435-437`). Later in the same run path, the actual requested model falls back to `Agent.model` (`crates/agents-core/src/run.rs:1240-1245`). When a caller uses `MultiProvider` with a routed OpenAI model declared on the agent (for example `Agent::builder(...).model(\"openai/gpt-5\")`) and leaves `RunConfig.model` unset, `MultiProvider::resolve_trace_metadata()` receives `None`, so the OpenAI harness hook is skipped for the top-level trace even though request preparation is correctly routed later. That leaves exported trace metadata without the effective `agent_harness_id`, so the feature contract is still not fully satisfied for routed models."
       }
     ]
   },
   "sharedStateObservations": [
     {
       "area": "conventions",
-      "observation": "The shared mission/library guidance does not call out that adding default methods to `ModelProvider` requires auditing wrapper providers such as `MultiProvider` to forward the new behavior. That omission likely contributed to the missed parity path here.",
-      "evidence": "This feature introduced `resolve_trace_metadata()` and `prepare_request()` in `crates/agents-core/src/models/interface.rs:115-124`, but `crates/agents-core/src/models/multi_provider.rs:136-160` still only implements `resolve()`, so provider-specific metadata behavior is lost behind the wrapper."
+      "observation": "The shared verification story for routed harness metadata would be safer if it explicitly covered both routed-model sources: `RunConfig.model` and `Agent.model`. The landed regression only exercises the config-owned model path, which let this remaining public-path gap survive the fix.",
+      "evidence": "The mission verification step still names only `cargo test -p openai-agents-core-rs --lib run::tests::multiprovider_forwards_harness_metadata_hooks -- --exact` in `features.json:807`, and that regression hard-codes `RunConfig { model: Some(\"openai/gpt-5\") }` in `crates/agents-core/src/run.rs:3220-3222`."
     }
   ],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed the feature metadata, both feature handoffs, the worker transcript skeleton, commit `d35c583`, and the relevant core/OpenAI code paths. The feature does not pass scrutiny because provider-specific trace/request metadata propagation is incomplete for the public `MultiProvider` path, so OpenAI harness metadata parity is not preserved for routed OpenAI models."
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/runtime-provider/scrutiny/reviews/trace-and-harness-metadata-parity.json",
+  "summary": "Reviewed the prior failed review, latest handoff/transcript skeleton, commit `a98cf07`, and the current core/OpenAI code paths. The original `MultiProvider` forwarding gap was fixed for the `RunConfig.model` path, but the feature still fails scrutiny because exported trace metadata does not pick up routed OpenAI harness metadata when the routed model comes from `Agent.model`, which remains a public `MultiProvider` path covered by the feature contract."
 }

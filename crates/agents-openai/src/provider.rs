@@ -224,8 +224,9 @@ mod tests {
     use crate::defaults::{default_openai_base_url, default_openai_websocket_base_url};
     use crate::openai_agent_registration::{
         OPENAI_AGENT_HARNESS_ID_ENV_VAR, OPENAI_HARNESS_ID_TRACE_METADATA_KEY,
-        OpenAIAgentRegistrationConfig, get_default_openai_agent_registration,
-        set_default_openai_agent_registration, set_default_openai_harness,
+        OpenAIAgentRegistrationConfig, agent_registration_test_lock,
+        get_default_openai_agent_registration, set_default_openai_agent_registration,
+        set_default_openai_harness,
     };
     use crate::{
         get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
@@ -234,11 +235,6 @@ mod tests {
     };
     use serde_json::json;
     use std::env;
-
-    fn agent_registration_test_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
 
     struct DefaultHarnessReset(Option<OpenAIAgentRegistrationConfig>);
 

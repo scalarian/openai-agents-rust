@@ -1,39 +1,28 @@
 {
   "featureId": "realtime-session-and-transport-parity",
-  "reviewedAt": "2026-04-16T16:04:56.440710+00:00",
-  "commitId": "8dfb31c26fc9fdc81d5d180833df56c047da869f",
+  "reviewedAt": "2026-04-19T13:20:28.080712+00:00",
+  "commitId": "7c4269b606150b3c33cc033f04f562a5e4fe0cbc",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
   "status": "fail",
   "codeReview": {
-    "summary": "Fail. The commit adds the requested facade regressions and correctly preserves previously-applied non-null realtime settings across partial updates, but the new merge-based implementation still misses an important part of the parity contract: callers cannot explicitly clear previously-applied optional settings, and mixed flat-vs-nested audio updates can leave the public session state internally inconsistent with the payload the model actually sees.",
+    "summary": "Fail. The fix resolves the original nested clear/null-emission problem and keeps the exercised nested-update paths normalized, but the changed merge/normalization logic still does not satisfy the mixed flat/nested parity contract: once settings have been normalized into the persisted `audio.*` shape, later flat-only alias updates can be silently ignored.",
     "issues": [
       {
         "file": "crates/agents-realtime/src/config.rs",
-        "line": 190,
+        "line": 479,
         "severity": "blocking",
-        "description": "`RealtimeSessionModelSettings::merge()` and its nested helpers always keep the old value whenever the update field is `None` (for example `update.voice.clone().or_else(|| self.voice.clone())`, `update.speed.or(self.speed)`, and the nested `current.merge(next)` branches at lines 20-168). That means a caller cannot explicitly clear a previously-applied setting such as `voice`, `speed`, `turn_detection`, `transcription`, `noise_reduction`, or `tracing` once it has been set. The feature description says prior settings should be preserved unless explicitly replaced; after this change, replacing a field with 'unset/disabled' is impossible, which is a parity gap versus the Python session-update surface that accepts explicit `None`/null values in its settings dictionaries."
-      },
-      {
-        "file": "crates/agents-realtime/src/session.rs",
-        "line": 289,
-        "severity": "non_blocking",
-        "description": "`update_agent()` stores the merged settings object verbatim in `state.model_settings`, but `session_payload_from_settings()` later resolves audio values by preferring nested `audio.output.*` fields over the legacy flat aliases (`voice`, `speed`, `output_audio_format`) at `crates/agents-realtime/src/openai_realtime.rs:211-222`. If the existing state was configured through the flat aliases and a later partial update uses the nested `audio` shape (or vice versa), `session.model_settings()` can report stale flat alias values even though the payload actually sent to the model uses the newer nested values. Given the docs explicitly support both representations, the public session state should stay normalized instead of exposing contradictory values."
+        "description": "`RealtimeSessionModelSettings::merge()` keeps the prior nested `audio` subtree when an update only uses flat aliases (`audio` is preserved from the existing state at lines 400-404), and `normalize_effective()` then always prefers the nested values over the flat aliases (`input.*` at lines 491-538 and `output.*` at lines 547-574, especially `output.voice.clone().or_else(|| normalized.voice.clone())`). Because both `RealtimeSession::update_agent()` and the websocket/SIP model `update_session()` paths persist normalized settings via `without_clear_markers()`, the stored state usually contains both representations. A later flat-only update like `{ voice: Some(\"verse\") }`, `{ speed: Some(0.8) }`, or `{ output_audio_format: ... }` therefore loses to the stale nested value and never becomes the effective payload/state. That still violates the feature contract's requirement that mixed flat and nested audio-setting updates normalize to the caller's intended effective settings."
       }
     ]
   },
   "sharedStateObservations": [
     {
       "area": "skills",
-      "observation": "The `rust-runtime-worker` skill still claims workers should add failing tests before implementation, but this worker's transcript shows code edits landed before any of the exact parity tests were executed, while the handoff still reported `followedProcedure: true`.",
-      "evidence": "The transcript skeleton for session `c4810726-24ef-45dd-bac9-7f55150e7099` shows multiple `ApplyPatch` calls before the first `cargo test -p openai-agents-rs --test realtime_semantics ... --exact` executions, yet the handoff JSON marks `skillFeedback.followedProcedure` as true with no deviations."
-    },
-    {
-      "area": "services",
-      "observation": "Workers appear to treat `.factory/init.sh` as a standard preflight step for runtime-provider work, but that command is not captured in `.factory/services.yaml` alongside the other baseline validation/setup commands.",
-      "evidence": "This feature's transcript skeleton includes an early Execute call for `/Users/staticpayload/Mainframe/openai-agents-rust/.factory/init.sh`, while `.factory/services.yaml` only lists install/typecheck/build/test/lint/docs/package commands and no init/preflight entry."
+      "observation": "The `rust-runtime-worker` skill should explicitly warn that `cargo test ... -- --exact` can exit 0 when no tests match, because the worker called out that nuance as the main procedure gap worth documenting.",
+      "evidence": "In `/Users/staticpayload/.factory/missions/a79cf586-bde6-417e-92a4-dc7681913eac/handoffs/2026-04-16T16-44-48-930Z__realtime-session-and-transport-parity__50de2da9-90da-493c-9729-f5865c644ecb.json`, `handoff.skillFeedback.suggestedChanges[0]` says the skill should note that a missing `cargo test -- --exact` match exits 0 with zero tests."
     }
   ],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed the feature metadata, handoff, transcript skeleton, skill file, mission guidance, and commit `8dfb31c26fc9fdc81d5d180833df56c047da869f`. The feature does not pass scrutiny because the new merge semantics preserve prior non-null values but still cannot express explicit clearing of realtime settings, and mixed flat/nested audio updates can leave the public session state inconsistent with the applied model payload."
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/runtime-provider/scrutiny/reviews/realtime-session-and-transport-parity.json",
+  "summary": "Re-reviewed the fixed feature against the prior failing scrutiny report, mission contract, latest worker handoff/transcript skeleton, skill guidance, and commit `7c4269b606150b3c33cc033f04f562a5e4fe0cbc`. The previous blocking issue around nested clear/null emission is fixed, but the implementation still fails the mixed flat/nested update contract because normalized persisted audio state overrides later flat-only alias updates, so the feature should remain in failing scrutiny status."
 }
