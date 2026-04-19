@@ -1,34 +1,15 @@
 {
   "featureId": "sandbox-localdir-and-workspace-safety",
-  "reviewedAt": "2026-04-19T14:22:33Z",
-  "commitId": "c4888860261b898616cd007803ce2605510c6e4d",
+  "reviewedAt": "2026-04-19T15:04:25Z",
+  "commitId": "48be1b085fef8b721697a88e60c5aa7821c2d1c5",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "Fail. The workspace-root enforcement added for local sandbox reads, writes, and patch application appears to satisfy VAL-SANDBOX-005, but LocalDir staging still does not fully satisfy VAL-SANDBOX-004. The implementation only rejects symlinks on the exact path components it stats and its \"source changed during copy\" guard is just two back-to-back metadata checks before the actual copy, so a source reached through a symlinked ancestor or swapped after validation can still be ingested. The new regression test also does not exercise the claimed swapped-source case.",
-    "issues": [
-      {
-        "file": "crates/agents-core/src/sandbox/mod.rs",
-        "line": 755,
-        "severity": "blocking",
-        "description": "`validate_local_dir_source_root()`/`stable_local_dir_entry_kind()` only call `symlink_metadata()` on the final path (`crates/agents-core/src/sandbox/mod.rs:755-788`), which does not reject LocalDir sources reached through a symlinked ancestor even though VAL-SANDBOX-004 explicitly requires that. In addition, `copy_local_dir_contents()` tries to detect mid-copy swaps by calling `stable_local_dir_entry_kind()` twice in a row before it recurses or calls `fs::copy` (`crates/agents-core/src/sandbox/mod.rs:721-742`). Because the source path is never pinned via an opened descriptor and is not revalidated after the copy starts, an attacker can still swap the source root or a child into a symlink/alternate tree after validation and before `read_dir`/`fs::copy`, allowing unsafe host content to be staged."
-      },
-      {
-        "file": "crates/openai-agents/tests/sandbox_semantics.rs",
-        "line": 263,
-        "severity": "non_blocking",
-        "description": "`localdir_staging_rejects_symlinked_or_swapped_sources()` only creates a pre-existing child symlink and then a stable success case (`crates/openai-agents/tests/sandbox_semantics.rs:263-317`). It never exercises a symlinked ancestor or any time-of-check/time-of-use swap during staging, so the regression suite does not actually cover the full VAL-SANDBOX-004 contract that the feature and test name claim to verify."
-      }
-    ]
+    "summary": "Pass. The prior blocking issue is resolved at current HEAD. LocalDir staging now rejects symlinked ancestors via `snapshot_local_dir_source()`/`ensure_no_symlinked_ancestors()` (`crates/agents-core/src/sandbox/mod.rs:787-896`), stages copies into a temporary directory with cleanup on failure (`crates/agents-core/src/sandbox/mod.rs:726-750`), and revalidates both each copied entry and the original root snapshot after copy steps (`crates/agents-core/src/sandbox/mod.rs:752-873`). The regression suite now explicitly covers symlinked-ancestor rejection, deterministic live source swaps, and workspace-root path confinement (`crates/openai-agents/tests/sandbox_semantics.rs:381-630`), which brings the feature in line with VAL-SANDBOX-004 and VAL-SANDBOX-005.",
+    "issues": []
   },
-  "sharedStateObservations": [
-    {
-      "area": "skills",
-      "observation": "The `rust-sandbox-worker` skill should call out adversarial sandbox-safety regressions for symlink ancestry and TOCTOU path swaps when a feature assertion is about workspace or LocalDir confinement. The current procedure was followed here, but it was still easy to treat a static-symlink regression as sufficient coverage for a contract that explicitly requires swapped-source rejection.",
-      "evidence": "The skill only says to write failing deterministic tests and re-run targeted sandbox tests (`.factory/skills/rust-sandbox-worker/SKILL.md:25-27`), while the landed regression `crates/openai-agents/tests/sandbox_semantics.rs:263-317` is named for \"symlinked or swapped sources\" but only exercises a pre-existing child symlink."
-    }
-  ],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed the feature metadata, handoff, transcript skeleton, `rust-sandbox-worker`, mission guidance, and commit `c4888860261b898616cd007803ce2605510c6e4d`. Status: fail. The rooted file/patch path changes look correct for VAL-SANDBOX-005, but LocalDir staging still misses VAL-SANDBOX-004 because ancestor-symlink and post-validation swap cases can evade the new checks, and the added regression does not cover those scenarios."
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/local-sandbox-mvp/scrutiny/reviews/sandbox-localdir-and-workspace-safety.json",
+  "summary": "Reviewed the prior failed review, feature metadata, handoff, transcript skeleton, `rust-sandbox-worker`, mission guidance, commit `48be1b085fef8b721697a88e60c5aa7821c2d1c5`, and current HEAD `7f9e16905d2b5031a5606c7d3668be8534337b93`. Status: pass. The previous blocking LocalDir safety issue is resolved at current HEAD: symlinked ancestors and live source swaps are now rejected with cleanup, and the sandbox workspace path guards for file and patch operations remain intact."
 }

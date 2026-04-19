@@ -13,6 +13,7 @@ Environment variables, external dependencies, and setup notes.
 - Docker is currently unavailable in this environment; Docker-backed sandbox validation is blocked until that changes.
 - `rg` is currently unavailable in this environment; `docs/scripts/check_links.sh` depends on it today and must be fixed or shimmed during the mission.
 - On macOS, `/usr/bin/script` is available and can be used as the local PTY primitive when Unix-local sandbox PTY flows need an interactive terminal host.
+- On macOS, `/usr/bin/sandbox-exec` is available in this mission environment and is the current local primitive for confining Unix-local sandbox shell and PTY commands to the workspace during validator and implementation work.
 - Run `.factory/init.sh` before heavy mission work when you need a quick preflight: it performs `cargo fetch --locked` and warns if `rg` or Docker are unavailable in the current environment.
 
 ## Environment Variables
