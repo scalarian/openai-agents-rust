@@ -1,0 +1,15 @@
+{
+  "featureId": "hosted-provider-export-gating-followup",
+  "reviewedAt": "2026-04-19T19:02:15.954490Z",
+  "commitId": "38bf141dc7051db1feb01bd6bffaebe466bfd11d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. Reviewing the original gated-export commit `361ac94` together with the follow-up fix `38bf141` shows that the prior blocking regression is addressed: hosted-provider constants and generated provider symbol sets in `agents-extensions::sandbox` are now reintroduced behind per-provider `#[cfg(feature = ...)]` guards, while the updated temp-crate semantics tests cover both successful imports with the matching feature enabled and failed imports with the feature absent from the facade and extensions namespaces.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "hosted-provider-feature-gates-and-public-exports",
+  "summary": "Reviewed the prior failed scrutiny report, the mission feature records, the fix feature handoff and transcript skeleton, the shared-state guidance (`AGENTS.md`, `.factory/services.yaml`, `.factory/library/*`), and both relevant diffs (`361ac94` and `38bf141`). The follow-up fix adequately resolves the original blocking export-gating failure and I did not find any new code-review or shared-state issues, so I recorded this feature review as a pass."
+}

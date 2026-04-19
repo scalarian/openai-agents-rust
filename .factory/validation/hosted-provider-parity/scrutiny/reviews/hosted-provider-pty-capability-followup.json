@@ -1,0 +1,15 @@
+{
+  "featureId": "hosted-provider-pty-capability-followup",
+  "reviewedAt": "2026-04-19T19:00:51Z",
+  "commitId": "9575f72c5b5c2b09b7cb3284405249a716af0ba6",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. Reviewing the original failing commit `1b431eb` together with the fix commit `9575f72` shows the follow-up addresses the prior blocking issue directly: hosted-provider `supports_pty()` now reports backend capability from the shared provider spec instead of gating on `interactive_pty`, while the existing capability validator still rejects unsupported interactive PTY requests with the same clear error. The new regression test exercises both sides of the contract by proving a PTY-capable Daytona session created with default options still reports PTY support before and after resume, and a PTY-unsupported Runloop session still rejects an explicit PTY request.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "hosted-provider-session-auth-and-capability-parity",
+  "summary": "Reviewed the prior failed scrutiny report, both hosted-provider diffs, the follow-up handoff, the follow-up transcript skeleton, and the relevant mission shared-state guidance. The follow-up fix closes the PTY-capability gap without regressing unsupported-provider error handling, so this review passes with no new issues or shared-state gaps to record."
+}
