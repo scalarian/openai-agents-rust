@@ -1362,6 +1362,193 @@ fn explicit_session_state_roundtrip_resumes_same_workspace() {
 }
 
 #[test]
+fn local_snapshot_restore_corrects_workspace_drift() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let initial = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(Manifest::default()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("initial sandbox prep succeeds");
+    initial
+        .session
+        .write_file("/workspace/snapshot.txt", "persisted snapshot contents\n")
+        .expect("snapshot file write should succeed");
+
+    let serialized = initial
+        .session
+        .serialize_session_state()
+        .expect("sandbox session state should serialize");
+    assert_eq!(
+        serialized
+            .get("snapshot_fingerprint_version")
+            .and_then(|value| value.as_str()),
+        Some("workspace_sha256_v1")
+    );
+    assert!(
+        serialized
+            .get("snapshot_fingerprint")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "serialized state should record a workspace fingerprint"
+    );
+
+    fs::write(
+        initial.session.workspace_root().join("snapshot.txt"),
+        "drifted workspace contents\n",
+    )
+    .expect("drifted file write should succeed");
+    fs::write(
+        initial.session.workspace_root().join("unexpected.txt"),
+        "should be removed on restore\n",
+    )
+    .expect("unexpected file write should succeed");
+
+    let restored_state = LocalSandboxSession::deserialize_session_state(serialized)
+        .expect("sandbox session state should deserialize");
+    let resumed = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(restored_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("session-state resume should prepare");
+
+    assert_eq!(
+        resumed
+            .session
+            .read_file("/workspace/snapshot.txt")
+            .expect("restored workspace should keep persisted file"),
+        "persisted snapshot contents\n"
+    );
+    assert!(
+        !resumed
+            .session
+            .workspace_root()
+            .join("unexpected.txt")
+            .exists(),
+        "restore should remove files introduced by drift"
+    );
+}
+
+#[test]
+fn sandbox_memory_persists_notes_across_resumed_sessions() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let initial = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(Manifest::default()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("initial sandbox prep succeeds");
+    initial
+        .session
+        .write_memory_note("summary", "remember the sandbox session")
+        .expect("memory note write should succeed");
+
+    let serialized = initial
+        .session
+        .serialize_session_state()
+        .expect("sandbox session state should serialize");
+    let restored_state = LocalSandboxSession::deserialize_session_state(serialized)
+        .expect("sandbox session state should deserialize");
+    let resumed = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(restored_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("session-state resume should prepare");
+
+    assert_eq!(
+        resumed
+            .session
+            .read_memory_note("summary")
+            .expect("memory note lookup should succeed")
+            .as_deref(),
+        Some("remember the sandbox session")
+    );
+
+    resumed
+        .session
+        .write_memory_note("summary", "updated remembered state")
+        .expect("memory note update should succeed");
+    assert_eq!(
+        resumed
+            .session
+            .read_memory_note("summary")
+            .expect("updated memory note lookup should succeed")
+            .as_deref(),
+        Some("updated remembered state")
+    );
+
+    let resumed_state = LocalSandboxSession::deserialize_session_state(
+        resumed
+            .session
+            .serialize_session_state()
+            .expect("updated sandbox session state should serialize"),
+    )
+    .expect("updated sandbox session state should deserialize");
+    let resumed_again = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(resumed_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("updated session-state resume should prepare");
+    assert_eq!(
+        resumed_again
+            .session
+            .read_memory_note("summary")
+            .expect("updated memory note should persist across resume")
+            .as_deref(),
+        Some("updated remembered state")
+    );
+
+    let unrelated = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(Manifest::default()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("fresh sandbox prep succeeds");
+    assert_eq!(
+        unrelated
+            .session
+            .read_memory_note("summary")
+            .expect("fresh sandbox note lookup should succeed"),
+        None
+    );
+}
+
+#[test]
 fn unix_local_pty_accepts_stdin_and_surfaces_output() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();

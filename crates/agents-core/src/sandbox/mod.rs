@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::agent::{Agent, AgentBuilder};
 use crate::editor::{ApplyPatchOperation, ApplyPatchResult};
@@ -286,6 +287,14 @@ pub struct LocalSandboxSessionState {
     pub workspace_root: PathBuf,
     pub workspace_root_owned: bool,
     pub workspace_root_ready: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_fingerprint_version: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub memory_notes: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,8 +333,17 @@ pub struct LocalSandboxPtySession {
 struct LocalSandboxSessionInner {
     workspace_root: PathBuf,
     manifest: Mutex<Manifest>,
+    persisted: Mutex<LocalSandboxPersistedState>,
     runner_owned: bool,
     cleaned: Mutex<bool>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LocalSandboxPersistedState {
+    snapshot_root: Option<PathBuf>,
+    snapshot_fingerprint: Option<String>,
+    snapshot_fingerprint_version: Option<String>,
+    memory_notes: BTreeMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -343,14 +361,17 @@ impl LocalSandboxSession {
             return Err(error);
         }
 
-        Ok(Self {
+        let session = Self {
             inner: Arc::new(LocalSandboxSessionInner {
                 workspace_root,
                 manifest: Mutex::new(manifest),
+                persisted: Mutex::new(LocalSandboxPersistedState::default()),
                 runner_owned: false,
                 cleaned: Mutex::new(false),
             }),
-        })
+        };
+        session.refresh_snapshot_state()?;
+        Ok(session)
     }
 
     pub fn workspace_root(&self) -> PathBuf {
@@ -374,15 +395,26 @@ impl LocalSandboxSession {
     }
 
     pub fn session_state(&self) -> LocalSandboxSessionState {
+        let persisted = self
+            .inner
+            .persisted
+            .lock()
+            .expect("sandbox persisted lock")
+            .clone();
         LocalSandboxSessionState {
             manifest: self.manifest(),
             workspace_root: self.workspace_root(),
             workspace_root_owned: self.runner_owned(),
             workspace_root_ready: self.inner.workspace_root.is_dir(),
+            snapshot_root: persisted.snapshot_root,
+            snapshot_fingerprint: persisted.snapshot_fingerprint,
+            snapshot_fingerprint_version: persisted.snapshot_fingerprint_version,
+            memory_notes: persisted.memory_notes,
         }
     }
 
     pub fn serialize_session_state(&self) -> Result<Value> {
+        self.refresh_snapshot_state()?;
         serde_json::to_value(self.session_state())
             .map_err(|error| AgentsError::message(error.to_string()))
     }
@@ -410,20 +442,44 @@ impl LocalSandboxSession {
             }
         }
 
-        Ok(Self {
+        let session = Self {
             inner: Arc::new(LocalSandboxSessionInner {
                 workspace_root: state.workspace_root,
                 manifest: Mutex::new(state.manifest),
+                persisted: Mutex::new(LocalSandboxPersistedState {
+                    snapshot_root: state.snapshot_root,
+                    snapshot_fingerprint: state.snapshot_fingerprint,
+                    snapshot_fingerprint_version: state.snapshot_fingerprint_version,
+                    memory_notes: state.memory_notes,
+                }),
                 runner_owned: state.workspace_root_owned,
                 cleaned: Mutex::new(false),
             }),
-        })
+        };
+
+        session.restore_snapshot_if_needed()?;
+        Ok(session)
     }
 
     pub fn cleanup(&self) -> Result<()> {
         let mut cleaned = self.inner.cleaned.lock().expect("sandbox cleanup lock");
         if *cleaned {
             return Ok(());
+        }
+        if self.inner.runner_owned {
+            if let Some(snapshot_root) = self
+                .inner
+                .persisted
+                .lock()
+                .expect("sandbox persisted lock")
+                .snapshot_root
+                .clone()
+            {
+                if snapshot_root.exists() {
+                    fs::remove_dir_all(snapshot_root)
+                        .map_err(|error| AgentsError::message(error.to_string()))?;
+                }
+            }
         }
         if self.inner.runner_owned && self.inner.workspace_root.exists() {
             fs::remove_dir_all(&self.inner.workspace_root)
@@ -505,7 +561,8 @@ impl LocalSandboxSession {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| AgentsError::message(error.to_string()))?;
         }
-        fs::write(path, content).map_err(|error| AgentsError::message(error.to_string()))
+        fs::write(path, content).map_err(|error| AgentsError::message(error.to_string()))?;
+        self.refresh_snapshot_state()
     }
 
     pub fn apply_patch(&self, operation: ApplyPatchOperation) -> Result<ApplyPatchResult> {
@@ -529,12 +586,16 @@ impl LocalSandboxSession {
             .output()
             .map_err(|error| AgentsError::message(error.to_string()))?;
 
-        Ok(LocalShellOutput {
+        let shell_output = LocalShellOutput {
             command: command.to_owned(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             exit_code: output.status.code().unwrap_or_default(),
-        })
+        };
+        if shell_output.success() {
+            self.refresh_snapshot_state()?;
+        }
+        Ok(shell_output)
     }
 
     pub fn open_pty(&self, command: &str) -> Result<LocalSandboxPtySession> {
@@ -594,6 +655,68 @@ impl LocalSandboxSession {
         }
 
         *self.inner.manifest.lock().expect("sandbox manifest lock") = processed_manifest;
+        self.refresh_snapshot_state()?;
+        Ok(())
+    }
+
+    pub fn write_memory_note(
+        &self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<()> {
+        self.inner
+            .persisted
+            .lock()
+            .expect("sandbox persisted lock")
+            .memory_notes
+            .insert(key.into(), value.into());
+        Ok(())
+    }
+
+    pub fn read_memory_note(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .inner
+            .persisted
+            .lock()
+            .expect("sandbox persisted lock")
+            .memory_notes
+            .get(key)
+            .cloned())
+    }
+
+    fn refresh_snapshot_state(&self) -> Result<()> {
+        let (fingerprint, snapshot_root) = snapshot_workspace(&self.inner.workspace_root, self)?;
+        let mut persisted = self.inner.persisted.lock().expect("sandbox persisted lock");
+        persisted.snapshot_root = Some(snapshot_root);
+        persisted.snapshot_fingerprint = Some(fingerprint);
+        persisted.snapshot_fingerprint_version = Some(WORKSPACE_FINGERPRINT_VERSION.to_owned());
+        Ok(())
+    }
+
+    fn restore_snapshot_if_needed(&self) -> Result<()> {
+        let persisted = self
+            .inner
+            .persisted
+            .lock()
+            .expect("sandbox persisted lock")
+            .clone();
+        let Some(snapshot_root) = persisted.snapshot_root else {
+            return Ok(());
+        };
+        let Some(snapshot_fingerprint) = persisted.snapshot_fingerprint else {
+            return Ok(());
+        };
+        if !self.inner.workspace_root.exists() {
+            fs::create_dir_all(&self.inner.workspace_root)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+        }
+        let live_fingerprint = fingerprint_workspace(&self.inner.workspace_root)?;
+        if live_fingerprint == snapshot_fingerprint {
+            return Ok(());
+        }
+
+        clear_directory(&self.inner.workspace_root)?;
+        copy_directory_contents(&snapshot_root, &self.inner.workspace_root)?;
         Ok(())
     }
 }
@@ -691,6 +814,7 @@ pub fn prepare_sandbox_run(
             inner: Arc::new(LocalSandboxSessionInner {
                 workspace_root,
                 manifest: Mutex::new(manifest),
+                persisted: Mutex::new(LocalSandboxPersistedState::default()),
                 runner_owned: true,
                 cleaned: Mutex::new(false),
             }),
@@ -719,6 +843,7 @@ pub fn prepare_sandbox_run(
 
 impl AgentSandboxRuntime {
     pub fn snapshot(&self) -> SandboxRunState {
+        let _ = self.session.refresh_snapshot_state();
         SandboxRunState {
             base_instructions: self.base_instructions.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -1599,6 +1724,117 @@ where
             Err(_) => break,
         }
     }
+}
+
+const WORKSPACE_FINGERPRINT_VERSION: &str = "workspace_sha256_v1";
+
+fn snapshot_workspace(
+    workspace_root: &Path,
+    session: &LocalSandboxSession,
+) -> Result<(String, PathBuf)> {
+    let fingerprint = fingerprint_workspace(workspace_root)?;
+    let previous_snapshot_root = session
+        .inner
+        .persisted
+        .lock()
+        .expect("sandbox persisted lock")
+        .snapshot_root
+        .clone();
+    let snapshot_root = previous_snapshot_root.unwrap_or_else(|| {
+        std::env::temp_dir().join(format!(
+            "openai-agents-sandbox-snapshot-{}",
+            uuid::Uuid::new_v4()
+        ))
+    });
+
+    if snapshot_root.exists() {
+        clear_directory(&snapshot_root)?;
+    } else {
+        fs::create_dir_all(&snapshot_root)
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+    }
+    copy_directory_contents(workspace_root, &snapshot_root)?;
+    Ok((fingerprint, snapshot_root))
+}
+
+fn fingerprint_workspace(workspace_root: &Path) -> Result<String> {
+    let mut hasher = Sha256::new();
+    fingerprint_path(workspace_root, workspace_root, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn fingerprint_path(root: &Path, path: &Path, hasher: &mut Sha256) -> Result<()> {
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| AgentsError::message(error.to_string()))?
+        .map(|entry| entry.map_err(|error| AgentsError::message(error.to_string())))
+        .collect::<Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let entry_path = entry.path();
+        let relative = entry_path
+            .strip_prefix(root)
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        let metadata = fs::symlink_metadata(&entry_path)
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+        if metadata.is_dir() {
+            hasher.update(b"dir");
+            fingerprint_path(root, &entry_path, hasher)?;
+        } else if metadata.is_file() {
+            hasher.update(b"file");
+            hasher.update(
+                fs::read(&entry_path).map_err(|error| AgentsError::message(error.to_string()))?,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn clear_directory(path: &Path) -> Result<()> {
+    if !path.exists() {
+        fs::create_dir_all(path).map_err(|error| AgentsError::message(error.to_string()))?;
+        return Ok(());
+    }
+    for entry in fs::read_dir(path).map_err(|error| AgentsError::message(error.to_string()))? {
+        let entry = entry.map_err(|error| AgentsError::message(error.to_string()))?;
+        let entry_path = entry.path();
+        if entry
+            .file_type()
+            .map_err(|error| AgentsError::message(error.to_string()))?
+            .is_dir()
+        {
+            fs::remove_dir_all(&entry_path)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+        } else {
+            fs::remove_file(&entry_path)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination).map_err(|error| AgentsError::message(error.to_string()))?;
+    for entry in fs::read_dir(source).map_err(|error| AgentsError::message(error.to_string()))? {
+        let entry = entry.map_err(|error| AgentsError::message(error.to_string()))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|error| AgentsError::message(error.to_string()))?;
+        if file_type.is_dir() {
+            copy_directory_contents(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| AgentsError::message(error.to_string()))?;
+            }
+            fs::copy(&source_path, &destination_path)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 impl Drop for LocalSandboxPtySessionInner {
