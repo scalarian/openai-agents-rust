@@ -421,7 +421,7 @@ impl HostedMountStrategy {
 
         match self {
             Self::E2bCloudBucket => Ok(HostedProviderMountPayload::E2b {
-                config: build_rclone_gcs_payload("e2b_cloud_bucket", mount),
+                config: build_rclone_gcs_payload("e2b_cloud_bucket", mount)?,
             }),
             Self::ModalCloudBucket {
                 secret_name,
@@ -434,7 +434,7 @@ impl HostedMountStrategy {
                 )?,
             }),
             Self::DaytonaCloudBucket => Ok(HostedProviderMountPayload::Daytona {
-                config: build_rclone_gcs_payload("daytona_cloud_bucket", mount),
+                config: build_rclone_gcs_payload("daytona_cloud_bucket", mount)?,
             }),
             Self::BlaxelCloudBucket => Ok(HostedProviderMountPayload::Blaxel {
                 config: build_blaxel_gcs_payload(mount)?,
@@ -443,7 +443,7 @@ impl HostedMountStrategy {
                 config: build_cloudflare_gcs_payload(mount)?,
             }),
             Self::RunloopCloudBucket => Ok(HostedProviderMountPayload::Runloop {
-                config: build_rclone_gcs_payload("runloop_cloud_bucket", mount),
+                config: build_rclone_gcs_payload("runloop_cloud_bucket", mount)?,
             }),
         }
     }
@@ -498,8 +498,21 @@ fn build_rclone_r2_payload(strategy: &str, mount: &HostedR2Mount) -> HostedRclon
     }
 }
 
-fn build_rclone_gcs_payload(strategy: &str, mount: &HostedGcsMount) -> HostedRcloneMountPayload {
-    HostedRcloneMountPayload {
+fn build_rclone_gcs_payload(
+    strategy: &str,
+    mount: &HostedGcsMount,
+) -> HostedSandboxResult<HostedRcloneMountPayload> {
+    let using_hmac = mount.access_id.is_some() && mount.secret_access_key.is_some();
+    let using_native_auth =
+        mount.service_account_credentials.is_some() || mount.access_token.is_some();
+
+    if using_hmac && using_native_auth {
+        return Err(HostedSandboxError::new(format!(
+            "gcs {strategy} mounts do not support both hmac and native gcs credentials"
+        )));
+    }
+
+    Ok(HostedRcloneMountPayload {
         provider: HostedBucketProvider::Gcs,
         strategy: strategy.to_owned(),
         bucket: mount.bucket.clone(),
@@ -523,7 +536,7 @@ fn build_rclone_gcs_payload(strategy: &str, mount: &HostedGcsMount) -> HostedRcl
         service_account_credentials: mount.service_account_credentials.clone(),
         access_token: mount.access_token.clone(),
         read_only: mount.read_only,
-    }
+    })
 }
 
 fn build_modal_s3_payload(

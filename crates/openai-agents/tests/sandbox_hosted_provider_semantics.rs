@@ -643,6 +643,53 @@ fn hosted_provider_mount_strategies_match_upstream_payloads() {
     );
 }
 
+#[test]
+fn hosted_provider_rclone_gcs_rejects_mixed_auth_inputs() {
+    for strategy in [
+        "e2b_cloud_bucket",
+        "daytona_cloud_bucket",
+        "runloop_cloud_bucket",
+    ] {
+        let mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+            "type": "gcs_mount",
+            "bucket": "analytics",
+            "access_id": "gcs-access",
+            "secret_access_key": "gcs-secret",
+            "service_account_credentials": "{\"client_email\":\"bot@example.com\"}",
+            "mount_strategy": { "type": strategy }
+        }))
+        .expect("mixed-auth mount should parse");
+        let error = mount
+            .resolve_provider_payload()
+            .expect_err("mixed hmac/service-account auth should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("do not support both hmac and native gcs credentials"),
+            "unexpected error for strategy {strategy}: {error}"
+        );
+
+        let token_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+            "type": "gcs_mount",
+            "bucket": "analytics",
+            "access_id": "gcs-access",
+            "secret_access_key": "gcs-secret",
+            "access_token": "ya29.token",
+            "mount_strategy": { "type": strategy }
+        }))
+        .expect("mixed-auth token mount should parse");
+        let token_error = token_mount
+            .resolve_provider_payload()
+            .expect_err("mixed hmac/access-token auth should be rejected");
+        assert!(
+            token_error
+                .to_string()
+                .contains("do not support both hmac and native gcs credentials"),
+            "unexpected access-token error for strategy {strategy}: {token_error}"
+        );
+    }
+}
+
 enum TempCrateMode {
     Check,
     Run,
