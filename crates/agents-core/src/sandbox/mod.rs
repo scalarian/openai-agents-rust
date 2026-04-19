@@ -561,7 +561,7 @@ pub fn prepare_sandbox_run(
         }),
     };
     let instructions = build_instructions(agent, &manifest);
-    let tools = default_function_tools(session.clone())?;
+    let tools = default_function_tools(session.clone(), &agent.capabilities)?;
 
     let prepared_agent = agent.agent.clone_with(|prepared| {
         prepared.instructions = Some(instructions);
@@ -601,7 +601,10 @@ fn build_instructions(agent: &SandboxAgent, manifest: &Manifest) -> String {
     parts.join("\n\n")
 }
 
-fn default_function_tools(session: LocalSandboxSession) -> Result<Vec<FunctionTool>> {
+fn default_function_tools(
+    session: LocalSandboxSession,
+    capabilities: &[SandboxCapability],
+) -> Result<Vec<FunctionTool>> {
     #[derive(Deserialize, JsonSchema)]
     struct PathArgs {
         path: String,
@@ -618,60 +621,70 @@ fn default_function_tools(session: LocalSandboxSession) -> Result<Vec<FunctionTo
         command: String,
     }
 
-    let list_session = session.clone();
-    let list_tool = function_tool(
-        "sandbox_list_files",
-        "List files inside the sandbox workspace",
-        move |_ctx, args: PathArgs| {
-            let session = list_session.clone();
-            async move { session.list_files(&args.path) }
-        },
-    )?;
+    let mut tools = Vec::new();
 
-    let read_session = session.clone();
-    let read_tool = function_tool(
-        "sandbox_read_file",
-        "Read a UTF-8 text file from the sandbox workspace",
-        move |_ctx, args: PathArgs| {
-            let session = read_session.clone();
-            async move { session.read_file(&args.path) }
-        },
-    )?;
+    for capability in capabilities {
+        match capability {
+            SandboxCapability::Filesystem => {
+                let list_session = session.clone();
+                tools.push(function_tool(
+                    "sandbox_list_files",
+                    "List files inside the sandbox workspace",
+                    move |_ctx, args: PathArgs| {
+                        let session = list_session.clone();
+                        async move { session.list_files(&args.path) }
+                    },
+                )?);
 
-    let shell_session = session.clone();
-    let shell_tool = function_tool(
-        "sandbox_run_shell",
-        "Run a shell command inside the sandbox workspace and return its exit code, stdout, and stderr",
-        move |_ctx, args: ShellArgs| {
-            let session = shell_session.clone();
-            async move {
-                let output = session.run_shell(&args.command)?;
-                Ok(format!(
-                    "exit_code: {}\nstdout:\n{}\nstderr:\n{}",
-                    output.exit_code, output.stdout, output.stderr
-                ))
+                let read_session = session.clone();
+                tools.push(function_tool(
+                    "sandbox_read_file",
+                    "Read a UTF-8 text file from the sandbox workspace",
+                    move |_ctx, args: PathArgs| {
+                        let session = read_session.clone();
+                        async move { session.read_file(&args.path) }
+                    },
+                )?);
             }
-        },
-    )?;
-
-    let patch_session = session.clone();
-    let apply_patch_tool = function_tool(
-        "sandbox_apply_patch",
-        "Replace a sandbox workspace file with patched contents",
-        move |_ctx, args: PatchArgs| {
-            let session = patch_session.clone();
-            async move {
-                session
-                    .apply_patch(ApplyPatchOperation {
-                        path: args.path.clone(),
-                        replacement: args.replacement,
-                    })
-                    .map(|result| format!("patched {}", result.path))
+            SandboxCapability::Shell => {
+                let shell_session = session.clone();
+                tools.push(function_tool(
+                    "sandbox_run_shell",
+                    "Run a shell command inside the sandbox workspace and return its exit code, stdout, and stderr",
+                    move |_ctx, args: ShellArgs| {
+                        let session = shell_session.clone();
+                        async move {
+                            let output = session.run_shell(&args.command)?;
+                            Ok(format!(
+                                "exit_code: {}\nstdout:\n{}\nstderr:\n{}",
+                                output.exit_code, output.stdout, output.stderr
+                            ))
+                        }
+                    },
+                )?);
             }
-        },
-    )?;
+            SandboxCapability::ApplyPatch => {
+                let patch_session = session.clone();
+                tools.push(function_tool(
+                    "sandbox_apply_patch",
+                    "Replace a sandbox workspace file with patched contents",
+                    move |_ctx, args: PatchArgs| {
+                        let session = patch_session.clone();
+                        async move {
+                            session
+                                .apply_patch(ApplyPatchOperation {
+                                    path: args.path.clone(),
+                                    replacement: args.replacement,
+                                })
+                                .map(|result| format!("patched {}", result.path))
+                        }
+                    },
+                )?);
+            }
+        }
+    }
 
-    Ok(vec![list_tool, read_tool, shell_tool, apply_patch_tool])
+    Ok(tools)
 }
 
 fn materialize_manifest(manifest: &Manifest, workspace_root: &Path) -> Result<()> {

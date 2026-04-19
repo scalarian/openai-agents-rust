@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use openai_agents::sandbox::{Dir, File, LocalDir, Manifest, prepare_sandbox_run};
 use openai_agents::{
     ApplyPatchOperation, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem, RunConfig,
-    RunContext, RunContextWrapper, Runner, SandboxAgent, SandboxRunConfig, Tool, ToolContext,
-    ToolOutput, Usage,
+    RunContext, RunContextWrapper, Runner, SandboxAgent, SandboxCapability, SandboxRunConfig, Tool,
+    ToolContext, ToolOutput, Usage,
 };
 use tokio::sync::Mutex;
 
@@ -282,6 +282,99 @@ async fn sandbox_manifest_entries_are_ready_before_first_tool_call() {
 
     prepared.session.cleanup().expect("cleanup succeeds");
     fs::remove_dir_all(&source_root).expect("remove source root");
+}
+
+#[tokio::test]
+async fn sandbox_capability_subsets_limit_attached_tool_bundle() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = CapturingSandboxProvider {
+        model: Arc::new(CapturingSandboxModel {
+            requests: requests.clone(),
+        }),
+    };
+    let sandbox_agent = SandboxAgent::builder("sandbox")
+        .instructions("Only use the allowed sandbox capabilities.")
+        .capabilities(vec![SandboxCapability::Filesystem])
+        .build();
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(
+                Manifest::default().with_entry("README.md", File::from_text("workspace readme\n")),
+            ),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox run prepares");
+    Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .run(&prepared.agent, "summarize the workspace")
+        .await
+        .expect("prepared sandbox run succeeds");
+
+    let request = requests.lock().await.remove(0);
+    let tool_names = request
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(tool_names, vec!["sandbox_list_files", "sandbox_read_file"]);
+
+    let instructions = request.instructions.expect("sandbox instructions");
+    assert!(instructions.contains("filesystem"));
+    assert!(!instructions.contains("shell"));
+    assert!(!instructions.contains("apply_patch"));
+
+    let list_tool = prepared
+        .agent
+        .find_function_tool("sandbox_list_files", None)
+        .expect("filesystem subset keeps list tool");
+    let read_tool = prepared
+        .agent
+        .find_function_tool("sandbox_read_file", None)
+        .expect("filesystem subset keeps read tool");
+    assert!(
+        prepared
+            .agent
+            .find_function_tool("sandbox_run_shell", None)
+            .is_none(),
+        "shell tool should be omitted from the attached bundle"
+    );
+    assert!(
+        prepared
+            .agent
+            .find_function_tool("sandbox_apply_patch", None)
+            .is_none(),
+        "apply_patch tool should be omitted from the attached bundle"
+    );
+
+    let listing = list_tool
+        .invoke(
+            tool_context("sandbox_list_files"),
+            serde_json::json!({ "path": "/workspace" }),
+        )
+        .await
+        .expect("filesystem subset list tool runs");
+    let ToolOutput::Text(listing) = listing else {
+        panic!("list tool should return text output");
+    };
+    assert!(listing.text.contains("README.md"));
+
+    let contents = read_tool
+        .invoke(
+            tool_context("sandbox_read_file"),
+            serde_json::json!({ "path": "/workspace/README.md" }),
+        )
+        .await
+        .expect("filesystem subset read tool runs");
+    let ToolOutput::Text(contents) = contents else {
+        panic!("read tool should return text output");
+    };
+    assert_eq!(contents.text, "workspace readme\n");
+
+    prepared.session.cleanup().expect("cleanup succeeds");
 }
 
 #[test]
