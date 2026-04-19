@@ -6,28 +6,71 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "e2b")]
 pub const DEFAULT_E2B_WORKSPACE_ROOT: &str = "/workspace";
+#[cfg(feature = "modal")]
 pub const DEFAULT_MODAL_WORKSPACE_ROOT: &str = "/workspace";
+#[cfg(feature = "daytona")]
 pub const DEFAULT_DAYTONA_WORKSPACE_ROOT: &str = "/home/daytona/workspace";
+#[cfg(feature = "blaxel")]
 pub const DEFAULT_BLAXEL_WORKSPACE_ROOT: &str = "/workspace";
+#[cfg(feature = "cloudflare")]
 pub const DEFAULT_CLOUDFLARE_WORKSPACE_ROOT: &str = "/workspace";
+#[cfg(feature = "runloop")]
 pub const DEFAULT_RUNLOOP_WORKSPACE_ROOT: &str = "/home/user";
+#[cfg(feature = "vercel")]
 pub const DEFAULT_VERCEL_WORKSPACE_ROOT: &str = "/vercel/sandbox";
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 static NEXT_HOSTED_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostedAuthKind {
     ApiKey,
     Token,
 }
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorkspaceRootPolicy {
     Strict(&'static str),
     Defaulted(&'static str),
 }
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HostedProviderSpec {
     provider_name: &'static str,
@@ -907,16 +950,43 @@ pub struct HostedSandboxSessionStateBase {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 struct HostedResolvedAuth {
     value: String,
     source: &'static str,
 }
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 fn next_hosted_session_id(provider_name: &str) -> String {
     let id = NEXT_HOSTED_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     format!("{provider_name}-session-{id}")
 }
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 fn normalize_workspace_root(
     provider_name: &str,
     policy: WorkspaceRootPolicy,
@@ -936,6 +1006,15 @@ fn normalize_workspace_root(
     }
 }
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 fn resolve_auth(
     provider_name: &str,
     auth_kind: HostedAuthKind,
@@ -972,6 +1051,15 @@ fn resolve_auth(
     )))
 }
 
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
 fn validate_capabilities(
     provider_name: &str,
     supports_exposed_ports: bool,
@@ -1190,6 +1278,7 @@ macro_rules! define_hosted_sandbox_provider {
     };
 }
 
+#[cfg(feature = "e2b")]
 define_hosted_sandbox_provider!(
     e2b,
     E2BSandboxClient,
@@ -1205,6 +1294,7 @@ define_hosted_sandbox_provider!(
         supports_pty: true,
     }
 );
+#[cfg(feature = "modal")]
 define_hosted_sandbox_provider!(
     modal,
     ModalSandboxClient,
@@ -1220,6 +1310,7 @@ define_hosted_sandbox_provider!(
         supports_pty: false,
     }
 );
+#[cfg(feature = "daytona")]
 define_hosted_sandbox_provider!(
     daytona,
     DaytonaSandboxClient,
@@ -1235,6 +1326,7 @@ define_hosted_sandbox_provider!(
         supports_pty: true,
     }
 );
+#[cfg(feature = "blaxel")]
 define_hosted_sandbox_provider!(
     blaxel,
     BlaxelSandboxClient,
@@ -1250,6 +1342,7 @@ define_hosted_sandbox_provider!(
         supports_pty: true,
     }
 );
+#[cfg(feature = "cloudflare")]
 define_hosted_sandbox_provider!(
     cloudflare,
     CloudflareSandboxClient,
@@ -1265,6 +1358,7 @@ define_hosted_sandbox_provider!(
         supports_pty: true,
     }
 );
+#[cfg(feature = "runloop")]
 define_hosted_sandbox_provider!(
     runloop,
     RunloopSandboxClient,
@@ -1280,6 +1374,7 @@ define_hosted_sandbox_provider!(
         supports_pty: false,
     }
 );
+#[cfg(feature = "vercel")]
 define_hosted_sandbox_provider!(
     vercel,
     VercelSandboxClient,

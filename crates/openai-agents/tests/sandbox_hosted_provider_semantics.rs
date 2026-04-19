@@ -1,17 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use openai_agents::extensions::{
-    BlaxelSandboxClient, BlaxelSandboxClientOptions, CloudflareSandboxClient,
-    CloudflareSandboxClientOptions, DEFAULT_DAYTONA_WORKSPACE_ROOT, DEFAULT_VERCEL_WORKSPACE_ROOT,
-    DaytonaSandboxClient, DaytonaSandboxClientOptions, E2BSandboxClient, E2BSandboxClientOptions,
-    HostedMountEntry, HostedProviderMountPayload, RunloopSandboxClient,
-    RunloopSandboxClientOptions, VercelSandboxClient, VercelSandboxClientOptions,
-};
-use serde_json::Value;
+use openai_agents::extensions::{HostedMountEntry, HostedProviderMountPayload};
 
 struct ProviderCase {
     feature: &'static str,
@@ -21,11 +13,6 @@ struct ProviderCase {
 
 #[test]
 fn hosted_provider_feature_matrix_builds_and_exports_symbols() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root should resolve");
-
     let cases = [
         ProviderCase {
             feature: "e2b",
@@ -66,47 +53,105 @@ fn hosted_provider_feature_matrix_builds_and_exports_symbols() {
 
     for case in cases {
         let provider = provider_ident(case.feature);
-        let crate_dir = create_temp_crate(&workspace_root, case.feature, &provider);
-        let manifest_path = crate_dir.join("Cargo.toml");
-        let target_dir = workspace_root
-            .join("target")
-            .join("hosted-provider-feature-matrix")
-            .join(case.feature);
-        let main_rs = crate_dir.join("src/main.rs");
         let program = sandbox_export_program(
             case.feature,
             &provider,
             case.facade_prefix,
             case.extensions_prefix,
         );
+        let output = run_temp_crate(
+            &format!("hosted-provider-feature-matrix-{}", case.feature),
+            &[case.feature],
+            &program,
+            TempCrateMode::Check,
+            &[],
+        );
+        assert_command_success(case.feature, "positive feature-matrix compile", &output);
+    }
+}
 
-        fs::write(&main_rs, program).expect("main.rs should write");
+#[test]
+fn hosted_provider_feature_matrix_rejects_missing_feature_imports() {
+    let cases = [
+        ProviderCase {
+            feature: "e2b",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+        ProviderCase {
+            feature: "modal",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+        ProviderCase {
+            feature: "daytona",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+        ProviderCase {
+            feature: "blaxel",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+        ProviderCase {
+            feature: "cloudflare",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+        ProviderCase {
+            feature: "runloop",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+        ProviderCase {
+            feature: "vercel",
+            facade_prefix: "openai_agents::extensions",
+            extensions_prefix: "agents_extensions",
+        },
+    ];
 
-        let output = Command::new(cargo_bin())
-            .arg("check")
-            .arg("--quiet")
-            .arg("--manifest-path")
-            .arg(&manifest_path)
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .output()
-            .expect("cargo check should run");
+    for case in cases {
+        let provider = provider_ident(case.feature);
+        let program = sandbox_export_program(
+            case.feature,
+            &provider,
+            case.facade_prefix,
+            case.extensions_prefix,
+        );
+        let output = run_temp_crate(
+            &format!("hosted-provider-missing-feature-{}", case.feature),
+            &[],
+            &program,
+            TempCrateMode::Check,
+            &[],
+        );
 
         assert!(
-            output.status.success(),
-            "feature `{}` failed to compile.\nstdout:\n{}\nstderr:\n{}",
+            !output.status.success(),
+            "feature `{}` unexpectedly compiled without its feature.\nstdout:\n{}\nstderr:\n{}",
             case.feature,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-
-        let _ = fs::remove_dir_all(&crate_dir);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("{}SandboxClient", provider)),
+            "missing-feature stderr for `{}` should mention the provider symbol.\nstderr:\n{}",
+            case.feature,
+            stderr
+        );
     }
 }
 
 #[test]
 fn hosted_provider_create_resume_and_auth_precedence() {
-    let _env_guard = env_lock();
+    let program = r#"use openai_agents::extensions::{
+    CloudflareSandboxClient, CloudflareSandboxClientOptions, DaytonaSandboxClient,
+    DaytonaSandboxClientOptions, E2BSandboxClient, E2BSandboxClientOptions,
+    VercelSandboxClient, VercelSandboxClientOptions, DEFAULT_DAYTONA_WORKSPACE_ROOT,
+};
 
+fn main() {
     unsafe {
         std::env::set_var("E2B_API_KEY", "env-e2b-key");
         std::env::remove_var("CLOUDFLARE_SANDBOX_API_KEY");
@@ -125,20 +170,12 @@ fn hosted_provider_create_resume_and_auth_precedence() {
         api_key: Some("daytona-key".to_owned()),
         ..Default::default()
     });
-    let daytona_created = daytona_client
-        .create()
-        .expect("daytona create should succeed");
-    assert_eq!(
-        daytona_created.state().workspace_root,
-        DEFAULT_DAYTONA_WORKSPACE_ROOT
-    );
+    let daytona_created = daytona_client.create().expect("daytona create should succeed");
+    assert_eq!(daytona_created.state().workspace_root, DEFAULT_DAYTONA_WORKSPACE_ROOT);
     let daytona_resumed = daytona_client
         .resume(daytona_created.state().clone())
         .expect("daytona resume should succeed");
-    assert_eq!(
-        daytona_resumed.state().session_id,
-        daytona_created.state().session_id
-    );
+    assert_eq!(daytona_resumed.state().session_id, daytona_created.state().session_id);
     assert!(daytona_resumed.state().start_state_preserved);
 
     let vercel_client = VercelSandboxClient::new(VercelSandboxClientOptions {
@@ -146,9 +183,7 @@ fn hosted_provider_create_resume_and_auth_precedence() {
         workspace_root: Some("/tmp/custom-root".to_owned()),
         ..Default::default()
     });
-    let vercel_created = vercel_client
-        .create()
-        .expect("vercel create should succeed");
+    let vercel_created = vercel_client.create().expect("vercel create should succeed");
     assert_eq!(vercel_created.state().workspace_root, "/tmp/custom-root");
     let vercel_resumed = vercel_client
         .resume(vercel_created.state().clone())
@@ -162,12 +197,7 @@ fn hosted_provider_create_resume_and_auth_precedence() {
     let auth_error = cloudflare_missing_auth
         .create()
         .expect_err("missing cloudflare auth should fail");
-    assert!(
-        auth_error
-            .to_string()
-            .contains("CLOUDFLARE_SANDBOX_API_KEY"),
-        "unexpected error: {auth_error}"
-    );
+    assert!(auth_error.to_string().contains("CLOUDFLARE_SANDBOX_API_KEY"));
 
     let cloudflare_bad_root = CloudflareSandboxClient::new(CloudflareSandboxClientOptions {
         api_key: Some("cloudflare-key".to_owned()),
@@ -177,21 +207,31 @@ fn hosted_provider_create_resume_and_auth_precedence() {
     let root_error = cloudflare_bad_root
         .create()
         .expect_err("cloudflare should reject a non-/workspace root");
-    assert!(
-        root_error.to_string().contains("/workspace"),
-        "unexpected error: {root_error}"
-    );
+    assert!(root_error.to_string().contains("/workspace"));
 
     unsafe {
         std::env::remove_var("E2B_API_KEY");
         std::env::remove_var("CLOUDFLARE_SANDBOX_API_KEY");
     }
 }
+"#;
+
+    let output = run_temp_crate(
+        "hosted-provider-auth-precedence",
+        &["e2b", "daytona", "cloudflare", "vercel"],
+        program,
+        TempCrateMode::Run,
+        &[],
+    );
+    assert_command_success("runtime", "create/resume/auth precedence", &output);
+}
 
 #[test]
 fn hosted_provider_state_is_secret_safe() {
-    let _env_guard = env_lock();
+    let program = r#"use openai_agents::extensions::{BlaxelSandboxClient, BlaxelSandboxClientOptions};
+use serde_json::Value;
 
+fn main() {
     let client = BlaxelSandboxClient::new(BlaxelSandboxClientOptions {
         token: Some("bl-secret-token".to_owned()),
         client_timeout_s: Some(45),
@@ -212,21 +252,9 @@ fn hosted_provider_state_is_secret_safe() {
     assert!(!object.contains_key("token"));
     assert!(!object.contains_key("api_key"));
     assert!(!object.contains_key("client_timeout_s"));
-    assert_eq!(
-        object.get("workspace_root").and_then(Value::as_str),
-        Some("/workspace/project")
-    );
-    assert_eq!(
-        object
-            .get("exposed_ports")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        object.get("interactive_pty").and_then(Value::as_bool),
-        Some(true)
-    );
+    assert_eq!(object.get("workspace_root").and_then(Value::as_str), Some("/workspace/project"));
+    assert_eq!(object.get("exposed_ports").and_then(Value::as_array).map(Vec::len), Some(1));
+    assert_eq!(object.get("interactive_pty").and_then(Value::as_bool), Some(true));
 
     let restored = client
         .deserialize_session_state(payload)
@@ -235,11 +263,26 @@ fn hosted_provider_state_is_secret_safe() {
     assert_eq!(restored.exposed_ports, vec![3000]);
     assert!(restored.interactive_pty);
 }
+"#;
+
+    let output = run_temp_crate(
+        "hosted-provider-state-secret-safe",
+        &["blaxel"],
+        program,
+        TempCrateMode::Run,
+        &[],
+    );
+    assert_command_success("runtime", "secret-safe session state", &output);
+}
 
 #[test]
 fn hosted_provider_capabilities_preserve_ports_and_pty_flags() {
-    let _env_guard = env_lock();
+    let program = r#"use openai_agents::extensions::{
+    E2BSandboxClient, E2BSandboxClientOptions, RunloopSandboxClient, RunloopSandboxClientOptions,
+    VercelSandboxClient, VercelSandboxClientOptions, DEFAULT_VERCEL_WORKSPACE_ROOT,
+};
 
+fn main() {
     let e2b_client = E2BSandboxClient::new(E2BSandboxClientOptions {
         api_key: Some("e2b-key".to_owned()),
         exposed_ports: vec![3000, 4000],
@@ -265,10 +308,7 @@ fn hosted_provider_capabilities_preserve_ports_and_pty_flags() {
     let runloop_error = runloop_client
         .create()
         .expect_err("runloop should reject PTY requests");
-    assert!(
-        runloop_error.to_string().contains("interactive PTY"),
-        "unexpected error: {runloop_error}"
-    );
+    assert!(runloop_error.to_string().contains("interactive PTY"));
 
     let vercel_client = VercelSandboxClient::new(VercelSandboxClientOptions {
         token: Some("vercel-token".to_owned()),
@@ -278,12 +318,20 @@ fn hosted_provider_capabilities_preserve_ports_and_pty_flags() {
     let vercel_created = vercel_client
         .create()
         .expect("vercel create should preserve exposed ports");
-    assert_eq!(
-        vercel_created.state().workspace_root,
-        DEFAULT_VERCEL_WORKSPACE_ROOT
-    );
+    assert_eq!(vercel_created.state().workspace_root, DEFAULT_VERCEL_WORKSPACE_ROOT);
     assert_eq!(vercel_created.state().exposed_ports, vec![8080]);
     assert!(!vercel_created.supports_pty());
+}
+"#;
+
+    let output = run_temp_crate(
+        "hosted-provider-capabilities",
+        &["e2b", "runloop", "vercel"],
+        program,
+        TempCrateMode::Run,
+        &[],
+    );
+    assert_command_success("runtime", "capabilities/ports/pty", &output);
 }
 
 #[test]
@@ -534,7 +582,65 @@ fn hosted_provider_mount_strategies_match_upstream_payloads() {
     );
 }
 
-fn create_temp_crate(workspace_root: &Path, feature: &str, provider: &str) -> PathBuf {
+enum TempCrateMode {
+    Check,
+    Run,
+}
+
+fn run_temp_crate(
+    name: &str,
+    features: &[&str],
+    program: &str,
+    mode: TempCrateMode,
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    let workspace_root = workspace_root();
+    let crate_dir = create_temp_crate(&workspace_root, name, features);
+    let manifest_path = crate_dir.join("Cargo.toml");
+    let target_dir = workspace_root
+        .join("target")
+        .join("hosted-provider-tests")
+        .join(name);
+
+    fs::write(crate_dir.join("src/main.rs"), program).expect("main.rs should write");
+
+    let mut command = Command::new(cargo_bin());
+    command
+        .arg(match mode {
+            TempCrateMode::Check => "check",
+            TempCrateMode::Run => "run",
+        })
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .env("CARGO_TARGET_DIR", &target_dir);
+
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+
+    let output = command.output().expect("cargo command should run");
+    let _ = fs::remove_dir_all(&crate_dir);
+    output
+}
+
+fn assert_command_success(feature: &str, context: &str, output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "{context} failed for `{feature}`.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve")
+}
+
+fn create_temp_crate(workspace_root: &Path, name: &str, features: &[&str]) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock should move forward")
@@ -542,29 +648,46 @@ fn create_temp_crate(workspace_root: &Path, feature: &str, provider: &str) -> Pa
     let crate_dir = workspace_root
         .join("target")
         .join("tmp")
-        .join(format!("hosted-provider-{feature}-{unique}"));
+        .join(format!("{name}-{unique}"));
 
     fs::create_dir_all(crate_dir.join("src")).expect("temp crate src dir should exist");
 
+    let feature_list = if features.is_empty() {
+        String::new()
+    } else {
+        features
+            .iter()
+            .map(|feature| format!(r#""{feature}""#))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let feature_clause = if features.is_empty() {
+        "[]".to_owned()
+    } else {
+        format!("[{feature_list}]")
+    };
+
     let cargo_toml = format!(
         r#"[package]
-name = "hosted-provider-{feature}"
+name = "{name}"
 version = "0.0.0"
 edition = "2024"
 
 [workspace]
 
 [dependencies]
-openai_agents = {{ package = "openai-agents-rs", path = "{openai_agents}", default-features = false, features = ["{feature}"] }}
-agents_extensions = {{ package = "openai-agents-extensions-rs", path = "{agents_extensions}", default-features = false, features = ["{feature}"] }}
+openai_agents = {{ package = "openai-agents-rs", path = "{openai_agents}", default-features = false, features = {feature_clause} }}
+agents_extensions = {{ package = "openai-agents-extensions-rs", path = "{agents_extensions}", default-features = false, features = {feature_clause} }}
+serde_json = "1"
 "#,
-        feature = feature,
+        name = name,
         openai_agents = display_path(&workspace_root.join("crates/openai-agents")),
         agents_extensions = display_path(&workspace_root.join("crates/agents-extensions")),
+        feature_clause = feature_clause,
     );
 
     fs::write(crate_dir.join("Cargo.toml"), cargo_toml).expect("Cargo.toml should write");
-    fs::write(crate_dir.join("src/main.rs"), format!("// {provider}\n"))
+    fs::write(crate_dir.join("src/main.rs"), "// temp crate\n")
         .expect("placeholder main.rs should write");
 
     crate_dir
@@ -630,14 +753,6 @@ fn provider_ident(feature: &str) -> String {
             format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
         }
     }
-}
-
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    ENV_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("env lock should not be poisoned")
 }
 
 fn cargo_bin() -> String {
