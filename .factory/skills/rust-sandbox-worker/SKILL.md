@@ -23,12 +23,13 @@ None.
    - hosted providers belong in extensions
    - facade crate stays a re-export layer
 3. Write failing tests first. Prefer deterministic local tests with fake/scripted models. For Docker/provider work, start with mocked or request-shape tests unless the feature explicitly requires live backend verification.
-4. Implement the minimal runtime changes to make the tests pass while preserving workspace-root safety, runner-owned vs caller-owned session rules, and `RunState` as the public resume boundary.
-5. Re-run targeted sandbox tests after each change. Add example or temp-program smoke coverage whenever the feature changes public sandbox imports or docs-visible examples.
-6. Use live backend checks only when the environment supports them:
+4. When a feature claims workspace safety, `LocalDir` safety, or shell/PTY confinement, include adversarial regressions for the escape vectors that matter to that surface (for example: symlink ancestry, TOCTOU source swaps, shell expansion, nested interpreters, or other host-write escape attempts).
+5. Implement the minimal runtime changes to make the tests pass while preserving workspace-root safety, runner-owned vs caller-owned session rules, and `RunState` as the public resume boundary.
+6. Re-run targeted sandbox tests after each change. Add example or temp-program smoke coverage whenever the feature changes public sandbox imports or docs-visible examples.
+7. Use live backend checks only when the environment supports them:
    - if Docker is unavailable and the feature requires real Docker validation, stop and return to the orchestrator
    - hosted providers default to mocked/code-parity validation unless the feature explicitly says live creds are available
-7. Before handoff, prove cleanup happened for any temp dirs, temp crates, or sandbox scratch state you created.
+8. Before handoff, prove cleanup happened for any temp dirs, temp crates, or sandbox scratch state you created.
 
 ## Example Handoff
 
