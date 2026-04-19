@@ -1201,6 +1201,92 @@ fn running_sessions_reject_unsupported_manifest_mutations() {
 }
 
 #[tokio::test]
+async fn caller_owned_sessions_are_not_serialized_into_run_state() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let provider = Arc::new(CapturingSandboxProvider {
+        model: Arc::new(ApprovalResumeSandboxModel::default()),
+    });
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let live_session = LocalSandboxSession::create_caller_owned(
+        Manifest::default().with_entry("notes.txt", File::from_text("caller-owned workspace\n")),
+    )
+    .expect("caller-owned live session should initialize");
+    let workspace_root = live_session.workspace_root();
+    assert!(!live_session.runner_owned());
+
+    let prepared = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session: Some(live_session.clone()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("sandbox prep succeeds");
+
+    let approval_gated_agent = prepared.agent.clone_with(|agent| {
+        let read_tool = agent
+            .find_function_tool("sandbox_read_file", None)
+            .expect("sandbox read tool is attached")
+            .clone()
+            .with_needs_approval(true);
+        agent
+            .function_tools
+            .retain(|tool| tool.definition.name != "sandbox_read_file");
+        agent.function_tools.push(read_tool);
+    });
+
+    let result = Runner::new()
+        .with_model_provider(provider)
+        .run(
+            &approval_gated_agent,
+            "serialize caller-owned sandbox state",
+        )
+        .await
+        .expect("caller-owned run should interrupt cleanly");
+
+    assert!(result.final_output.is_none());
+    assert!(matches!(
+        result
+            .interruptions
+            .first()
+            .and_then(|step| step.kind.clone()),
+        Some(RunInterruptionKind::ToolApproval)
+    ));
+
+    let durable_state = result
+        .durable_state()
+        .expect("interrupted run should expose durable state");
+    assert!(
+        durable_state.sandbox.is_none(),
+        "caller-owned injected sessions must be omitted from durable run state"
+    );
+
+    let serialized_state =
+        serde_json::to_value(durable_state).expect("run state should serialize cleanly");
+    assert!(
+        serialized_state.get("sandbox").is_none(),
+        "serialized run state should omit caller-owned sandbox payloads"
+    );
+    assert!(
+        workspace_root.exists(),
+        "caller-owned workspace should remain caller-managed after interruption"
+    );
+
+    prepared
+        .session
+        .cleanup()
+        .expect("caller-owned cleanup should be a no-op");
+    assert!(
+        workspace_root.exists(),
+        "runner cleanup should not delete caller-owned workspace roots"
+    );
+    fs::remove_dir_all(workspace_root).expect("caller cleans up injected live session");
+}
+
+#[tokio::test]
 async fn sandbox_runstate_resume_restores_workspace_after_approval() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let provider = Arc::new(CapturingSandboxProvider {

@@ -957,7 +957,7 @@ impl Runner {
         run_state.sandbox = current_agent
             .sandbox_runtime
             .as_ref()
-            .map(crate::sandbox::AgentSandboxRuntime::snapshot);
+            .and_then(crate::sandbox::AgentSandboxRuntime::snapshot);
         let trace = trace_manager.finish();
         run_state.set_trace(trace.clone());
         let normalized_result_items = (normalized_generated_items != session_generated_items)

@@ -842,14 +842,17 @@ pub fn prepare_sandbox_run(
 }
 
 impl AgentSandboxRuntime {
-    pub fn snapshot(&self) -> SandboxRunState {
+    pub fn snapshot(&self) -> Option<SandboxRunState> {
+        if !self.session.runner_owned() {
+            return None;
+        }
         let _ = self.session.refresh_snapshot_state();
-        SandboxRunState {
+        Some(SandboxRunState {
             base_instructions: self.base_instructions.clone(),
             user_instructions: self.user_instructions.clone(),
             capabilities: self.capabilities.clone(),
             session_state: self.session.session_state(),
-        }
+        })
     }
 }
 
