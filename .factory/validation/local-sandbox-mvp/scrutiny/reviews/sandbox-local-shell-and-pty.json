@@ -1,0 +1,28 @@
+{
+  "featureId": "sandbox-local-shell-and-pty",
+  "reviewedAt": "2026-04-19T14:28:00Z",
+  "commitId": "740d6ec5e9cc1165858a4a57e47d113b18bf32f1",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. The change brings shell commands up inside the workspace and adds interactive PTY stdin/output handling, but the host-side shell execution is only guarded by a token scan, so commands can still escape the workspace and persist writes outside it. That means the implementation does not fully satisfy VAL-SANDBOX-006 or the feature's promise that PTY sessions remain rooted to the sandbox workspace.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/sandbox/mod.rs",
+        "line": 838,
+        "severity": "blocking",
+        "description": "`validate_shell_command()` only rejects tokens containing `..` or absolute paths outside `/workspace`, while both `run_shell()` and `open_pty()` then hand the original string to `/bin/sh -lc` as an ordinary host process. That is not real filesystem confinement: commands such as `python -c 'open(\"/tmp/escaped\", \"w\").write(\"x\")'`, `perl -e 'open F,\">/tmp/escaped\"'`, or redirects through expanded variables like `>$HOME/escaped` bypass this filter and can still write outside the sandbox root. Because the contract for VAL-SANDBOX-006/015 requires shell/PTY execution to stay within the workspace and not persist writes outside it, this implementation remains contract-incomplete."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "library",
+      "observation": "The mission environment docs do not record that macOS PTY work can rely on `/usr/bin/script`, so the worker had to probe for that binary before implementing Unix-local PTY support.",
+      "evidence": "The transcript skeleton for worker session `72ae26d5-268e-4761-a820-fc51280dfcde` includes `Execute {\"command\": \"which script\"}` before the PTY implementation. `.factory/library/environment.md` documents Docker and `rg` availability but does not mention `script` or another PTY primitive."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature handoff, transcript skeleton, mission contract, skill guidance, architecture/library docs, and commit `740d6ec5e9cc1165858a4a57e47d113b18bf32f1`. The feature correctly adds workspace-started shell execution, Unix exit/status reporting, and interactive PTY stdin/output plumbing, but scrutiny fails because shell confinement is heuristic rather than real: `/bin/sh -lc` still runs as a normal host process and can reach outside the sandbox through embedded interpreters or shell expansions that `validate_shell_command()` does not detect."
+}

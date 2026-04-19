@@ -1,0 +1,22 @@
+{
+  "featureId": "sandbox-public-surface-and-manifest-preparation",
+  "reviewedAt": "2026-04-19T14:35:00Z",
+  "commitId": "f69df857026cc86fe183b764b78eb05389243f53",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. Commit `f69df857026cc86fe183b764b78eb05389243f53` adds the provider-neutral sandbox surface in `agents-core`, re-exports it from the facade, and covers the three local-sandbox MVP assertions with targeted semantics tests. `RunConfig` now carries `sandbox` configuration (`crates/agents-core/src/run_config.rs`), the new `agents_core::sandbox` module exposes `SandboxAgent`, manifest entry types, temp workspace preparation, and runner-owned session cleanup (`crates/agents-core/src/sandbox/mod.rs`), and the facade exposes both top-level re-exports and `openai_agents::sandbox` (`crates/openai-agents/src/lib.rs`). The three new tests in `crates/openai-agents/tests/sandbox_semantics.rs` give direct evidence for `VAL-SANDBOX-001`, `VAL-SANDBOX-002`, and `VAL-SANDBOX-003`: default capabilities and workspace layout reach the model-facing request, fresh preparations use distinct temp roots and clean them up, and file/dir/`LocalDir` entries are readable on the first tool invocation.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/sandbox/mod.rs",
+        "line": 381,
+        "severity": "non_blocking",
+        "description": "`SandboxAgentBuilder::capabilities()` stores a caller-specified capability set at lines 116-128, but `prepare_sandbox_run()` always attaches the full sandbox tool bundle by calling `default_function_tools(session.clone())` at lines 380-381, and `default_function_tools()` unconditionally returns list/read/shell/apply-patch tools at lines 421-464. As a result, custom capability subsets only change the instruction text and do not actually constrain which sandbox tools are exposed. That does not block `VAL-SANDBOX-001` through `VAL-SANDBOX-003`, which only cover the default capability case, but it leaves the new public capability surface partially inert for consumers."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature handoff, transcript skeleton, skill guidance, validation contract, and commit `f69df857026cc86fe183b764b78eb05389243f53`. The feature satisfies `VAL-SANDBOX-001`, `VAL-SANDBOX-002`, and `VAL-SANDBOX-003`; scrutiny status is pass, with one non-blocking API issue where custom capability subsets are not yet enforced by tool attachment."
+}

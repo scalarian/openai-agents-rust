@@ -12,6 +12,7 @@ Environment variables, external dependencies, and setup notes.
 - Network access to crates.io for `cargo fetch`, `cargo test` on cold machines, packaging, and publish verification.
 - Docker is currently unavailable in this environment; Docker-backed sandbox validation is blocked until that changes.
 - `rg` is currently unavailable in this environment; `docs/scripts/check_links.sh` depends on it today and must be fixed or shimmed during the mission.
+- On macOS, `/usr/bin/script` is available and can be used as the local PTY primitive when Unix-local sandbox PTY flows need an interactive terminal host.
 - Run `.factory/init.sh` before heavy mission work when you need a quick preflight: it performs `cargo fetch --locked` and warns if `rg` or Docker are unavailable in the current environment.
 
 ## Environment Variables

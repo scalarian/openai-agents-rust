@@ -1,0 +1,60 @@
+{
+  "milestone": "local-sandbox-mvp",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace -- --test-threads=5",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 1,
+    "failed": 2,
+    "failedFeatures": [
+      "sandbox-localdir-and-workspace-safety",
+      "sandbox-local-shell-and-pty"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "sandbox-localdir-and-workspace-safety",
+      "severity": "blocking",
+      "description": "LocalDir staging does not fully satisfy `VAL-SANDBOX-004`: symlinked ancestors are not rejected and the current revalidation still leaves a TOCTOU swap window before `read_dir`/`fs::copy`, so unsafe host content can still be ingested."
+    },
+    {
+      "featureId": "sandbox-local-shell-and-pty",
+      "severity": "blocking",
+      "description": "Unix-local shell and PTY execution are not actually confined to the sandbox workspace: `validate_shell_command()` only token-scans the command string before `/bin/sh -lc` executes it on the host, so embedded interpreters or shell expansions can still persist writes outside the workspace."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Documented that macOS PTY work in this mission environment can rely on `/usr/bin/script` as the local PTY primitive.",
+      "sourceFeature": "sandbox-local-shell-and-pty"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skills",
+      "suggestion": "Update `rust-sandbox-worker` to explicitly require adversarial confinement regressions for sandbox-safety work, including symlink ancestry and TOCTOU path-swap cases when a contract assertion is about workspace or LocalDir confinement.",
+      "evidence": "The `sandbox-localdir-and-workspace-safety` review found that the landed regression was named for \"symlinked or swapped sources\" but only exercised a static child symlink, which left the contract's ancestor-symlink and live-swap cases uncovered.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}
