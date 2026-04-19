@@ -24,12 +24,13 @@ None.
    - facade crate stays a re-export layer
 3. Write failing tests first. Prefer deterministic local tests with fake/scripted models. For Docker/provider work, start with mocked or request-shape tests unless the feature explicitly requires live backend verification.
 4. When a feature claims workspace safety, `LocalDir` safety, or shell/PTY confinement, include adversarial regressions for the escape vectors that matter to that surface (for example: symlink ancestry, TOCTOU source swaps, shell expansion, nested interpreters, or other host-write escape attempts).
-5. Implement the minimal runtime changes to make the tests pass while preserving workspace-root safety, runner-owned vs caller-owned session rules, and `RunState` as the public resume boundary.
-6. Re-run targeted sandbox tests after each change. Add example or temp-program smoke coverage whenever the feature changes public sandbox imports or docs-visible examples.
-7. Use live backend checks only when the environment supports them:
+5. When a feature claims durable sandbox resume or snapshot behavior, prove it across a real teardown boundary: serialize state, drop the original runner-owned workspace/session, then resume from the durable payload. Include symlink-only drift/restore coverage when snapshots or fingerprints are involved, and never serialize caller-owned injected sessions into runner-managed durable state.
+6. Implement the minimal runtime changes to make the tests pass while preserving workspace-root safety, runner-owned vs caller-owned session rules, and `RunState` as the public resume boundary.
+7. Re-run targeted sandbox tests after each change. Add example or temp-program smoke coverage whenever the feature changes public sandbox imports or docs-visible examples.
+8. Use live backend checks only when the environment supports them:
    - if Docker is unavailable and the feature requires real Docker validation, stop and return to the orchestrator
    - hosted providers default to mocked/code-parity validation unless the feature explicitly says live creds are available
-8. Before handoff, prove cleanup happened for any temp dirs, temp crates, or sandbox scratch state you created.
+9. Before handoff, prove cleanup happened for any temp dirs, temp crates, or sandbox scratch state you created.
 
 ## Example Handoff
 

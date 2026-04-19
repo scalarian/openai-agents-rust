@@ -63,6 +63,8 @@ This mission should extend the existing Rust workspace, not create a parallel sa
 - Session implementations own conversational history and replay boundaries.
 - `RunState` is the serialized pause/resume boundary for turns, generated items, approvals, trace context, and provider-managed conversation metadata.
 - Sandbox resume must preserve this contract by layering sandbox session/workspace state into the same resume story.
+- Caller-owned injected sandbox sessions remain caller-managed and must not be serialized into runner-managed durable resume payloads.
+- Runner-owned local sandbox resume must survive teardown of the original temp workspace by restoring from durable sandbox state instead of assuming the old path still exists.
 
 ### Streaming, realtime, and voice flow
 - Streaming uses the same underlying core execution semantics while exposing incremental events.
@@ -89,6 +91,8 @@ This mission should extend the existing Rust workspace, not create a parallel sa
 - Runner-owned local sandbox sessions are temp-dir backed and clean up that workspace on drop, so durable sandbox resume state must preserve workspace contents and not just the prior root path/manifest metadata.
 - When adding new default hooks or behavior to `ModelProvider`, audit wrapper providers such as `MultiProvider` and forward the new behavior explicitly so routed models preserve provider-specific metadata and request shaping.
 - Runner-created sandbox sessions are runner-managed; caller-injected live sessions remain caller-managed.
+- Caller-injected live sandbox sessions are non-durable and must never be captured inside runner-managed `RunState`.
+- Snapshot fingerprinting and restore must preserve symlinks as first-class workspace state, not just regular files and directories.
 - Sandbox file, shell, and patch operations must stay rooted to the sandbox workspace and must not escape onto the host filesystem.
 - Optional hosted backends must not force third-party provider dependencies into the core runtime crate.
 - Realtime and voice remain consumers of shared runtime semantics, not forks of them.
