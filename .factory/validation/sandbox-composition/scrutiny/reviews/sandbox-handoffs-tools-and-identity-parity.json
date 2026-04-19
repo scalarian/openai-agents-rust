@@ -1,0 +1,28 @@
+{
+  "featureId": "sandbox-handoffs-tools-and-identity-parity",
+  "reviewedAt": "2026-04-19T17:00:35.231330+00:00",
+  "commitId": "4624a16c42192fe0d01c497f604e9caba0257eee",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. The new sandbox identity map only distinguishes duplicate-named sandbox agents by a structural signature, so two same-name sandbox agents with identical definitions collapse onto one key/runtime. That means handoffs/resume can reuse the same workspace for distinct agent instances, which violates the feature requirement that duplicate-named sandbox agents preserve distinct isolated identities across JSON round-trips.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/sandbox/mod.rs",
+        "line": 875,
+        "severity": "blocking",
+        "description": "`collect_reachable_agents()` and `build_sandbox_identity_map()` key sandbox identities by `(agent.name, sandbox_agent_signature)` instead of per-agent instance identity. For duplicate-named sandbox agents whose model/instructions/manifest/handoff-target names are the same, `collect_reachable_agents()` drops the later instance as already visited (lines 875-885), and `key_by_signature.insert(...)` overwrites the earlier mapping for the same signature (line 940). Both agent instances then resolve to the same sandbox key/runtime, so their workspace state can leak and resume cannot preserve distinct identities. The added regression test only covers duplicate names with different instructions/manifests/models (`crates/openai-agents/tests/sandbox_semantics.rs:2160-2172`), so this collision case is still untested."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The shared sandbox guidance does not call out an adversarial case for duplicate-named sandbox agents that are otherwise structurally identical, and the feature tests only exercised duplicate names with different manifests/instructions/models. Adding that case to the sandbox worker guidance or validation coverage would make this class of identity-collision bug harder to miss.",
+      "evidence": "rust-sandbox-worker SKILL.md step 3 says to write failing tests first, but there is no duplicate-name identity-collision example; the only new duplicate-name test is `crates/openai-agents/tests/sandbox_semantics.rs:2148-2334`, where the two `sandbox` agents intentionally differ at lines 2160-2172."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed mission metadata, the worker handoff/transcript skeleton, skill guidance, architecture/services docs, commit `4624a16c42192fe0d01c497f604e9caba0257eee`, and the sandbox semantics tests. The handoff and agent-as-tool paths look aligned with the feature contract, but the duplicate-name identity implementation is still incorrect for structurally identical sandbox agents, so the feature does not fully satisfy the required isolated resume identity behavior."
+}
