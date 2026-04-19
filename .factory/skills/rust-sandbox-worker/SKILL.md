@@ -23,6 +23,7 @@ None.
    - hosted providers belong in extensions
    - facade crate stays a re-export layer
 3. Write failing tests first. Prefer deterministic local tests with fake/scripted models. For Docker/provider work, start with mocked or request-shape tests unless the feature explicitly requires live backend verification.
+   - For compile-surface or feature-gated export work, it is acceptable to first sketch the minimal gated symbol wiring needed for a temp-crate or compile-matrix test to exist, then immediately finalize the failing compile-surface test before broader implementation.
 4. When a feature claims workspace safety, `LocalDir` safety, or shell/PTY confinement, include adversarial regressions for the escape vectors that matter to that surface (for example: symlink ancestry, TOCTOU source swaps, shell expansion, nested interpreters, or other host-write escape attempts).
 5. When a feature claims durable sandbox resume or snapshot behavior, prove it across a real teardown boundary: serialize state, drop the original runner-owned workspace/session, then resume from the durable payload. Include symlink-only drift/restore coverage when snapshots or fingerprints are involved, and never serialize caller-owned injected sessions into runner-managed durable state.
 6. Implement the minimal runtime changes to make the tests pass while preserving workspace-root safety, runner-owned vs caller-owned session rules, and `RunState` as the public resume boundary.
