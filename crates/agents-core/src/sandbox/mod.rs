@@ -548,7 +548,10 @@ pub fn prepare_sandbox_run(
         .unwrap_or_default();
 
     let workspace_root = create_temp_workspace_root()?;
-    materialize_manifest(&manifest, &workspace_root)?;
+    if let Err(error) = materialize_manifest(&manifest, &workspace_root) {
+        let _ = fs::remove_dir_all(&workspace_root);
+        return Err(error);
+    }
     let session = LocalSandboxSession {
         inner: Arc::new(LocalSandboxSessionInner {
             workspace_root,
@@ -710,38 +713,55 @@ fn materialize_entry(
 
 fn copy_local_dir(source: &Path, destination: &Path) -> Result<()> {
     validate_local_dir_source_root(source)?;
-    fs::create_dir_all(destination).map_err(|error| AgentsError::message(error.to_string()))?;
-    let copy_result = copy_local_dir_contents(source, destination);
+    let source_snapshot = snapshot_local_dir_source(source)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AgentsError::message("local dir destination must have a parent"))?;
+    fs::create_dir_all(parent).map_err(|error| AgentsError::message(error.to_string()))?;
+
+    let staging_destination = parent.join(format!(".localdir-stage-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&staging_destination)
+        .map_err(|error| AgentsError::message(error.to_string()))?;
+
+    let copy_result = copy_local_dir_contents(source, &staging_destination, &source_snapshot);
     if copy_result.is_err() {
-        let _ = fs::remove_dir_all(destination);
+        let _ = fs::remove_dir_all(&staging_destination);
+        return copy_result;
     }
-    copy_result
+
+    if destination.exists() {
+        fs::remove_dir_all(destination).map_err(|error| AgentsError::message(error.to_string()))?;
+    }
+
+    fs::rename(&staging_destination, destination)
+        .map_err(|error| AgentsError::message(error.to_string()))
 }
 
-fn copy_local_dir_contents(source: &Path, destination: &Path) -> Result<()> {
+fn copy_local_dir_contents(
+    source: &Path,
+    destination: &Path,
+    root_snapshot: &LocalDirSourceSnapshot,
+) -> Result<()> {
+    maybe_wait_on_local_dir_test_hook(source)?;
+
     for entry in fs::read_dir(source).map_err(|error| AgentsError::message(error.to_string()))? {
         let entry = entry.map_err(|error| AgentsError::message(error.to_string()))?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        let initial_kind = stable_local_dir_entry_kind(&source_path)?;
-        let current_kind = stable_local_dir_entry_kind(&source_path)?;
-        if initial_kind != current_kind {
-            return Err(AgentsError::message(format!(
-                "local dir source changed during copy: {}",
-                source_path.display()
-            )));
-        }
-        match initial_kind {
+        let entry_snapshot = snapshot_local_dir_source(&source_path)?;
+        match entry_snapshot.kind {
             LocalDirEntryKind::Dir => {
                 fs::create_dir_all(&destination_path)
                     .map_err(|error| AgentsError::message(error.to_string()))?;
-                copy_local_dir_contents(&source_path, &destination_path)?;
+                copy_local_dir_contents(&source_path, &destination_path, root_snapshot)?;
             }
             LocalDirEntryKind::File => {
                 fs::copy(&source_path, &destination_path)
                     .map_err(|error| AgentsError::message(error.to_string()))?;
             }
         }
+        ensure_local_dir_source_unchanged(&entry_snapshot)?;
+        ensure_local_dir_source_unchanged(root_snapshot)?;
     }
     Ok(())
 }
@@ -759,19 +779,72 @@ fn validate_local_dir_source_root(source: &Path) -> Result<()> {
             source.display()
         )));
     }
-    stable_local_dir_entry_kind(source).map(|_| ())
+    snapshot_local_dir_source(source).map(|_| ())
 }
 
-fn stable_local_dir_entry_kind(path: &Path) -> Result<LocalDirEntryKind> {
+#[derive(Clone, Debug)]
+struct LocalDirSourceSnapshot {
+    path: PathBuf,
+    canonical_path: PathBuf,
+    kind: LocalDirEntryKind,
+    #[cfg(unix)]
+    device_id: u64,
+    #[cfg(unix)]
+    inode: u64,
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+fn snapshot_local_dir_source(path: &Path) -> Result<LocalDirSourceSnapshot> {
+    ensure_no_symlinked_ancestors(path)?;
     let metadata = ensure_not_symlink(path, "local dir source")?;
-    if metadata.is_dir() {
-        Ok(LocalDirEntryKind::Dir)
+    let kind = if metadata.is_dir() {
+        LocalDirEntryKind::Dir
     } else if metadata.is_file() {
-        Ok(LocalDirEntryKind::File)
+        LocalDirEntryKind::File
     } else {
-        Err(AgentsError::message(format!(
+        return Err(AgentsError::message(format!(
             "local dir source must contain only regular files and directories: {}",
             path.display()
+        )));
+    };
+
+    Ok(LocalDirSourceSnapshot {
+        path: path.to_path_buf(),
+        canonical_path: fs::canonicalize(path)
+            .map_err(|error| AgentsError::message(error.to_string()))?,
+        kind,
+        #[cfg(unix)]
+        device_id: std::os::unix::fs::MetadataExt::dev(&metadata),
+        #[cfg(unix)]
+        inode: std::os::unix::fs::MetadataExt::ino(&metadata),
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn ensure_local_dir_source_unchanged(snapshot: &LocalDirSourceSnapshot) -> Result<()> {
+    let current = snapshot_local_dir_source(&snapshot.path)?;
+    let unchanged = snapshot.kind == current.kind
+        && snapshot.canonical_path == current.canonical_path
+        && snapshot.size == current.size
+        && snapshot.modified == current.modified
+        && {
+            #[cfg(unix)]
+            {
+                snapshot.device_id == current.device_id && snapshot.inode == current.inode
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        };
+    if unchanged {
+        Ok(())
+    } else {
+        Err(AgentsError::message(format!(
+            "local dir source changed during copy: {}",
+            snapshot.path.display()
         )))
     }
 }
@@ -786,6 +859,60 @@ fn ensure_not_symlink(path: &Path, context: &str) -> Result<fs::Metadata> {
         )));
     }
     Ok(metadata)
+}
+
+fn ensure_no_symlinked_ancestors(path: &Path) -> Result<()> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AgentsError::message(format!(
+                    "local dir source cannot use a symlinked ancestor: {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => return Err(AgentsError::message(error.to_string())),
+        }
+    }
+    Ok(())
+}
+
+fn maybe_wait_on_local_dir_test_hook(source: &Path) -> Result<()> {
+    let Some(raw) = std::env::var_os("OPENAI_AGENTS_SANDBOX_LOCALDIR_TEST_HOOK") else {
+        return Ok(());
+    };
+
+    let raw = raw
+        .into_string()
+        .map_err(|_| AgentsError::message("local dir test hook must be valid UTF-8"))?;
+    let mut parts = raw.splitn(3, '|');
+    let expected_source = parts.next().unwrap_or_default();
+    let trigger_path = parts.next().unwrap_or_default();
+    let release_path = parts.next().unwrap_or_default();
+    if expected_source.is_empty() || trigger_path.is_empty() || release_path.is_empty() {
+        return Ok(());
+    }
+
+    if source != Path::new(expected_source) {
+        return Ok(());
+    }
+
+    fs::write(trigger_path, b"ready").map_err(|error| AgentsError::message(error.to_string()))?;
+    let release_path = Path::new(release_path);
+    let started = Instant::now();
+    while !release_path.exists() {
+        if started.elapsed() > Duration::from_secs(5) {
+            return Err(AgentsError::message(format!(
+                "timed out waiting for local dir test hook release: {}",
+                release_path.display()
+            )));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
 }
 
 fn ensure_path_stays_within_workspace(workspace_root: &Path, candidate: &Path) -> Result<()> {

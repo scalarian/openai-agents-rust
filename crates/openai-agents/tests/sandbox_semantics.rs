@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -64,11 +65,33 @@ fn unique_temp_path(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("openai-agents-{label}-{nanos}"))
+    fs::canonicalize(std::env::temp_dir())
+        .expect("temp dir should canonicalize")
+        .join(format!("openai-agents-{label}-{nanos}"))
+}
+
+fn sandbox_temp_roots() -> Vec<PathBuf> {
+    let mut roots = fs::read_dir(std::env::temp_dir())
+        .expect("temp dir should be readable")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("openai-agents-sandbox-"))
+        })
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots
+}
+
+fn localdir_hook_lock() -> &'static StdMutex<()> {
+    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| StdMutex::new(()))
 }
 
 #[tokio::test]
 async fn sandbox_agent_preparation_exposes_defaults_and_workspace_context() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let requests = Arc::new(Mutex::new(Vec::new()));
     let provider = CapturingSandboxProvider {
         model: Arc::new(CapturingSandboxModel {
@@ -123,6 +146,7 @@ async fn sandbox_agent_preparation_exposes_defaults_and_workspace_context() {
 
 #[test]
 fn sandbox_fresh_runs_use_isolated_temp_workspaces() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let manifest = Manifest::default().with_entry(
         "notes/todo.txt",
         File::from_text("runner-owned workspace\n"),
@@ -167,7 +191,8 @@ fn sandbox_fresh_runs_use_isolated_temp_workspaces() {
 
 #[tokio::test]
 async fn sandbox_manifest_entries_are_ready_before_first_tool_call() {
-    let source_root = std::env::temp_dir().join("sandbox-localdir-source");
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let source_root = unique_temp_path("sandbox-localdir-source");
     if source_root.exists() {
         fs::remove_dir_all(&source_root).expect("remove stale source root");
     }
@@ -260,19 +285,23 @@ async fn sandbox_manifest_entries_are_ready_before_first_tool_call() {
 }
 
 #[test]
-fn localdir_staging_rejects_symlinked_or_swapped_sources() {
+fn localdir_staging_rejects_symlinked_ancestor_sources() {
+    let _guard = localdir_hook_lock().lock().expect("hook lock");
     let source_root = unique_temp_path("sandbox-localdir-symlink-root");
-    let nested = source_root.join("nested");
+    let real_parent = source_root.join("real-parent");
+    let nested = real_parent.join("nested");
     fs::create_dir_all(&nested).expect("create source tree");
-    fs::write(source_root.join("plain.txt"), "plain\n").expect("write plain file");
+    fs::write(real_parent.join("plain.txt"), "plain\n").expect("write plain file");
     fs::write(nested.join("real.txt"), "real\n").expect("write nested file");
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink("../plain.txt", nested.join("linked.txt"))
-        .expect("create source symlink");
+    std::os::unix::fs::symlink(&real_parent, source_root.join("linked-parent"))
+        .expect("create ancestor symlink");
 
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
-    let manifest = Manifest::default().with_entry("copied", LocalDir::new(&source_root));
+    let linked_source = source_root.join("linked-parent");
+    let manifest = Manifest::default().with_entry("copied", LocalDir::new(&linked_source));
+    let before_temp_roots = sandbox_temp_roots();
     let error = prepare_sandbox_run(
         &sandbox_agent,
         &RunConfig {
@@ -284,12 +313,17 @@ fn localdir_staging_rejects_symlinked_or_swapped_sources() {
         },
     )
     .expect_err("symlinked localdir source should be rejected");
+    let after_temp_roots = sandbox_temp_roots();
 
     let message = error.to_string();
     assert!(message.contains("symlink"), "unexpected error: {message}");
     assert!(
-        message.contains("linked.txt"),
+        message.contains("linked-parent"),
         "unexpected error: {message}"
+    );
+    assert_eq!(
+        before_temp_roots, after_temp_roots,
+        "failed staging should not leave sandbox temp roots behind"
     );
 
     let stable_root = unique_temp_path("sandbox-localdir-stable-root");
@@ -330,7 +364,99 @@ fn localdir_staging_rejects_symlinked_or_swapped_sources() {
 }
 
 #[test]
+fn localdir_staging_rejects_live_source_swaps() {
+    let _guard = localdir_hook_lock().lock().expect("hook lock");
+    let source_root = unique_temp_path("localdir-swap-root");
+    fs::create_dir_all(&source_root).expect("create source root");
+    for index in 0..8 {
+        fs::write(
+            source_root.join(format!("file-{index}.txt")),
+            "stable bytes\n".repeat(32_768),
+        )
+        .expect("write source file");
+    }
+
+    let swapped_root = unique_temp_path("localdir-swapped-root");
+    fs::create_dir_all(&swapped_root).expect("create swapped root");
+    fs::write(swapped_root.join("alt.txt"), "swapped bytes\n").expect("write swapped file");
+
+    let trigger_path = unique_temp_path("localdir-hook-trigger");
+    let release_path = unique_temp_path("localdir-hook-release");
+    let hook_value = format!(
+        "{}|{}|{}",
+        source_root.display(),
+        trigger_path.display(),
+        release_path.display()
+    );
+    let before_temp_roots = sandbox_temp_roots();
+    // SAFETY: the test serializes access to the process environment with `localdir_hook_lock`.
+    unsafe {
+        std::env::set_var("OPENAI_AGENTS_SANDBOX_LOCALDIR_TEST_HOOK", &hook_value);
+    }
+
+    let source_root_for_thread = source_root.clone();
+    let handle = thread::spawn(move || {
+        let sandbox_agent = SandboxAgent::builder("sandbox").build();
+        let manifest =
+            Manifest::default().with_entry("copied", LocalDir::new(&source_root_for_thread));
+        prepare_sandbox_run(
+            &sandbox_agent,
+            &RunConfig {
+                sandbox: Some(SandboxRunConfig {
+                    manifest: Some(manifest),
+                    ..SandboxRunConfig::default()
+                }),
+                ..RunConfig::default()
+            },
+        )
+    });
+
+    for _ in 0..200 {
+        if trigger_path.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(trigger_path.exists(), "copy should reach the hook");
+
+    let backup_root = unique_temp_path("localdir-swap-backup");
+    fs::rename(&source_root, &backup_root).expect("move source root out of the way");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&swapped_root, &source_root).expect("swap source root to symlink");
+    fs::write(&release_path, "release\n").expect("release hook");
+
+    let error = handle
+        .join()
+        .expect("copy thread should join")
+        .expect_err("swapped source should be rejected");
+
+    // SAFETY: the test serializes access to the process environment with `localdir_hook_lock`.
+    unsafe {
+        std::env::remove_var("OPENAI_AGENTS_SANDBOX_LOCALDIR_TEST_HOOK");
+    }
+
+    let after_temp_roots = sandbox_temp_roots();
+    let message = error.to_string();
+    assert!(
+        message.contains("changed during copy") || message.contains("symlink"),
+        "unexpected error: {message}"
+    );
+    assert_eq!(
+        before_temp_roots, after_temp_roots,
+        "failed staging should not leave sandbox temp roots behind"
+    );
+
+    #[cfg(unix)]
+    fs::remove_file(&source_root).expect("remove swapped symlink");
+    fs::remove_file(&trigger_path).expect("remove trigger");
+    fs::remove_file(&release_path).expect("remove release");
+    fs::remove_dir_all(&backup_root).expect("remove original source root");
+    fs::remove_dir_all(&swapped_root).expect("remove swapped root");
+}
+
+#[test]
 fn sandbox_paths_reject_workspace_escape() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
     let run_config = RunConfig {
         sandbox: Some(SandboxRunConfig {
@@ -443,6 +569,7 @@ fn sandbox_paths_reject_workspace_escape() {
 
 #[test]
 fn sandbox_local_shell_starts_in_workspace_and_blocks_escape() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
     let host_outside = unique_temp_path("sandbox-shell-outside");
     if host_outside.exists() {
@@ -519,6 +646,7 @@ fn sandbox_local_shell_starts_in_workspace_and_blocks_escape() {
 
 #[test]
 fn unix_local_pty_accepts_stdin_and_surfaces_output() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
     let run_config = RunConfig {
         sandbox: Some(SandboxRunConfig {
