@@ -1,9 +1,15 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use async_trait::async_trait;
 use futures::StreamExt;
 use openai_agents::Agent;
 use openai_agents::voice::{
-    AudioInput, SingleAgentVoiceWorkflow, StreamedAudioInput, VoicePipeline, VoicePipelineConfig,
-    VoiceStreamEvent,
+    AudioInput, STTModel, STTModelSettings, SingleAgentVoiceWorkflow, StreamedAudioInput,
+    StreamedTranscriptionSession, TTSModel, TTSModelSettings, VoiceModelProvider, VoicePipeline,
+    VoicePipelineConfig, VoiceStreamEvent,
 };
+use openai_agents::{AgentsError, Result};
 
 fn first_audio_text(events: &[VoiceStreamEvent]) -> String {
     let samples = events
@@ -19,6 +25,94 @@ fn first_audio_text(events: &[VoiceStreamEvent]) -> String {
         .map(|sample| sample as u8)
         .map(char::from)
         .collect()
+}
+
+#[derive(Clone)]
+struct TranscriptOnlyProvider {
+    tts_calls: Arc<AtomicUsize>,
+}
+
+impl TranscriptOnlyProvider {
+    fn new() -> Self {
+        Self {
+            tts_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn tts_calls(&self) -> usize {
+        self.tts_calls.load(Ordering::SeqCst)
+    }
+}
+
+impl VoiceModelProvider for TranscriptOnlyProvider {
+    fn stt_model(&self) -> Box<dyn STTModel> {
+        Box::new(TranscriptOnlySttModel)
+    }
+
+    fn tts_model(&self) -> Box<dyn TTSModel> {
+        Box::new(FailingTtsModel {
+            calls: self.tts_calls.clone(),
+        })
+    }
+}
+
+struct TranscriptOnlySttModel;
+
+#[async_trait]
+impl STTModel for TranscriptOnlySttModel {
+    async fn transcribe(&self, input: &AudioInput, _settings: &STTModelSettings) -> Result<String> {
+        Ok(format!(
+            "transcribed:{}:{}",
+            input.mime_type,
+            input.bytes.len()
+        ))
+    }
+
+    async fn start_session(
+        &self,
+        _settings: &STTModelSettings,
+    ) -> Result<Box<dyn StreamedTranscriptionSession>> {
+        Ok(Box::new(TranscriptOnlySession::default()))
+    }
+}
+
+#[derive(Default)]
+struct TranscriptOnlySession {
+    chunks: Vec<usize>,
+}
+
+#[async_trait]
+impl StreamedTranscriptionSession for TranscriptOnlySession {
+    async fn push_audio(&mut self, chunk: &[u8]) -> Result<()> {
+        self.chunks.push(chunk.len());
+        Ok(())
+    }
+
+    async fn finish(&mut self) -> Result<String> {
+        Ok(self
+            .chunks
+            .iter()
+            .map(|len| format!("[{len}]"))
+            .collect::<String>())
+    }
+}
+
+struct FailingTtsModel {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl TTSModel for FailingTtsModel {
+    async fn synthesize(
+        &self,
+        _text: &str,
+        _settings: &TTSModelSettings,
+    ) -> Result<Vec<VoiceStreamEvent>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(AgentsError::message(
+            "tts should not run for transcript-only output",
+        ))
+    }
 }
 
 #[tokio::test]
@@ -123,6 +217,44 @@ async fn voice_pipeline_suppresses_audio_for_buffered_input_when_streaming_disab
         vec!["transcribed:audio/wav:3".to_owned()]
     );
     assert_eq!(completed.audio_chunks, 0);
+    assert!(
+        completed
+            .events
+            .iter()
+            .all(|event| !matches!(event, VoiceStreamEvent::Audio(_)))
+    );
+}
+
+#[tokio::test]
+async fn transcript_only_runs_skip_tts_when_stream_audio_disabled() {
+    let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
+    let provider = TranscriptOnlyProvider::new();
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: false,
+        ..VoicePipelineConfig::default()
+    })
+    .with_model_provider(Arc::new(provider.clone()));
+
+    let completed = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![4, 5, 6],
+            },
+        )
+        .await
+        .expect("buffered pipeline should start")
+        .wait_for_completion()
+        .await
+        .expect("transcript-only pipeline should complete even if TTS would fail");
+
+    assert_eq!(
+        completed.transcript,
+        vec!["transcribed:audio/wav:3".to_owned()]
+    );
+    assert_eq!(completed.audio_chunks, 0);
+    assert_eq!(provider.tts_calls(), 0);
     assert!(
         completed
             .events

@@ -83,6 +83,7 @@ impl VoicePipeline {
         let recorder = VoiceStreamRecorder::new(self.config.stream_audio);
         let result = recorder.result();
         let workflow = workflow.clone();
+        let stream_audio = self.config.stream_audio;
         let tts_settings = self.config.tts_settings.clone();
 
         tokio::spawn(async move {
@@ -100,12 +101,26 @@ impl VoicePipeline {
             let completion = async {
                 let mut intro = Box::pin(workflow.on_start());
                 while let Some(chunk) = intro.next().await {
-                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?, &tts_settings).await?;
+                    synthesize_chunk(
+                        &recorder,
+                        tts_model.as_ref(),
+                        chunk?,
+                        &tts_settings,
+                        stream_audio,
+                    )
+                    .await?;
                 }
 
                 let mut text_stream = Box::pin(workflow.run(transcription));
                 while let Some(chunk) = text_stream.next().await {
-                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?, &tts_settings).await?;
+                    synthesize_chunk(
+                        &recorder,
+                        tts_model.as_ref(),
+                        chunk?,
+                        &tts_settings,
+                        stream_audio,
+                    )
+                    .await?;
                 }
 
                 Result::<()>::Ok(())
@@ -226,6 +241,52 @@ mod tests {
         }
     }
 
+    struct FailingTtsModel {
+        calls: Arc<Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl TTSModel for FailingTtsModel {
+        async fn synthesize(
+            &self,
+            _text: &str,
+            _settings: &TTSModelSettings,
+        ) -> Result<Vec<VoiceStreamEvent>> {
+            let mut calls = self.calls.lock().await;
+            *calls += 1;
+            Err(agents_core::AgentsError::message(
+                "tts should be skipped when audio streaming is disabled",
+            ))
+        }
+    }
+
+    #[derive(Clone)]
+    struct TranscriptOnlyProvider {
+        tts_calls: Arc<Mutex<usize>>,
+    }
+
+    impl TranscriptOnlyProvider {
+        fn new() -> Self {
+            Self {
+                tts_calls: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    impl VoiceModelProvider for TranscriptOnlyProvider {
+        fn stt_model(&self) -> Box<dyn STTModel> {
+            Box::new(RecordingSttModel {
+                settings: Arc::new(Mutex::new(Vec::new())),
+            })
+        }
+
+        fn tts_model(&self) -> Box<dyn TTSModel> {
+            Box::new(FailingTtsModel {
+                calls: self.tts_calls.clone(),
+            })
+        }
+    }
+
     #[derive(Clone)]
     struct StaticWorkflow;
 
@@ -288,6 +349,40 @@ mod tests {
             }]
         );
     }
+
+    #[tokio::test]
+    async fn pipeline_skips_tts_when_audio_streaming_is_disabled() {
+        let provider = Arc::new(TranscriptOnlyProvider::new());
+        let pipeline = VoicePipeline::new(VoicePipelineConfig {
+            stream_audio: false,
+            split_sentences: false,
+            ..VoicePipelineConfig::default()
+        })
+        .with_model_provider(provider.clone());
+
+        let result = pipeline
+            .run(
+                &StaticWorkflow,
+                AudioInput {
+                    mime_type: "audio/wav".to_owned(),
+                    bytes: vec![1, 2, 3],
+                },
+            )
+            .await
+            .expect("pipeline should start");
+
+        let completed = result
+            .wait_for_completion()
+            .await
+            .expect("pipeline should not depend on TTS success");
+
+        assert_eq!(
+            completed.transcript,
+            vec!["normalized transcript".to_owned()]
+        );
+        assert_eq!(completed.audio_chunks, 0);
+        assert_eq!(*provider.tts_calls.lock().await, 0);
+    }
 }
 
 async fn synthesize_chunk(
@@ -295,8 +390,12 @@ async fn synthesize_chunk(
     tts_model: &dyn TTSModel,
     text: String,
     settings: &TTSModelSettings,
+    stream_audio: bool,
 ) -> Result<()> {
     recorder.push_transcript(text.clone()).await;
+    if !stream_audio {
+        return Ok(());
+    }
     let synthesized = tts_model.synthesize(&text, settings).await?;
     recorder.push_events(synthesized).await;
     Ok(())
