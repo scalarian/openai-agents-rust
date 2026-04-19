@@ -1,13 +1,14 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use openai_agents::sandbox::{Dir, File, LocalDir, Manifest, prepare_sandbox_run};
 use openai_agents::{
-    Model, ModelProvider, ModelRequest, ModelResponse, OutputItem, RunConfig, RunContext,
-    RunContextWrapper, Runner, SandboxAgent, SandboxRunConfig, Tool, ToolContext, ToolOutput,
-    Usage,
+    ApplyPatchOperation, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem, RunConfig,
+    RunContext, RunContextWrapper, Runner, SandboxAgent, SandboxRunConfig, Tool, ToolContext,
+    ToolOutput, Usage,
 };
 use tokio::sync::Mutex;
 
@@ -55,6 +56,14 @@ fn tool_context(tool_name: &str) -> ToolContext {
         &format!("call-{tool_name}"),
         "{}",
     )
+}
+
+fn unique_temp_path(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("openai-agents-{label}-{nanos}"))
 }
 
 #[tokio::test]
@@ -247,4 +256,186 @@ async fn sandbox_manifest_entries_are_ready_before_first_tool_call() {
 
     prepared.session.cleanup().expect("cleanup succeeds");
     fs::remove_dir_all(&source_root).expect("remove source root");
+}
+
+#[test]
+fn localdir_staging_rejects_symlinked_or_swapped_sources() {
+    let source_root = unique_temp_path("sandbox-localdir-symlink-root");
+    let nested = source_root.join("nested");
+    fs::create_dir_all(&nested).expect("create source tree");
+    fs::write(source_root.join("plain.txt"), "plain\n").expect("write plain file");
+    fs::write(nested.join("real.txt"), "real\n").expect("write nested file");
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("../plain.txt", nested.join("linked.txt"))
+        .expect("create source symlink");
+
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let manifest = Manifest::default().with_entry("copied", LocalDir::new(&source_root));
+    let error = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(manifest),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect_err("symlinked localdir source should be rejected");
+
+    let message = error.to_string();
+    assert!(message.contains("symlink"), "unexpected error: {message}");
+    assert!(
+        message.contains("linked.txt"),
+        "unexpected error: {message}"
+    );
+
+    let stable_root = unique_temp_path("sandbox-localdir-stable-root");
+    fs::create_dir_all(stable_root.join("src")).expect("create stable source tree");
+    fs::write(stable_root.join("src/lib.rs"), "pub fn ok() {}\n").expect("write stable file");
+
+    let prepared = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(
+                    Manifest::default().with_entry("copied", LocalDir::new(&stable_root)),
+                ),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("stable real directory should stage successfully");
+
+    let copied = prepared
+        .session
+        .read_file("/workspace/copied/src/lib.rs")
+        .expect("staged file should be readable");
+    assert_eq!(copied, "pub fn ok() {}\n");
+
+    let workspace_root = prepared.session.workspace_root();
+    assert!(workspace_root.join("copied/src/lib.rs").is_file());
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+    assert!(
+        !workspace_root.exists(),
+        "runner-owned workspace should be removed"
+    );
+
+    fs::remove_dir_all(&source_root).expect("remove source root");
+    fs::remove_dir_all(&stable_root).expect("remove stable source root");
+}
+
+#[test]
+fn sandbox_paths_reject_workspace_escape() {
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(Manifest::default().with_entry("notes.txt", File::from_text("hello\n"))),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox prep succeeds");
+
+    let inside_path = "/workspace/notes.txt";
+    assert_eq!(
+        prepared
+            .session
+            .read_file(inside_path)
+            .expect("inside reads should succeed"),
+        "hello\n"
+    );
+
+    prepared
+        .session
+        .write_file("/workspace/generated.txt", "generated\n")
+        .expect("inside writes should succeed");
+    assert_eq!(
+        prepared
+            .session
+            .read_file("generated.txt")
+            .expect("relative inside reads should succeed"),
+        "generated\n"
+    );
+
+    prepared
+        .session
+        .apply_patch(ApplyPatchOperation {
+            path: "/workspace/generated.txt".to_owned(),
+            replacement: "patched\n".to_owned(),
+        })
+        .expect("inside patch should succeed");
+    assert_eq!(
+        prepared
+            .session
+            .read_file("/workspace/generated.txt")
+            .expect("patched file should be readable"),
+        "patched\n"
+    );
+
+    let host_outside = unique_temp_path("sandbox-host-outside");
+    fs::write(&host_outside, "host-secret\n").expect("write host file");
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        &host_outside,
+        prepared.session.workspace_root().join("escape-link"),
+    )
+    .expect("create workspace escape symlink");
+
+    for escaped in [
+        "../outside.txt",
+        "/tmp/outside.txt",
+        "/workspace/escape-link",
+    ] {
+        let error = prepared
+            .session
+            .read_file(escaped)
+            .expect_err("escape read should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("path must stay within the sandbox workspace"),
+            "unexpected error: {error}"
+        );
+    }
+
+    let write_error = prepared
+        .session
+        .write_file("/workspace/escape-link", "mutated\n")
+        .expect_err("write through escape symlink should fail");
+    assert!(
+        write_error
+            .to_string()
+            .contains("path must stay within the sandbox workspace"),
+        "unexpected error: {write_error}"
+    );
+    assert_eq!(
+        fs::read_to_string(&host_outside).expect("host file should remain readable"),
+        "host-secret\n"
+    );
+
+    let patch_error = prepared
+        .session
+        .apply_patch(ApplyPatchOperation {
+            path: "/workspace/escape-link".to_owned(),
+            replacement: "patched-host\n".to_owned(),
+        })
+        .expect_err("patch through escape symlink should fail");
+    assert!(
+        patch_error
+            .to_string()
+            .contains("path must stay within the sandbox workspace"),
+        "unexpected error: {patch_error}"
+    );
+    assert_eq!(
+        fs::read_to_string(&host_outside).expect("host file should remain unchanged"),
+        "host-secret\n"
+    );
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+    fs::remove_file(&host_outside).expect("remove host file");
 }

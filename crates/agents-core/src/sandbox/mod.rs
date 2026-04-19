@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{Agent, AgentBuilder};
+use crate::editor::{ApplyPatchOperation, ApplyPatchResult};
 use crate::errors::{AgentsError, Result};
 use crate::tool::{FunctionTool, function_tool};
 
@@ -293,7 +295,17 @@ impl LocalSandboxSession {
         Ok(())
     }
 
-    fn resolve_path(&self, requested: &str) -> Result<PathBuf> {
+    pub fn resolve_path(&self, requested: &str) -> Result<PathBuf> {
+        self.resolve_path_for_access(requested)
+    }
+
+    fn resolve_path_for_access(&self, requested: &str) -> Result<PathBuf> {
+        if requested.trim().is_empty() {
+            return Err(AgentsError::message(
+                "path must stay within the sandbox workspace",
+            ));
+        }
+
         let requested_path = Path::new(requested);
         let relative = if requested_path.is_absolute() {
             let logical_root = Path::new(&self.inner.logical_root);
@@ -324,11 +336,13 @@ impl LocalSandboxSession {
             }
         }
 
-        Ok(self.inner.workspace_root.join(normalized))
+        let candidate = self.inner.workspace_root.join(normalized);
+        ensure_path_stays_within_workspace(&self.inner.workspace_root, &candidate)?;
+        Ok(candidate)
     }
 
-    fn list_files(&self, requested: &str) -> Result<String> {
-        let directory = self.resolve_path(requested)?;
+    pub fn list_files(&self, requested: &str) -> Result<String> {
+        let directory = self.resolve_path_for_access(requested)?;
         let entries =
             fs::read_dir(&directory).map_err(|error| AgentsError::message(error.to_string()))?;
         let mut names = entries
@@ -342,9 +356,25 @@ impl LocalSandboxSession {
         Ok(names.join("\n"))
     }
 
-    fn read_file(&self, requested: &str) -> Result<String> {
-        let path = self.resolve_path(requested)?;
+    pub fn read_file(&self, requested: &str) -> Result<String> {
+        let path = self.resolve_path_for_access(requested)?;
         fs::read_to_string(path).map_err(|error| AgentsError::message(error.to_string()))
+    }
+
+    pub fn write_file(&self, requested: &str, content: impl AsRef<[u8]>) -> Result<()> {
+        let path = self.resolve_path_for_access(requested)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| AgentsError::message(error.to_string()))?;
+        }
+        fs::write(path, content).map_err(|error| AgentsError::message(error.to_string()))
+    }
+
+    pub fn apply_patch(&self, operation: ApplyPatchOperation) -> Result<ApplyPatchResult> {
+        self.write_file(&operation.path, operation.replacement.as_bytes())?;
+        Ok(ApplyPatchResult {
+            updated: true,
+            path: operation.path,
+        })
     }
 }
 
@@ -424,6 +454,12 @@ fn default_function_tools(session: LocalSandboxSession) -> Result<Vec<FunctionTo
         path: String,
     }
 
+    #[derive(Deserialize, JsonSchema)]
+    struct PatchArgs {
+        path: String,
+        replacement: String,
+    }
+
     let list_session = session.clone();
     let list_tool = function_tool(
         "sandbox_list_files",
@@ -444,20 +480,30 @@ fn default_function_tools(session: LocalSandboxSession) -> Result<Vec<FunctionTo
         },
     )?;
 
+    let shell_session = session.clone();
     let shell_tool = function_tool(
         "sandbox_run_shell",
         "Report the sandbox workspace root for shell usage",
         move |_ctx, _args: PathArgs| {
-            let session = session.clone();
+            let session = shell_session.clone();
             async move { Ok(session.workspace_root().display().to_string()) }
         },
     )?;
 
+    let patch_session = session.clone();
     let apply_patch_tool = function_tool(
         "sandbox_apply_patch",
-        "Report patch availability for the sandbox workspace",
-        move |_ctx, _args: PathArgs| async move {
-            Ok::<_, AgentsError>("sandbox patch ready".to_owned())
+        "Replace a sandbox workspace file with patched contents",
+        move |_ctx, args: PatchArgs| {
+            let session = patch_session.clone();
+            async move {
+                session
+                    .apply_patch(ApplyPatchOperation {
+                        path: args.path.clone(),
+                        replacement: args.replacement,
+                    })
+                    .map(|result| format!("patched {}", result.path))
+            }
         },
     )?;
 
@@ -501,20 +547,128 @@ fn materialize_entry(
 }
 
 fn copy_local_dir(source: &Path, destination: &Path) -> Result<()> {
+    validate_local_dir_source_root(source)?;
     fs::create_dir_all(destination).map_err(|error| AgentsError::message(error.to_string()))?;
+    let copy_result = copy_local_dir_contents(source, destination);
+    if copy_result.is_err() {
+        let _ = fs::remove_dir_all(destination);
+    }
+    copy_result
+}
+
+fn copy_local_dir_contents(source: &Path, destination: &Path) -> Result<()> {
     for entry in fs::read_dir(source).map_err(|error| AgentsError::message(error.to_string()))? {
         let entry = entry.map_err(|error| AgentsError::message(error.to_string()))?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-        if file_type.is_dir() {
-            copy_local_dir(&source_path, &destination_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &destination_path)
-                .map_err(|error| AgentsError::message(error.to_string()))?;
+        let initial_kind = stable_local_dir_entry_kind(&source_path)?;
+        let current_kind = stable_local_dir_entry_kind(&source_path)?;
+        if initial_kind != current_kind {
+            return Err(AgentsError::message(format!(
+                "local dir source changed during copy: {}",
+                source_path.display()
+            )));
+        }
+        match initial_kind {
+            LocalDirEntryKind::Dir => {
+                fs::create_dir_all(&destination_path)
+                    .map_err(|error| AgentsError::message(error.to_string()))?;
+                copy_local_dir_contents(&source_path, &destination_path)?;
+            }
+            LocalDirEntryKind::File => {
+                fs::copy(&source_path, &destination_path)
+                    .map_err(|error| AgentsError::message(error.to_string()))?;
+            }
         }
     }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalDirEntryKind {
+    File,
+    Dir,
+}
+
+fn validate_local_dir_source_root(source: &Path) -> Result<()> {
+    if !source.exists() {
+        return Err(AgentsError::message(format!(
+            "local dir source does not exist: {}",
+            source.display()
+        )));
+    }
+    stable_local_dir_entry_kind(source).map(|_| ())
+}
+
+fn stable_local_dir_entry_kind(path: &Path) -> Result<LocalDirEntryKind> {
+    let metadata = ensure_not_symlink(path, "local dir source")?;
+    if metadata.is_dir() {
+        Ok(LocalDirEntryKind::Dir)
+    } else if metadata.is_file() {
+        Ok(LocalDirEntryKind::File)
+    } else {
+        Err(AgentsError::message(format!(
+            "local dir source must contain only regular files and directories: {}",
+            path.display()
+        )))
+    }
+}
+
+fn ensure_not_symlink(path: &Path, context: &str) -> Result<fs::Metadata> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| AgentsError::message(error.to_string()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(AgentsError::message(format!(
+            "{context} cannot be a symlink: {}",
+            path.display()
+        )));
+    }
+    Ok(metadata)
+}
+
+fn ensure_path_stays_within_workspace(workspace_root: &Path, candidate: &Path) -> Result<()> {
+    let workspace_real = fs::canonicalize(workspace_root)
+        .map_err(|error| AgentsError::message(error.to_string()))?;
+
+    if !candidate.starts_with(workspace_root) {
+        return Err(AgentsError::message(
+            "path must stay within the sandbox workspace",
+        ));
+    }
+
+    let relative = candidate
+        .strip_prefix(workspace_root)
+        .map_err(|_| AgentsError::message("path must stay within the sandbox workspace"))?;
+
+    let mut current = workspace_root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    let resolved = fs::canonicalize(&current)
+                        .map_err(|error| AgentsError::message(error.to_string()))?;
+                    if !resolved.starts_with(&workspace_real) {
+                        return Err(AgentsError::message(
+                            "path must stay within the sandbox workspace",
+                        ));
+                    }
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => return Err(AgentsError::message(error.to_string())),
+        }
+    }
+
+    if candidate.exists() {
+        let resolved =
+            fs::canonicalize(candidate).map_err(|error| AgentsError::message(error.to_string()))?;
+        if !resolved.starts_with(&workspace_real) {
+            return Err(AgentsError::message(
+                "path must stay within the sandbox workspace",
+            ));
+        }
+    }
+
     Ok(())
 }
