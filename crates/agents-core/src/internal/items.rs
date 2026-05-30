@@ -16,7 +16,9 @@ pub(crate) fn run_item_to_input_item(
     ) {
         return None;
     }
-    run_item.to_input_item()
+    run_item
+        .to_input_item()
+        .map(strip_null_status_from_input_item)
 }
 
 pub(crate) fn run_items_to_input_items(
@@ -54,6 +56,25 @@ pub(crate) fn compose_replay_input_items(
 
 fn sanitize_hosted_tool_replay_items(items: &[InputItem]) -> Vec<InputItem> {
     drop_orphan_tool_call_items(items, ToolCallPrunePolicy::HostedReplay)
+}
+
+fn strip_null_status_from_input_item(item: InputItem) -> InputItem {
+    match item {
+        InputItem::Json { value } => InputItem::Json {
+            value: strip_null_status_from_value(value),
+        },
+        InputItem::Text { .. } => item,
+    }
+}
+
+fn strip_null_status_from_value(value: Value) -> Value {
+    let Value::Object(mut object) = value else {
+        return value;
+    };
+    if matches!(object.get("status"), Some(Value::Null)) {
+        object.remove("status");
+    }
+    Value::Object(object)
 }
 
 #[derive(Default)]
@@ -405,6 +426,48 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn omits_null_status_when_replaying_generated_json_items() {
+        let prepared = prepare_model_input_items(
+            &[InputItem::from("hello")],
+            &[
+                RunItem::MessageOutput {
+                    content: OutputItem::Json {
+                        value: json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "done"}],
+                            "status": null
+                        }),
+                    },
+                },
+                RunItem::MessageOutput {
+                    content: OutputItem::Json {
+                        value: json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "kept"}],
+                            "status": "completed"
+                        }),
+                    },
+                },
+            ],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert_eq!(prepared.len(), 3);
+        assert!(matches!(
+            &prepared[1],
+            InputItem::Json { value }
+                if !value.as_object().is_some_and(|object| object.contains_key("status"))
+        ));
+        assert!(matches!(
+            &prepared[2],
+            InputItem::Json { value }
+                if value.get("status").and_then(Value::as_str) == Some("completed")
+        ));
     }
 
     #[test]
