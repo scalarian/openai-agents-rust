@@ -49,6 +49,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | remote pdf | remote PDF input item by URL | [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs) |
 | retry | runner-managed model retry settings | [retry.rs](../crates/openai-agents/examples/retry.rs) |
 | routing | streamed triage handoff to a specialist agent | [routing.rs](../crates/openai-agents/examples/routing.rs) |
+| web search | hosted web search tool configuration | [web_search.rs](../crates/openai-agents/examples/web_search.rs) |
 | voice pipeline | STT -> workflow -> TTS flow | [voice_pipeline.rs](../crates/openai-agents/examples/voice_pipeline.rs) |
 
 ## Read By Goal

@@ -49,6 +49,7 @@ cargo run -p openai-agents-rs --example remote_image
 cargo run -p openai-agents-rs --example remote_pdf
 cargo run -p openai-agents-rs --example retry
 cargo run -p openai-agents-rs --example routing
+cargo run -p openai-agents-rs --example web_search
 cargo run -p openai-agents-rs --example voice_pipeline
 ```
 
@@ -97,6 +98,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `remote_pdf` | remote PDF input item by URL | [docs/agents.md](../docs/agents.md) |
 | `retry` | runner-managed model retry settings | [docs/models/settings.md](../docs/models/settings.md) |
 | `routing` | streamed triage handoff to a specialist agent | [docs/handoffs.md](../docs/handoffs.md) |
+| `web_search` | hosted web search tool configuration | [docs/tools.md](../docs/tools.md) |
 | `voice_pipeline` | a voice workflow and buffered audio pipeline | [docs/voice/README.md](../docs/voice/README.md) |
 
 ## When To Prefer Docs

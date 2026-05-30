@@ -13,6 +13,8 @@ Use this page when you want the model to trigger typed behavior instead of only 
 
 Function tools can return text, JSON, image, or file outputs. See [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) for an image-returning function tool.
 
+Hosted tools are added as static tools on the agent. For example, [web_search.rs](../crates/openai-agents/examples/web_search.rs) configures `web_search_tool_with_options(...)` with an approximate user location.
+
 ## Function Tool Example
 
 ```rust,no_run
