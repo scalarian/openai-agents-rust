@@ -21,9 +21,10 @@ pub use agent::{RealtimeAgent, RealtimeAgentHooks, RealtimeRunHooks};
 pub use audio_formats::{RealtimeAudioFormat, to_realtime_audio_format};
 pub use config::{
     RealtimeAudioConfig, RealtimeAudioInputConfig, RealtimeAudioOutputConfig,
-    RealtimeClientMessage, RealtimeGuardrailsSettings, RealtimeInputAudioNoiseReductionConfig,
-    RealtimeInputAudioTranscriptionConfig, RealtimeModelTracingConfig, RealtimeRunConfig,
-    RealtimeSessionModelSettings, RealtimeTurnDetectionConfig,
+    RealtimeClientMessage, RealtimeCustomVoice, RealtimeGuardrailsSettings,
+    RealtimeInputAudioNoiseReductionConfig, RealtimeInputAudioTranscriptionConfig,
+    RealtimeModelTracingConfig, RealtimeRunConfig, RealtimeSessionModelSettings,
+    RealtimeTurnDetectionConfig, RealtimeVoice,
 };
 pub use events::{
     RealtimeAgentEndEvent, RealtimeAgentStartEvent, RealtimeErrorEvent, RealtimeEvent,

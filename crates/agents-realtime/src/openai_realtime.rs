@@ -317,7 +317,10 @@ impl OpenAIRealtimeWebSocketModel {
         if settings.clear_voice || output_config.is_some_and(|config| config.clear_voice) {
             output.insert("voice".to_owned(), Value::Null);
         } else if let Some(output_voice) = output_voice {
-            output.insert("voice".to_owned(), Value::String(output_voice));
+            output.insert(
+                "voice".to_owned(),
+                serde_json::to_value(output_voice).unwrap_or(Value::Null),
+            );
         }
         if settings.clear_speed || output_config.is_some_and(|config| config.clear_speed) {
             output.insert("speed".to_owned(), Value::Null);
@@ -618,7 +621,7 @@ mod tests {
                 model_name: Some("gpt-realtime-updated".to_owned()),
                 audio: Some(crate::RealtimeAudioConfig {
                     output: Some(crate::RealtimeAudioOutputConfig {
-                        voice: Some("marin".to_owned()),
+                        voice: Some(crate::RealtimeVoice::from("marin")),
                         speed: Some(1.25),
                         ..crate::RealtimeAudioOutputConfig::default()
                     }),
@@ -684,7 +687,7 @@ mod tests {
             .update_session(&RealtimeSessionModelSettings {
                 audio: Some(crate::RealtimeAudioConfig {
                     output: Some(crate::RealtimeAudioOutputConfig {
-                        voice: Some("verse".to_owned()),
+                        voice: Some(crate::RealtimeVoice::from("verse")),
                         speed: Some(1.5),
                         ..crate::RealtimeAudioOutputConfig::default()
                     }),

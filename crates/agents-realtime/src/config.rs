@@ -173,10 +173,72 @@ impl RealtimeAudioInputConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeCustomVoice {
+    pub id: String,
+}
+
+impl RealtimeCustomVoice {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RealtimeVoice {
+    Name(String),
+    Custom(Value),
+}
+
+impl RealtimeVoice {
+    pub fn custom(value: Value) -> Self {
+        Self::Custom(value)
+    }
+
+    pub fn custom_id(id: impl Into<String>) -> Self {
+        Self::Custom(serde_json::json!({ "id": id.into() }))
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Name(name) => Some(name.as_str()),
+            Self::Custom(_) => None,
+        }
+    }
+}
+
+impl From<String> for RealtimeVoice {
+    fn from(value: String) -> Self {
+        Self::Name(value)
+    }
+}
+
+impl From<&str> for RealtimeVoice {
+    fn from(value: &str) -> Self {
+        Self::Name(value.to_owned())
+    }
+}
+
+impl From<Value> for RealtimeVoice {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::String(name) => Self::Name(name),
+            other => Self::Custom(other),
+        }
+    }
+}
+
+impl From<RealtimeCustomVoice> for RealtimeVoice {
+    fn from(value: RealtimeCustomVoice) -> Self {
+        Self::custom_id(value.id)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAudioOutputConfig {
     pub format: Option<RealtimeAudioFormat>,
-    pub voice: Option<String>,
+    pub voice: Option<RealtimeVoice>,
     pub speed: Option<f32>,
     #[serde(skip)]
     pub clear_format: bool,
@@ -311,7 +373,7 @@ pub struct RealtimeSessionModelSettings {
     pub modalities: Option<Vec<String>>,
     pub output_modalities: Option<Vec<String>>,
     pub audio: Option<RealtimeAudioConfig>,
-    pub voice: Option<String>,
+    pub voice: Option<RealtimeVoice>,
     pub speed: Option<f32>,
     pub input_audio_format: Option<RealtimeAudioFormat>,
     pub output_audio_format: Option<RealtimeAudioFormat>,

@@ -3,7 +3,7 @@ use openai_agents::realtime::{
     OpenAIRealtimeSIPModel, OpenAIRealtimeWebSocketModel, RealtimeAgent, RealtimeAudioConfig,
     RealtimeAudioFormat, RealtimeAudioInputConfig, RealtimeAudioOutputConfig, RealtimeEvent,
     RealtimeModel, RealtimeModelConfig, RealtimeRunConfig, RealtimeRunner,
-    RealtimeSessionModelSettings, TransportConfig,
+    RealtimeSessionModelSettings, RealtimeVoice, TransportConfig,
 };
 use std::collections::BTreeMap;
 
@@ -129,7 +129,7 @@ async fn realtime_websocket_runtime_state_exposes_connected_transport_and_applie
                     ..RealtimeAudioInputConfig::default()
                 }),
                 output: Some(RealtimeAudioOutputConfig {
-                    voice: Some("marin".to_owned()),
+                    voice: Some(RealtimeVoice::from("marin")),
                     speed: Some(1.25),
                     ..RealtimeAudioOutputConfig::default()
                 }),
@@ -168,6 +168,71 @@ async fn realtime_websocket_runtime_state_exposes_connected_transport_and_applie
 }
 
 #[tokio::test]
+async fn realtime_session_payload_preserves_custom_voice_objects() {
+    let mut model = OpenAIRealtimeWebSocketModel {
+        config: RealtimeModelConfig {
+            model: Some("gpt-realtime-1.5".to_owned()),
+        },
+        transport: TransportConfig {
+            api_key: Some("sk-test".to_owned()),
+            websocket_url: Some("https://example.com/realtime".to_owned()),
+            call_id: None,
+            query_params: BTreeMap::new(),
+        },
+        ..OpenAIRealtimeWebSocketModel::default()
+    };
+
+    model.connect().await.expect("connect should succeed");
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            voice: Some(RealtimeVoice::custom_id("voice_flat")),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("flat custom voice update should succeed");
+
+    let flat_payload = model
+        .runtime_state()
+        .last_session_payload
+        .expect("flat update should record a payload")
+        .payload;
+    assert_eq!(
+        flat_payload
+            .get("audio")
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("voice")),
+        Some(&serde_json::json!({"id": "voice_flat"}))
+    );
+
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            audio: Some(RealtimeAudioConfig {
+                output: Some(RealtimeAudioOutputConfig {
+                    voice: Some(RealtimeVoice::custom_id("voice_nested")),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeAudioConfig::default()
+            }),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("nested custom voice update should succeed");
+
+    let nested_payload = model
+        .runtime_state()
+        .last_session_payload
+        .expect("nested update should record a payload")
+        .payload;
+    assert_eq!(
+        nested_payload
+            .get("audio")
+            .and_then(|audio| audio.get("output"))
+            .and_then(|output| output.get("voice")),
+        Some(&serde_json::json!({"id": "voice_nested"}))
+    );
+}
+
+#[tokio::test]
 async fn realtime_sip_runtime_state_exposes_call_attachment_and_applied_output_settings() {
     let mut query_params = BTreeMap::new();
     query_params.insert("foo".to_owned(), "bar".to_owned());
@@ -190,7 +255,7 @@ async fn realtime_sip_runtime_state_exposes_call_attachment_and_applied_output_s
         .update_session(&RealtimeSessionModelSettings {
             audio: Some(RealtimeAudioConfig {
                 output: Some(RealtimeAudioOutputConfig {
-                    voice: Some("verse".to_owned()),
+                    voice: Some(RealtimeVoice::from("verse")),
                     speed: Some(1.5),
                     ..RealtimeAudioOutputConfig::default()
                 }),
@@ -251,7 +316,7 @@ async fn realtime_models_expose_connected_transport_state() {
         .update_session(&RealtimeSessionModelSettings {
             audio: Some(RealtimeAudioConfig {
                 output: Some(RealtimeAudioOutputConfig {
-                    voice: Some("marin".to_owned()),
+                    voice: Some(RealtimeVoice::from("marin")),
                     speed: Some(1.25),
                     ..RealtimeAudioOutputConfig::default()
                 }),
@@ -305,7 +370,7 @@ async fn realtime_models_expose_connected_transport_state() {
     sip.update_session(&RealtimeSessionModelSettings {
         audio: Some(RealtimeAudioConfig {
             output: Some(RealtimeAudioOutputConfig {
-                voice: Some("verse".to_owned()),
+                voice: Some(RealtimeVoice::from("verse")),
                 speed: Some(1.5),
                 ..RealtimeAudioOutputConfig::default()
             }),
@@ -360,7 +425,7 @@ async fn partial_session_updates_preserve_prior_settings() {
                         ..RealtimeAudioInputConfig::default()
                     }),
                     output: Some(RealtimeAudioOutputConfig {
-                        voice: Some("alloy".to_owned()),
+                        voice: Some(RealtimeVoice::from("alloy")),
                         speed: Some(1.25),
                         ..RealtimeAudioOutputConfig::default()
                     }),
@@ -378,7 +443,7 @@ async fn partial_session_updates_preserve_prior_settings() {
             partial.model_settings = Some(RealtimeSessionModelSettings {
                 audio: Some(RealtimeAudioConfig {
                     output: Some(RealtimeAudioOutputConfig {
-                        voice: Some("verse".to_owned()),
+                        voice: Some(RealtimeVoice::from("verse")),
                         ..RealtimeAudioOutputConfig::default()
                     }),
                     ..RealtimeAudioConfig::default()
@@ -408,7 +473,7 @@ async fn partial_session_updates_preserve_prior_settings() {
             .audio
             .as_ref()
             .and_then(|audio| audio.output.as_ref())
-            .and_then(|output| output.voice.as_deref()),
+            .and_then(|output| output.voice.as_ref().and_then(RealtimeVoice::as_str)),
         Some("verse")
     );
     assert_eq!(
@@ -423,7 +488,10 @@ async fn partial_session_updates_preserve_prior_settings() {
         updated,
         RealtimeEvent::SessionUpdated(event) if event.model.as_deref() == Some("gpt-realtime-1.5")
     ));
-    assert_eq!(settings.voice.as_deref(), Some("verse"));
+    assert_eq!(
+        settings.voice.as_ref().and_then(RealtimeVoice::as_str),
+        Some("verse")
+    );
     assert_eq!(settings.speed, Some(1.25));
 }
 
@@ -446,7 +514,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
     model
         .update_session(&RealtimeSessionModelSettings {
             model_name: Some("gpt-realtime-1.5".to_owned()),
-            voice: Some("alloy".to_owned()),
+            voice: Some(RealtimeVoice::from("alloy")),
             speed: Some(1.25),
             output_audio_format: Some(RealtimeAudioFormat::Pcm16),
             ..RealtimeSessionModelSettings::default()
@@ -457,7 +525,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
         .update_session(&RealtimeSessionModelSettings {
             audio: Some(RealtimeAudioConfig {
                 output: Some(RealtimeAudioOutputConfig {
-                    voice: Some("verse".to_owned()),
+                    voice: Some(RealtimeVoice::from("verse")),
                     ..RealtimeAudioOutputConfig::default()
                 }),
                 ..RealtimeAudioConfig::default()
@@ -492,7 +560,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
         model
             .applied_settings
             .as_ref()
-            .and_then(|settings| settings.voice.as_deref()),
+            .and_then(|settings| settings.voice.as_ref().and_then(RealtimeVoice::as_str)),
         Some("verse")
     );
     assert_eq!(
@@ -508,7 +576,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
             .as_ref()
             .and_then(|settings| settings.audio.as_ref())
             .and_then(|audio| audio.output.as_ref())
-            .and_then(|output| output.voice.as_deref()),
+            .and_then(|output| output.voice.as_ref().and_then(RealtimeVoice::as_str)),
         Some("verse")
     );
 
@@ -547,7 +615,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
         model
             .applied_settings
             .as_ref()
-            .and_then(|settings| settings.voice.as_deref()),
+            .and_then(|settings| settings.voice.as_ref().and_then(RealtimeVoice::as_str)),
         None
     );
     assert_eq!(
@@ -565,7 +633,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
             let mut configured = RealtimeAgent::new("assistant");
             configured.model_settings = Some(RealtimeSessionModelSettings {
                 model_name: Some("gpt-realtime-1.5".to_owned()),
-                voice: Some("alloy".to_owned()),
+                voice: Some(RealtimeVoice::from("alloy")),
                 speed: Some(1.25),
                 output_audio_format: Some(RealtimeAudioFormat::Pcm16),
                 ..RealtimeSessionModelSettings::default()
@@ -580,7 +648,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
             mixed.model_settings = Some(RealtimeSessionModelSettings {
                 audio: Some(RealtimeAudioConfig {
                     output: Some(RealtimeAudioOutputConfig {
-                        voice: Some("verse".to_owned()),
+                        voice: Some(RealtimeVoice::from("verse")),
                         ..RealtimeAudioOutputConfig::default()
                     }),
                     ..RealtimeAudioConfig::default()
@@ -610,7 +678,10 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
         .model_settings()
         .await
         .expect("session should expose normalized settings");
-    assert_eq!(settings.voice.as_deref(), None);
+    assert_eq!(
+        settings.voice.as_ref().and_then(RealtimeVoice::as_str),
+        None
+    );
     assert_eq!(settings.speed, Some(1.25));
     assert_eq!(
         settings.output_audio_format,
@@ -621,7 +692,7 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
             .audio
             .as_ref()
             .and_then(|audio| audio.output.as_ref())
-            .and_then(|output| output.voice.as_deref()),
+            .and_then(|output| output.voice.as_ref().and_then(RealtimeVoice::as_str)),
         None
     );
     assert_eq!(
@@ -663,7 +734,7 @@ async fn model_flat_alias_updates_override_stale_normalized_audio_state() {
             audio: Some(RealtimeAudioConfig {
                 output: Some(RealtimeAudioOutputConfig {
                     format: Some(RealtimeAudioFormat::Pcm16),
-                    voice: Some("alloy".to_owned()),
+                    voice: Some(RealtimeVoice::from("alloy")),
                     speed: Some(1.0),
                     ..RealtimeAudioOutputConfig::default()
                 }),
@@ -676,7 +747,7 @@ async fn model_flat_alias_updates_override_stale_normalized_audio_state() {
 
     model
         .update_session(&RealtimeSessionModelSettings {
-            voice: Some("verse".to_owned()),
+            voice: Some(RealtimeVoice::from("verse")),
             speed: Some(1.5),
             output_audio_format: Some(RealtimeAudioFormat::G711Ulaw),
             ..RealtimeSessionModelSettings::default()
@@ -713,7 +784,10 @@ async fn model_flat_alias_updates_override_stale_normalized_audio_state() {
         .applied_settings
         .as_ref()
         .expect("model should persist applied settings");
-    assert_eq!(applied.voice.as_deref(), Some("verse"));
+    assert_eq!(
+        applied.voice.as_ref().and_then(RealtimeVoice::as_str),
+        Some("verse")
+    );
     assert_eq!(applied.speed, Some(1.5));
     assert_eq!(
         applied.output_audio_format,
@@ -724,7 +798,7 @@ async fn model_flat_alias_updates_override_stale_normalized_audio_state() {
             .audio
             .as_ref()
             .and_then(|audio| audio.output.as_ref())
-            .and_then(|output| output.voice.as_deref()),
+            .and_then(|output| output.voice.as_ref().and_then(RealtimeVoice::as_str)),
         Some("verse")
     );
     assert_eq!(
@@ -757,7 +831,7 @@ async fn session_flat_alias_updates_override_stale_normalized_audio_state() {
                 audio: Some(RealtimeAudioConfig {
                     output: Some(RealtimeAudioOutputConfig {
                         format: Some(RealtimeAudioFormat::Pcm16),
-                        voice: Some("alloy".to_owned()),
+                        voice: Some(RealtimeVoice::from("alloy")),
                         speed: Some(1.0),
                         ..RealtimeAudioOutputConfig::default()
                     }),
@@ -774,7 +848,7 @@ async fn session_flat_alias_updates_override_stale_normalized_audio_state() {
         .update_agent({
             let mut updated = RealtimeAgent::new("assistant");
             updated.model_settings = Some(RealtimeSessionModelSettings {
-                voice: Some("verse".to_owned()),
+                voice: Some(RealtimeVoice::from("verse")),
                 speed: Some(1.5),
                 output_audio_format: Some(RealtimeAudioFormat::G711Ulaw),
                 ..RealtimeSessionModelSettings::default()
@@ -788,7 +862,10 @@ async fn session_flat_alias_updates_override_stale_normalized_audio_state() {
         .model_settings()
         .await
         .expect("session should expose normalized settings");
-    assert_eq!(settings.voice.as_deref(), Some("verse"));
+    assert_eq!(
+        settings.voice.as_ref().and_then(RealtimeVoice::as_str),
+        Some("verse")
+    );
     assert_eq!(settings.speed, Some(1.5));
     assert_eq!(
         settings.output_audio_format,
@@ -799,7 +876,7 @@ async fn session_flat_alias_updates_override_stale_normalized_audio_state() {
             .audio
             .as_ref()
             .and_then(|audio| audio.output.as_ref())
-            .and_then(|output| output.voice.as_deref()),
+            .and_then(|output| output.voice.as_ref().and_then(RealtimeVoice::as_str)),
         Some("verse")
     );
     assert_eq!(
