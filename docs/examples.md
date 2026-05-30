@@ -16,6 +16,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | advanced sqlite session | extension SQLite session with custom table names and tool history | [advanced_sqlite_session.rs](../crates/openai-agents/examples/advanced_sqlite_session.rs) |
 | async sqlite session | async-friendly extension wrapper over SQLite-backed session memory | [async_sqlite_session.rs](../crates/openai-agents/examples/async_sqlite_session.rs) |
 | AnyLLM auto | upstream-named multi-provider AnyLLM routing entry point | [any_llm_auto.rs](../crates/openai-agents/examples/any_llm_auto.rs) |
+| AnyLLM provider | upstream-named AnyLLM provider entry point | [any_llm_provider.rs](../crates/openai-agents/examples/any_llm_provider.rs) |
 | auto mode | deterministic fallback inputs and confirmations for automated example runs | [auto_mode.rs](../crates/openai-agents/examples/auto_mode.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
 | code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
