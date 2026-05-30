@@ -13,6 +13,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, http::HeaderName},
 };
 
+use crate::chatcmpl_helpers::chat_tool_output_content;
 use crate::defaults::{OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_WEBSOCKET_BASE_URL};
 use crate::websocket::ResponsesWebSocketSession;
 
@@ -186,6 +187,7 @@ impl Model for OpenAIResponsesModel {
 pub struct OpenAIChatCompletionsModel {
     model: String,
     options: OpenAIClientOptions,
+    strict_feature_validation: bool,
 }
 
 impl OpenAIChatCompletionsModel {
@@ -193,7 +195,13 @@ impl OpenAIChatCompletionsModel {
         Self {
             model: model.into(),
             options,
+            strict_feature_validation: false,
         }
+    }
+
+    pub fn with_strict_feature_validation(mut self, strict_feature_validation: bool) -> Self {
+        self.strict_feature_validation = strict_feature_validation;
+        self
     }
 
     pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
@@ -206,7 +214,12 @@ impl OpenAIChatCompletionsModel {
                 "content": instructions,
             }));
         }
-        messages.extend(request.input.iter().flat_map(openai_chat_messages));
+        let converted_messages = request
+            .input
+            .iter()
+            .map(|item| openai_chat_messages(item, self.strict_feature_validation))
+            .collect::<Result<Vec<_>>>()?;
+        messages.extend(converted_messages.into_iter().flatten());
         payload.insert("messages".to_owned(), Value::Array(messages));
         let tools = openai_tools_payload(&request.tools);
         let has_tools = !tools.is_empty();
@@ -661,31 +674,31 @@ fn openai_response_json_item(value: &Value) -> Value {
     }
 }
 
-fn openai_chat_messages(item: &InputItem) -> Vec<Value> {
+fn openai_chat_messages(item: &InputItem, strict_feature_validation: bool) -> Result<Vec<Value>> {
     match item {
-        InputItem::Text { text } => vec![json!({
+        InputItem::Text { text } => Ok(vec![json!({
             "role": "user",
             "content": text,
-        })],
-        InputItem::Json { value } => openai_chat_json_messages(value),
+        })]),
+        InputItem::Json { value } => openai_chat_json_messages(value, strict_feature_validation),
     }
 }
 
-fn openai_chat_json_messages(value: &Value) -> Vec<Value> {
+fn openai_chat_json_messages(value: &Value, strict_feature_validation: bool) -> Result<Vec<Value>> {
     if let Some(role) = value.get("role").and_then(Value::as_str) {
-        return vec![json!({
+        return Ok(vec![json!({
             "role": role,
             "content": value.get("content").cloned().unwrap_or_else(|| json!(value.to_string())),
-        })];
+        })]);
     }
 
     match value.get("type").and_then(Value::as_str) {
-        Some("tool_call_output") => vec![json!({
+        Some("tool_call_output") => Ok(vec![json!({
             "role": "tool",
             "tool_call_id": first_non_empty_string(value, &["call_id", "id"]),
-            "content": tool_output_to_chat_content(value.get("output")),
-        })],
-        Some("tool_call") => vec![json!({
+            "content": chat_tool_output_content(value.get("output"), strict_feature_validation)?,
+        })]),
+        Some("tool_call") => Ok(vec![json!({
             "role": "assistant",
             "content": Value::Null,
             "tool_calls": [
@@ -698,29 +711,29 @@ fn openai_chat_json_messages(value: &Value) -> Vec<Value> {
                     }
                 }
             ],
-        })],
-        Some("reasoning") => vec![json!({
+        })]),
+        Some("reasoning") => Ok(vec![json!({
             "role": "assistant",
             "content": value.get("text").and_then(Value::as_str).unwrap_or("reasoning"),
-        })],
-        Some("handoff_call") => vec![json!({
+        })]),
+        Some("handoff_call") => Ok(vec![json!({
             "role": "assistant",
             "content": format!(
                 "[handoff:{}]",
                 value.get("target_agent").and_then(Value::as_str).unwrap_or_default()
             ),
-        })],
-        Some("handoff_output") => vec![json!({
+        })]),
+        Some("handoff_output") => Ok(vec![json!({
             "role": "tool",
             "content": format!(
                 "[handoff_complete:{}]",
                 value.get("source_agent").and_then(Value::as_str).unwrap_or_default()
             ),
-        })],
-        _ => vec![json!({
+        })]),
+        _ => Ok(vec![json!({
             "role": "user",
             "content": value.to_string(),
-        })],
+        })]),
     }
 }
 
@@ -980,13 +993,6 @@ fn tool_output_to_responses_output(value: Option<&Value>) -> Value {
     }
 }
 
-fn tool_output_to_chat_content(value: Option<&Value>) -> String {
-    match tool_output_to_responses_output(value) {
-        Value::String(text) => text,
-        other => other.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -1139,6 +1145,113 @@ mod tests {
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_replaces_empty_tool_output_by_default() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "tool_call_output",
+                        "call_id": "call-empty",
+                        "output": [],
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("default chat payload should replace empty tool output");
+
+        assert_eq!(payload["messages"][0]["role"], "tool");
+        assert_eq!(payload["messages"][0]["content"], "[tool output omitted]");
+    }
+
+    #[test]
+    fn chat_payload_rejects_empty_tool_output_in_strict_mode() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        )
+        .with_strict_feature_validation(true);
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "tool_call_output",
+                        "call_id": "call-empty",
+                        "output": [],
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("strict chat payload should reject empty tool output");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot be empty or contain only non-text content")
+        );
+    }
+
+    #[test]
+    fn chat_payload_keeps_text_from_mixed_tool_output() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "tool_call_output",
+                        "call_id": "call-mixed",
+                        "output": [
+                            {"type": "input_text", "text": "visible text"},
+                            {
+                                "type": "input_image",
+                                "image_url": "https://example.com/image.png",
+                            },
+                        ],
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("chat payload should keep text tool output parts");
+
+        assert_eq!(
+            payload["messages"][0]["content"],
+            json!([
+                {
+                    "type": "text",
+                    "text": "visible text",
+                },
+            ])
+        );
     }
 
     #[test]

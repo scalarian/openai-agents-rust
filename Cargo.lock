@@ -1252,6 +1252,7 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
+ "log",
  "once_cell",
  "openai-agents-core-rs",
  "reqwest",

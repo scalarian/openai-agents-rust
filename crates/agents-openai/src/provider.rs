@@ -35,6 +35,7 @@ pub struct OpenAIProvider {
     pub api: Option<OpenAIApi>,
     pub use_responses: Option<bool>,
     pub use_responses_websocket: bool,
+    pub strict_feature_validation: bool,
     pub agent_registration: Option<ResolvedOpenAIAgentRegistrationConfig>,
     websocket_model_cache:
         Arc<Mutex<HashMap<(String, OpenAIClientOptions), Arc<OpenAIResponsesWsModel>>>>,
@@ -51,6 +52,7 @@ impl Default for OpenAIProvider {
             api: None,
             use_responses: None,
             use_responses_websocket: get_use_responses_websocket_by_default() == Some(true),
+            strict_feature_validation: false,
             agent_registration: None,
             websocket_model_cache: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -99,6 +101,11 @@ impl OpenAIProvider {
 
     pub fn with_use_responses_websocket(mut self, use_responses_websocket: bool) -> Self {
         self.use_responses_websocket = use_responses_websocket;
+        self
+    }
+
+    pub fn with_strict_feature_validation(mut self, strict_feature_validation: bool) -> Self {
+        self.strict_feature_validation = strict_feature_validation;
         self
     }
 
@@ -205,9 +212,10 @@ impl ModelProvider for OpenAIProvider {
         let options = self.client_options();
 
         match (self.resolved_api(), self.responses_transport()) {
-            (OpenAIApi::ChatCompletions, _) => {
-                Arc::new(OpenAIChatCompletionsModel::new(model_name, options))
-            }
+            (OpenAIApi::ChatCompletions, _) => Arc::new(
+                OpenAIChatCompletionsModel::new(model_name, options)
+                    .with_strict_feature_validation(self.strict_feature_validation),
+            ),
             (OpenAIApi::Responses, OpenAIResponsesTransport::Http) => {
                 Arc::new(OpenAIResponsesModel::new(model_name, options))
             }
