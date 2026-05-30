@@ -33,12 +33,14 @@ Runnable version: [realtime_session.rs](../../crates/openai-agents/examples/real
 
 ## In This Section
 
+- [quickstart.md](quickstart.md)
 - [events.md](events.md)
 - [audio.md](audio.md)
 - [transports.md](transports.md)
 
 ## Read Next
 
+- [quickstart.md](quickstart.md)
 - [events.md](events.md)
 - [audio.md](audio.md)
 - [../voice/README.md](../voice/README.md)

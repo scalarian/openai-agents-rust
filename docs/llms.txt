@@ -44,6 +44,8 @@ Compact export of the markdown docs tree.
   Use this page when your realtime flow includes audio input, audio output, or playback state tracking.
 - realtime/events.md: Realtime Events
   Use this page when you want to understand what flows through a realtime session as it runs.
+- realtime/quickstart.md: Realtime Quickstart
+  Realtime agents keep a live session open so your application can send input and receive incremental events without waiting for one final text-only result.
 - realtime/transports.md: Realtime Transports
   Use this page when you need to choose or understand the transport beneath a realtime session.
 - ref/README.md: Curated Reference
