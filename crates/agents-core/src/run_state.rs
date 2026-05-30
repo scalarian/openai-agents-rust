@@ -356,6 +356,7 @@ mod tests {
     use crate::guardrail::{GuardrailFunctionOutput, InputGuardrailResult};
     use crate::run_context::RunContext;
     use crate::tool_guardrails::{ToolGuardrailFunctionOutput, ToolInputGuardrailResult};
+    use crate::tracing::{Trace, TracingConfig};
 
     use super::*;
 
@@ -440,6 +441,34 @@ mod tests {
             Some(false)
         );
         assert!(!state.can_continue());
+    }
+
+    #[test]
+    fn run_state_serialization_omits_trace_api_key_by_default() {
+        let context = RunContextWrapper::new(RunContext::default());
+        let mut state = RunState::new(
+            &context,
+            vec![InputItem::from("start")],
+            Agent::builder("router").build(),
+            Some(3),
+        )
+        .expect("run state should build");
+        let mut trace = Trace::new("workflow").with_config(Some(&TracingConfig {
+            api_key: Some("trace-key".to_owned()),
+            disabled: false,
+        }));
+        trace.group_id = Some("group-1".to_owned());
+        state.set_trace(trace);
+
+        let serialized = state.to_json_string().expect("state should serialize");
+
+        assert!(!serialized.contains("trace-key"));
+        assert!(!serialized.contains("tracing_api_key"));
+        let restored = RunState::from_json_str(&serialized).expect("state should deserialize");
+        let restored_trace = restored.trace.expect("trace should restore");
+        assert_eq!(restored_trace.workflow_name, "workflow");
+        assert_eq!(restored_trace.group_id.as_deref(), Some("group-1"));
+        assert_eq!(restored_trace.tracing_api_key, None);
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub struct Trace {
     pub group_id: Option<String>,
     #[serde(default)]
     pub metadata: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing)]
     pub tracing_api_key: Option<String>,
     pub disabled: bool,
     pub started_at: Option<String>,
