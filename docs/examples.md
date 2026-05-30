@@ -48,6 +48,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | handoffs | control transfer between agents | [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) |
 | hello world | upstream-style haiku response example | [hello_world.rs](../crates/openai-agents/examples/hello_world.rs) |
 | hello world GPT-5 | GPT-5 reasoning and verbosity model settings | [hello_world_gpt_5.rs](../crates/openai-agents/examples/hello_world_gpt_5.rs) |
+| hello world GPT-OSS | optional local GPT-OSS Chat Completions provider example | [hello_world_gpt_oss.rs](../crates/openai-agents/examples/hello_world_gpt_oss.rs) |
 | hosted MCP connectors | hosted MCP connector payload configuration | [hosted_mcp_connectors.rs](../crates/openai-agents/examples/hosted_mcp_connectors.rs) |
 | hosted MCP human in the loop | approval interruption and resume for hosted MCP calls | [hosted_mcp_human_in_the_loop.rs](../crates/openai-agents/examples/hosted_mcp_human_in_the_loop.rs) |
 | hosted MCP on approval | hosted MCP approval callback flow | [hosted_mcp_on_approval.rs](../crates/openai-agents/examples/hosted_mcp_on_approval.rs) |
