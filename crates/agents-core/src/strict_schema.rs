@@ -135,7 +135,6 @@ fn ensure_node(node: &mut Value, root: &Value) -> std::result::Result<(), UserEr
                     }
                 }
                 *object = merged;
-                object.remove("$ref");
                 ensure_node(node, root)?;
             }
         }
@@ -219,5 +218,33 @@ mod tests {
             json!("merged")
         );
         assert!(strict["properties"]["value"].get("default").is_none());
+    }
+
+    #[test]
+    fn resolves_chained_refs_when_ref_has_siblings() {
+        let schema = json!({
+            "$defs": {
+                "Inner": {
+                    "type": "string"
+                },
+                "Outer": {
+                    "$ref": "#/$defs/Inner"
+                }
+            },
+            "type": "object",
+            "properties": {
+                "value": {
+                    "$ref": "#/$defs/Outer",
+                    "description": "merged"
+                }
+            }
+        });
+
+        let strict = ensure_strict_json_schema(schema).expect("schema should normalize");
+        let value_schema = &strict["properties"]["value"];
+
+        assert_eq!(value_schema["type"], json!("string"));
+        assert_eq!(value_schema["description"], json!("merged"));
+        assert!(value_schema.get("$ref").is_none());
     }
 }
