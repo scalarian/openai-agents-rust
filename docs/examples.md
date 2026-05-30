@@ -13,6 +13,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | agents as tools streaming | stream events emitted by a nested agent tool | [agents_as_tools_streaming.rs](../crates/openai-agents/examples/agents_as_tools_streaming.rs) |
 | agents as tools structured | structured input for agent-as-tool calls | [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
+| custom agent model | per-agent model name resolved by a custom provider | [custom_agent_model.rs](../crates/openai-agents/examples/custom_agent_model.rs) |
 | custom model provider | per-run custom model provider selection | [custom_model_provider.rs](../crates/openai-agents/examples/custom_model_provider.rs) |
 | deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
 | dynamic system prompt | per-run agent instructions | [dynamic_system_prompt.rs](../crates/openai-agents/examples/dynamic_system_prompt.rs) |

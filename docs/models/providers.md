@@ -13,6 +13,7 @@ Use this page when you need to decide where model resolution should live and how
 Use one provider for the application and pass it into a shared `Runner` unless you have a real need for per-request provider switching.
 
 Use `RunOptions::model_provider` when a single run should resolve models from a custom provider. See [custom_model_provider.rs](../../crates/openai-agents/examples/custom_model_provider.rs).
+Use `Agent::model(...)` when one agent should request a specific model name from the provider. See [custom_agent_model.rs](../../crates/openai-agents/examples/custom_agent_model.rs).
 
 ## When `MultiProvider` Helps
 
