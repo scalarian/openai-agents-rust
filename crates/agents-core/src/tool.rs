@@ -124,10 +124,10 @@ impl ToolOutput {
                 value: value.clone(),
             },
             Self::Image(value) => OutputItem::Json {
-                value: serde_json::to_value(value).unwrap_or(Value::Null),
+                value: serde_json::to_value(Self::Image(value.clone())).unwrap_or(Value::Null),
             },
             Self::File(value) => OutputItem::Json {
-                value: serde_json::to_value(value).unwrap_or(Value::Null),
+                value: serde_json::to_value(Self::File(value.clone())).unwrap_or(Value::Null),
             },
         }
     }
@@ -777,5 +777,44 @@ mod tests {
         assert!(tool.defer_loading);
         assert_eq!(tool.tool_input_guardrails.len(), 1);
         assert!(tool.definition.defer_loading);
+    }
+
+    #[test]
+    fn image_and_file_outputs_keep_model_visible_type_tags() {
+        let image = ToolOutput::Image(ToolOutputImage {
+            image_url: Some("data:image/png;base64,abc".to_owned()),
+            file_id: None,
+            detail: Some("high".to_owned()),
+        });
+        assert_eq!(
+            image.to_output_item(),
+            OutputItem::Json {
+                value: json!({
+                    "type": "image",
+                    "image_url": "data:image/png;base64,abc",
+                    "file_id": null,
+                    "detail": "high"
+                })
+            }
+        );
+
+        let file = ToolOutput::File(ToolOutputFileContent {
+            file_data: None,
+            file_url: Some("https://example.test/report.pdf".to_owned()),
+            file_id: None,
+            filename: Some("report.pdf".to_owned()),
+        });
+        assert_eq!(
+            file.to_output_item(),
+            OutputItem::Json {
+                value: json!({
+                    "type": "file",
+                    "file_data": null,
+                    "file_url": "https://example.test/report.pdf",
+                    "file_id": null,
+                    "filename": "report.pdf"
+                })
+            }
+        );
     }
 }
