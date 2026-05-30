@@ -42,6 +42,7 @@ cargo run -p openai-agents-rs --example llm_as_a_judge
 cargo run -p openai-agents-rs --example local_file
 cargo run -p openai-agents-rs --example local_image
 cargo run -p openai-agents-rs --example memory_session
+cargo run -p openai-agents-rs --example mcp_filesystem
 cargo run -p openai-agents-rs --example mongodb_session
 cargo run -p openai-agents-rs --example non_strict_output_type
 cargo run -p openai-agents-rs --example openai_session
@@ -110,6 +111,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `local_file` | local file input item encoded as data URL content | [docs/agents.md](../docs/agents.md) |
 | `local_image` | local image input item encoded as data URL content | [docs/agents.md](../docs/agents.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
+| `mcp_filesystem` | MCP server tool discovery and local tool calls | [docs/mcp.md](../docs/mcp.md) |
 | `mongodb_session` | MongoDB-backed extension session with shared client isolation | [docs/sessions/memory.md](../docs/sessions/memory.md) |
 | `non_strict_output_type` | structured output validation with non-strict and custom schemas | [docs/agents.md](../docs/agents.md) |
 | `openai_session` | OpenAI conversation-aware session continuation metadata | [docs/sessions/openai.md](../docs/sessions/openai.md) |
