@@ -2617,6 +2617,41 @@ mod tests {
     }
 
     #[test]
+    fn strict_chat_payload_rejects_custom_tool_replay_items() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        )
+        .with_strict_feature_validation(true);
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "custom_tool_call_output",
+                        "call_id": "call-custom",
+                        "output": "HELLO"
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect_err("strict chat payload should reject custom tool replay");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Custom tool calls are not supported")
+        );
+    }
+
+    #[test]
     fn chat_payload_converts_named_function_tool_choice() {
         let model = OpenAIChatCompletionsModel::new(
             "gpt-4.1",
