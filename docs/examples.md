@@ -19,6 +19,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
 | compaction session | automatic and manual OpenAI Responses session compaction | [compaction_session.rs](../crates/openai-agents/examples/compaction_session.rs) |
 | compaction session stateless | auto compaction for `store=false` Responses runs | [compaction_session_stateless.rs](../crates/openai-agents/examples/compaction_session_stateless.rs) |
+| custom example provider | upstream-named custom model provider entry point | [custom_example_provider.rs](../crates/openai-agents/examples/custom_example_provider.rs) |
 | custom agent model | per-agent model name resolved by a custom provider | [custom_agent_model.rs](../crates/openai-agents/examples/custom_agent_model.rs) |
 | custom model provider | per-run custom model provider selection | [custom_model_provider.rs](../crates/openai-agents/examples/custom_model_provider.rs) |
 | database session | database-session extension using an in-memory SQLite URL | [database_session.rs](../crates/openai-agents/examples/database_session.rs) |
