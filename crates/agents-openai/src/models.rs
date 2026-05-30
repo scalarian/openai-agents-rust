@@ -247,7 +247,7 @@ impl OpenAIChatCompletionsModel {
             .collect::<Result<Vec<_>>>()?;
         messages.extend(converted_messages.into_iter().flatten());
         payload.insert("messages".to_owned(), Value::Array(messages));
-        let tools = openai_chat_tools_payload(&request.tools);
+        let tools = openai_chat_tools_payload(&request.tools)?;
         let has_tools = !tools.is_empty();
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
@@ -1204,7 +1204,7 @@ fn validate_responses_tool_search_configuration(tools: &[ToolDefinition]) -> Res
     Ok(())
 }
 
-fn openai_chat_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
+fn openai_chat_tools_payload(tools: &[ToolDefinition]) -> Result<Vec<Value>> {
     tools.iter().map(openai_chat_tool_payload).collect()
 }
 
@@ -1289,15 +1289,22 @@ fn openai_responses_function_tool_payload(tool: &ToolDefinition) -> Value {
     Value::Object(payload)
 }
 
-fn openai_chat_tool_payload(tool: &ToolDefinition) -> Value {
+fn openai_chat_tool_payload(tool: &ToolDefinition) -> Result<Value> {
+    if matches!(tool.kind, agents_core::tool::ToolDefinitionKind::Custom) {
+        return Err(UserError {
+            message: "Custom tools are not supported by Chat Completions models; use an OpenAI Responses model instead.".to_owned(),
+        }
+        .into());
+    }
+
     if tool.input_json_schema.is_none() {
         let mut payload = serde_json::Map::new();
         payload.insert("type".to_owned(), Value::String(tool.name.clone()));
         payload.extend(tool.hosted_tool_options.clone());
-        return Value::Object(payload);
+        return Ok(Value::Object(payload));
     }
 
-    json!({
+    Ok(json!({
         "type": "function",
         "function": {
             "name": tool.name,
@@ -1305,7 +1312,7 @@ fn openai_chat_tool_payload(tool: &ToolDefinition) -> Value {
             "parameters": tool.input_json_schema.clone().unwrap_or(Value::Null),
             "strict": tool.strict_json_schema,
         }
-    })
+    }))
 }
 
 fn openai_responses_text_config(request: &ModelRequest) -> Option<Value> {
@@ -2583,6 +2590,30 @@ mod tests {
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_rejects_custom_tools() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![ToolDefinition::custom("raw_editor", "Edit raw text.")],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect_err("chat payload should reject custom tools");
+
+        assert!(error.to_string().contains("Custom tools are not supported"));
     }
 
     #[test]
