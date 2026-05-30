@@ -3851,6 +3851,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_resets_tool_choice_after_resumed_tool_approval() {
+        let model = Arc::new(ToolChoiceCaptureModel::new(vec![OutputItem::ToolCall {
+            call_id: "call-search".to_owned(),
+            tool_name: "search".to_owned(),
+            arguments: json!({}),
+            namespace: None,
+        }]));
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, _args: NoArgs| async move { Ok::<_, AgentsError>("tool result") },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+        let agent = Agent::builder("assistant")
+            .model_settings(crate::ModelSettings {
+                tool_choice: Some("required".to_owned()),
+                ..crate::ModelSettings::default()
+            })
+            .function_tool(search_tool)
+            .build();
+        let runner = Runner::new().with_model_provider(Arc::new(StaticProvider {
+            model: model.clone(),
+        }));
+
+        let initial = runner
+            .run(&agent, "hello")
+            .await
+            .expect("initial run should interrupt");
+        assert!(initial.final_output.is_none());
+        assert_eq!(model.seen_tool_choices(), vec![Some("required".to_owned())]);
+
+        let mut state = initial
+            .run_state
+            .clone()
+            .expect("interrupted run should include state");
+        state.approve_for_tool(
+            "call-search",
+            Some("search".to_owned()),
+            Some("approved".to_owned()),
+        );
+
+        let resumed = runner
+            .resume_with_agent(&state, &agent)
+            .await
+            .expect("resume should succeed");
+
+        assert_eq!(resumed.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            model.seen_tool_choices(),
+            vec![Some("required".to_owned()), None]
+        );
+        assert_eq!(
+            resumed
+                .run_state
+                .as_ref()
+                .and_then(|state| state.tool_use_tracker.get("assistant"))
+                .cloned(),
+            Some(vec!["search".to_owned()])
+        );
+    }
+
+    #[tokio::test]
     async fn runner_can_preserve_tool_choice_after_tool_use() {
         let model = Arc::new(ToolChoiceCaptureModel::new(vec![OutputItem::ToolCall {
             call_id: "call-search".to_owned(),
