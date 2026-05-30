@@ -24,6 +24,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
 | code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
 | codex | experimental Codex tool configuration for read-only workspace inspection | [codex.rs](../crates/openai-agents/examples/codex.rs) |
+| codex same thread | experimental Codex tool reuse across multiple turns | [codex_same_thread.rs](../crates/openai-agents/examples/codex_same_thread.rs) |
 | compaction session example | upstream-named compaction session entry point | [compaction_session_example.rs](../crates/openai-agents/examples/compaction_session_example.rs) |
 | compaction session stateless example | upstream-named stateless compaction entry point | [compaction_session_stateless_example.rs](../crates/openai-agents/examples/compaction_session_stateless_example.rs) |
 | compaction session | automatic and manual OpenAI Responses session compaction | [compaction_session.rs](../crates/openai-agents/examples/compaction_session.rs) |
