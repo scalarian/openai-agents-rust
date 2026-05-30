@@ -22,6 +22,10 @@ use crate::editor::{ApplyPatchOperation, ApplyPatchResult};
 use crate::errors::{AgentsError, Result};
 use crate::tool::{FunctionTool, function_tool};
 
+const MAX_MANIFEST_DESCRIPTION_CHARS: usize = 5000;
+const MANIFEST_DESCRIPTION_TRUNCATION_MARKER_TEMPLATE_PREFIX: &str = "... (truncated ";
+const MANIFEST_DESCRIPTION_TRUNCATION_MARKER_TEMPLATE_SUFFIX: &str = " chars)";
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxConcurrencyLimits {
     pub manifest_entries: Option<usize>,
@@ -194,11 +198,15 @@ impl Manifest {
     }
 
     pub fn describe(&self) -> String {
+        self.describe_with_max_chars(Some(MAX_MANIFEST_DESCRIPTION_CHARS))
+    }
+
+    pub fn describe_with_max_chars(&self, max_chars: Option<usize>) -> String {
         let mut lines = vec![format!("{} (workspace root)", self.root)];
         for (path, entry) in &self.entries {
             describe_entry(path, entry, 0, &mut lines);
         }
-        lines.join("\n")
+        truncate_manifest_description(&lines.join("\n"), max_chars)
     }
 }
 
@@ -215,6 +223,49 @@ fn describe_entry(path: &str, entry: &ManifestEntry, depth: usize, lines: &mut V
             }
         }
     }
+}
+
+fn truncate_manifest_description(description: &str, max_chars: Option<usize>) -> String {
+    let Some(max_chars) = max_chars else {
+        return description.to_owned();
+    };
+    let description_chars = description.chars().count();
+    if description_chars <= max_chars {
+        return description.to_owned();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let mut omitted_chars = description_chars - max_chars;
+    let marker = loop {
+        let marker = format!(
+            "\n{MANIFEST_DESCRIPTION_TRUNCATION_MARKER_TEMPLATE_PREFIX}{omitted_chars}{MANIFEST_DESCRIPTION_TRUNCATION_MARKER_TEMPLATE_SUFFIX}\n\nThe filesystem layout above was truncated. Use `ls` to explore specific directories before relying on omitted paths.\n"
+        );
+        let keep_chars = max_chars.saturating_sub(marker.chars().count());
+        let actual_omitted_chars = description_chars.saturating_sub(keep_chars);
+        if actual_omitted_chars == omitted_chars {
+            break marker;
+        }
+        omitted_chars = actual_omitted_chars;
+    };
+
+    if marker.chars().count() >= max_chars {
+        return take_chars(&marker, max_chars);
+    }
+
+    let keep_chars = max_chars.saturating_sub(marker.chars().count());
+    let mut truncated = take_chars(description, keep_chars);
+    truncated = truncated.trim_end().to_owned();
+    truncated.push_str(&marker);
+    if truncated.chars().count() > max_chars {
+        return take_chars(&truncated, max_chars);
+    }
+    truncated
+}
+
+fn take_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2316,6 +2367,39 @@ mod tests {
         assert!(instructions.contains("Inspect the prepared workspace."));
         assert!(instructions.contains("Capabilities: filesystem, apply_patch"));
         assert!(instructions.contains("README.md"));
+    }
+
+    #[test]
+    fn manifest_description_truncation_respects_short_limits() {
+        let description = "0123456789".repeat(20);
+
+        for max_chars in 0..40 {
+            let truncated = truncate_manifest_description(&description, Some(max_chars));
+            assert!(truncated.chars().count() <= max_chars);
+        }
+    }
+
+    #[test]
+    fn manifest_description_preserves_unbounded_description() {
+        let description = "short";
+
+        assert_eq!(
+            truncate_manifest_description(description, None),
+            description
+        );
+    }
+
+    #[test]
+    fn manifest_describe_truncates_large_default_rendering() {
+        let mut manifest = Manifest::default();
+        for index in 0..600 {
+            manifest = manifest.with_entry(format!("file-{index:04}.txt"), File::from_text("x"));
+        }
+
+        let description = manifest.describe();
+
+        assert!(description.chars().count() <= MAX_MANIFEST_DESCRIPTION_CHARS);
+        assert!(description.contains("truncated"));
     }
 
     #[cfg(unix)]
