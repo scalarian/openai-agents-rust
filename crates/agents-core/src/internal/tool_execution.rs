@@ -1696,6 +1696,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn visible_and_deferred_same_name_route_by_namespace_shape() {
+        let visible_tool = function_tool(
+            "lookup_account",
+            "Visible lookup",
+            |_ctx, _args: serde_json::Value| async move { Ok::<_, AgentsError>("visible") },
+        )
+        .expect("visible function tool should build");
+        let deferred_tool = function_tool(
+            "lookup_account",
+            "Deferred lookup",
+            |_ctx, _args: serde_json::Value| async move { Ok::<_, AgentsError>("deferred") },
+        )
+        .expect("deferred function tool should build")
+        .with_defer_loading(true);
+        let agent = Agent::builder("assistant")
+            .function_tool(visible_tool)
+            .function_tool(deferred_tool)
+            .build();
+
+        let bare_outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-visible".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: None,
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("bare call should route to visible tool");
+        assert_tool_text_outputs(&bare_outcome.new_items, &["visible"]);
+
+        let deferred_outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-deferred".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: Some("lookup_account".to_owned()),
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("synthetic namespace should route to deferred tool");
+        assert_tool_text_outputs(&deferred_outcome.new_items, &["deferred"]);
+    }
+
+    #[tokio::test]
     async fn disabled_function_tool_call_fails_before_siblings_execute() {
         let disabled_invocations = Arc::new(AtomicUsize::new(0));
         let sibling_invocations = Arc::new(AtomicUsize::new(0));

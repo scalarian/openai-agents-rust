@@ -1,4 +1,5 @@
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -450,21 +451,13 @@ impl Agent {
         }
 
         let mut visible = Vec::new();
-        let mut seen = std::collections::HashSet::new();
         for tool in tools {
             if !tool.enabled_for(run_context, self).await {
                 continue;
             }
-
-            let qualified_name = tool.qualified_name();
-            if !seen.insert(qualified_name.clone()) {
-                return Err(AgentsError::message(format!(
-                    "duplicate runtime tool name `{qualified_name}` for agent `{}`",
-                    self.name
-                )));
-            }
             visible.push(tool);
         }
+        validate_runtime_tool_duplicates(visible.iter().map(|tool| &tool.definition), &self.name)?;
 
         Ok(visible)
     }
@@ -509,21 +502,7 @@ impl Agent {
         );
         definitions.extend(self.custom_tools.iter().map(|tool| tool.definition.clone()));
 
-        let mut seen = std::collections::HashSet::new();
-        for definition in &definitions {
-            let key = (definition.name.as_str(), definition.namespace.as_deref());
-            if !seen.insert(key) {
-                return Err(AgentsError::message(format!(
-                    "duplicate runtime tool name `{}` for agent `{}`",
-                    crate::_tool_identity::tool_qualified_name(
-                        &definition.name,
-                        definition.namespace.as_deref()
-                    )
-                    .unwrap_or_else(|| definition.name.clone()),
-                    self.name
-                )));
-            }
-        }
+        validate_runtime_tool_duplicates(definitions.iter(), &self.name)?;
 
         Ok(definitions)
     }
@@ -805,6 +784,62 @@ impl Agent {
     }
 }
 
+#[derive(Default)]
+struct RuntimeToolDuplicateState {
+    saw_visible_top_level: bool,
+    saw_deferred_top_level: bool,
+    saw_namespaced_or_static: bool,
+}
+
+fn validate_runtime_tool_duplicates<'a, I>(definitions: I, agent_name: &str) -> Result<()>
+where
+    I: IntoIterator<Item = &'a crate::tool::ToolDefinition>,
+{
+    let mut seen: HashMap<String, RuntimeToolDuplicateState> = HashMap::new();
+    for definition in definitions {
+        crate::_tool_identity::validate_function_tool_namespace_shape(
+            &definition.name,
+            definition.namespace.as_deref(),
+        )?;
+        let qualified_name = crate::_tool_identity::tool_qualified_name(
+            &definition.name,
+            definition.namespace.as_deref(),
+        )
+        .unwrap_or_else(|| definition.name.clone());
+        let state = seen.entry(qualified_name.clone()).or_default();
+
+        if definition.namespace.is_none() {
+            if definition.defer_loading {
+                if state.saw_deferred_top_level || state.saw_namespaced_or_static {
+                    return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
+                }
+                state.saw_deferred_top_level = true;
+            } else {
+                if state.saw_visible_top_level || state.saw_namespaced_or_static {
+                    return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
+                }
+                state.saw_visible_top_level = true;
+            }
+            continue;
+        }
+
+        if state.saw_visible_top_level
+            || state.saw_deferred_top_level
+            || state.saw_namespaced_or_static
+        {
+            return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
+        }
+        state.saw_namespaced_or_static = true;
+    }
+    Ok(())
+}
+
+fn duplicate_runtime_tool_error(qualified_name: &str, agent_name: &str) -> AgentsError {
+    AgentsError::message(format!(
+        "duplicate runtime tool name `{qualified_name}` for agent `{agent_name}`"
+    ))
+}
+
 /// Builder for [`Agent`].
 #[derive(Clone, Debug)]
 pub struct AgentBuilder {
@@ -989,6 +1024,124 @@ mod tests {
         assert_eq!(agent.tools.len(), 1);
         assert_eq!(agent.function_tools.len(), 1);
         assert!(agent.find_function_tool("search", None).is_some());
+    }
+
+    #[tokio::test]
+    async fn runtime_tools_allow_visible_and_deferred_top_level_same_name() {
+        let visible_tool = function_tool(
+            "lookup_account",
+            "Visible lookup",
+            |_ctx, _args: serde_json::Value| async move {
+                Ok::<_, crate::errors::AgentsError>("visible")
+            },
+        )
+        .expect("visible function tool should build");
+        let deferred_tool = function_tool(
+            "lookup_account",
+            "Deferred lookup",
+            |_ctx, _args: serde_json::Value| async move {
+                Ok::<_, crate::errors::AgentsError>("deferred")
+            },
+        )
+        .expect("deferred function tool should build")
+        .with_defer_loading(true);
+
+        let agent = Agent::builder("assistant")
+            .function_tool(visible_tool)
+            .function_tool(deferred_tool)
+            .build();
+        let context = RunContextWrapper::new(RunContext::default());
+
+        let tools = agent
+            .get_all_function_tools(&context)
+            .await
+            .expect("visible and deferred peers should not collide");
+        assert_eq!(tools.len(), 2);
+
+        let definitions = agent
+            .runtime_tool_definitions(&context)
+            .await
+            .expect("runtime definitions should allow visible and deferred peers");
+        let lookup_definitions = definitions
+            .iter()
+            .filter(|definition| definition.name == "lookup_account")
+            .collect::<Vec<_>>();
+        assert_eq!(lookup_definitions.len(), 2);
+        assert!(
+            lookup_definitions
+                .iter()
+                .any(|definition| definition.defer_loading)
+        );
+        assert!(
+            lookup_definitions
+                .iter()
+                .any(|definition| !definition.defer_loading)
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_tools_reject_qualified_namespace_collision() {
+        let top_level = function_tool(
+            "crm.lookup_account",
+            "Top-level dotted lookup",
+            |_ctx, _args: serde_json::Value| async move {
+                Ok::<_, crate::errors::AgentsError>("top-level")
+            },
+        )
+        .expect("top-level function tool should build");
+        let mut namespaced = function_tool(
+            "lookup_account",
+            "Namespaced lookup",
+            |_ctx, _args: serde_json::Value| async move {
+                Ok::<_, crate::errors::AgentsError>("namespaced")
+            },
+        )
+        .expect("namespaced function tool should build");
+        namespaced.definition.namespace = Some("crm".to_owned());
+
+        let agent = Agent::builder("assistant")
+            .function_tool(top_level)
+            .function_tool(namespaced)
+            .build();
+        let context = RunContextWrapper::new(RunContext::default());
+
+        let error = agent
+            .get_all_function_tools(&context)
+            .await
+            .expect_err("qualified namespace collisions should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate runtime tool name `crm.lookup_account`")
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_tools_reject_reserved_same_name_namespace_shape() {
+        let mut tool = function_tool(
+            "lookup_account",
+            "Lookup",
+            |_ctx, _args: serde_json::Value| async move {
+                Ok::<_, crate::errors::AgentsError>("lookup")
+            },
+        )
+        .expect("function tool should build");
+        tool.definition.namespace = Some("lookup_account".to_owned());
+
+        let agent = Agent::builder("assistant").function_tool(tool).build();
+        let context = RunContextWrapper::new(RunContext::default());
+
+        let error = agent
+            .get_all_function_tools(&context)
+            .await
+            .expect_err("reserved same-name namespace should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("reserves the synthetic namespace `lookup_account.lookup_account`")
+        );
     }
 
     #[tokio::test]
