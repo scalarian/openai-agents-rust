@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     future,
     pin::Pin,
     sync::{
@@ -931,7 +932,46 @@ fn openai_chat_json_messages(value: &Value, strict_feature_validation: bool) -> 
 }
 
 fn openai_responses_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
-    tools.iter().map(openai_responses_tool_payload).collect()
+    let mut payloads: Vec<Option<Value>> = Vec::new();
+    let mut namespace_index_by_name: BTreeMap<String, usize> = BTreeMap::new();
+    let mut namespace_tools_by_name: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+
+    for tool in tools {
+        if tool.input_json_schema.is_some()
+            && let Some(namespace) = tool
+                .namespace
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        {
+            if !namespace_index_by_name.contains_key(namespace) {
+                namespace_index_by_name.insert(namespace.to_owned(), payloads.len());
+                namespace_tools_by_name.insert(namespace.to_owned(), Vec::new());
+                payloads.push(None);
+            }
+            namespace_tools_by_name
+                .get_mut(namespace)
+                .expect("namespace tools should be initialized")
+                .push(openai_responses_function_tool_payload(tool));
+            continue;
+        }
+
+        payloads.push(Some(openai_responses_tool_payload(tool)));
+    }
+
+    for (namespace, index) in namespace_index_by_name {
+        let tools = namespace_tools_by_name
+            .remove(&namespace)
+            .expect("namespace tools should be available");
+        payloads[index] = Some(json!({
+            "type": "namespace",
+            "name": namespace,
+            "description": "",
+            "tools": tools,
+        }));
+    }
+
+    payloads.into_iter().flatten().collect()
 }
 
 fn validate_responses_tool_search_configuration(tools: &[ToolDefinition]) -> Result<()> {
@@ -997,6 +1037,10 @@ fn openai_responses_tool_payload(tool: &ToolDefinition) -> Value {
         return Value::Object(payload);
     }
 
+    openai_responses_function_tool_payload(tool)
+}
+
+fn openai_responses_function_tool_payload(tool: &ToolDefinition) -> Value {
     let mut payload = serde_json::Map::from_iter([
         ("type".to_owned(), Value::String("function".to_owned())),
         ("name".to_owned(), Value::String(tool.name.clone())),
@@ -1546,6 +1590,70 @@ mod tests {
             })
         );
         assert_eq!(payload["tools"][1], json!({"type": "tool_search"}));
+    }
+
+    #[test]
+    fn responses_payload_groups_namespaced_function_tools() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("lookup_account", "Look up account")
+                        .with_namespace("crm")
+                        .with_input_json_schema(json!({"type": "object"})),
+                    ToolDefinition::new("create_ticket", "Create support ticket")
+                        .with_namespace("crm")
+                        .with_input_json_schema(json!({"type": "object"})),
+                    ToolDefinition::new("summarize", "Summarize")
+                        .with_input_json_schema(json!({"type": "object"})),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"],
+            json!([
+                {
+                    "type": "namespace",
+                    "name": "crm",
+                    "description": "",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "lookup_account",
+                            "description": "Look up account",
+                            "parameters": {"type": "object"},
+                            "strict": true
+                        },
+                        {
+                            "type": "function",
+                            "name": "create_ticket",
+                            "description": "Create support ticket",
+                            "parameters": {"type": "object"},
+                            "strict": true
+                        }
+                    ]
+                },
+                {
+                    "type": "function",
+                    "name": "summarize",
+                    "description": "Summarize",
+                    "parameters": {"type": "object"},
+                    "strict": true
+                }
+            ])
+        );
     }
 
     #[test]
