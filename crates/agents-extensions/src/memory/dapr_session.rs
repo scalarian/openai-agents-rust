@@ -65,6 +65,14 @@ impl DaprSession {
     }
 
     async fn read_all_values(&self) -> Result<Vec<Value>> {
+        self.read_all_values_with_strictness(false).await
+    }
+
+    async fn read_all_values_for_update(&self) -> Result<Vec<Value>> {
+        self.read_all_values_with_strictness(true).await
+    }
+
+    async fn read_all_values_with_strictness(&self, strict: bool) -> Result<Vec<Value>> {
         let response = self
             .client
             .get(format!("{}/{}", self.state_url(), self.key()))
@@ -85,19 +93,20 @@ impl DaprSession {
             )));
         }
 
-        let value: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-        if value.is_null() {
-            return Ok(Vec::new());
-        }
-        serde_json::from_value::<Vec<Value>>(value)
-            .map_err(|error| AgentsError::message(error.to_string()))
+        let value: serde_json::Value = match response.json().await {
+            Ok(value) => value,
+            Err(_) if !strict => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(AgentsError::message(format!(
+                    "stored Dapr session messages are not valid JSON and cannot be safely updated: {error}"
+                )));
+            }
+        };
+        decode_dapr_state_values(value, strict)
     }
 
-    async fn read_all_items(&self) -> Result<Vec<InputItem>> {
-        self.read_all_values()
+    async fn read_all_items_for_update(&self) -> Result<Vec<InputItem>> {
+        self.read_all_values_for_update()
             .await?
             .into_iter()
             .map(parse_dapr_input_item)
@@ -171,14 +180,14 @@ impl Session for DaprSession {
         if items.is_empty() {
             return Ok(());
         }
-        let mut existing = self.read_all_items().await?;
+        let mut existing = self.read_all_items_for_update().await?;
         existing.extend(items);
         self.write_all_items(&existing).await
     }
 
     async fn pop_item(&self) -> Result<Option<InputItem>> {
         loop {
-            let mut values = self.read_all_values().await?;
+            let mut values = self.read_all_values_for_update().await?;
             let Some(popped) = values.pop() else {
                 return Ok(None);
             };
@@ -224,6 +233,19 @@ fn parse_dapr_input_item(value: Value) -> Result<InputItem> {
     }
 }
 
+fn decode_dapr_state_values(value: Value, strict: bool) -> Result<Vec<Value>> {
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    match value {
+        Value::Array(values) => Ok(values),
+        _ if strict => Err(AgentsError::message(
+            "stored Dapr session messages must be a JSON list and cannot be safely updated",
+        )),
+        _ => Ok(Vec::new()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +271,23 @@ mod tests {
         assert_eq!(parse_dapr_input_item(direct).ok(), Some(item.clone()));
         assert_eq!(parse_dapr_input_item(encoded).ok(), Some(item));
         assert!(parse_dapr_input_item(Value::String("not json".to_owned())).is_err());
+    }
+
+    #[test]
+    fn dapr_state_decoder_rejects_corrupt_aggregate_state_for_updates() {
+        assert_eq!(
+            decode_dapr_state_values(json!({"unexpected": "object"}), false)
+                .expect("non-strict reads should tolerate corrupt aggregate state"),
+            Vec::<Value>::new()
+        );
+
+        let error = decode_dapr_state_values(json!({"unexpected": "object"}), true)
+            .expect_err("strict updates should reject corrupt aggregate state");
+
+        assert!(
+            error
+                .to_string()
+                .contains("stored Dapr session messages must be a JSON list")
+        );
     }
 }
