@@ -120,16 +120,18 @@ impl Session for RedisSession {
 
     async fn pop_item(&self) -> Result<Option<InputItem>> {
         let mut conn = self.connection().await?;
-        let value: Option<String> = conn
-            .rpop(self.key(), None)
-            .await
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-        value
-            .map(|value| {
-                serde_json::from_str::<InputItem>(&value)
-                    .map_err(|error| AgentsError::message(error.to_string()))
-            })
-            .transpose()
+        loop {
+            let value: Option<Vec<u8>> = conn
+                .rpop(self.key(), None)
+                .await
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+            let Some(value) = value else {
+                return Ok(None);
+            };
+            if let Some(item) = parse_redis_input_item(value) {
+                return Ok(Some(item));
+            }
+        }
     }
 
     async fn clear_session(&self) -> Result<()> {
@@ -142,6 +144,11 @@ impl Session for RedisSession {
     }
 }
 
+fn parse_redis_input_item(value: Vec<u8>) -> Option<InputItem> {
+    let value = String::from_utf8(value).ok()?;
+    serde_json::from_str::<InputItem>(&value).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +158,15 @@ mod tests {
         let client = redis::Client::open("redis://127.0.0.1/").expect("redis client should parse");
         let session = RedisSession::new("session", client, "redis://127.0.0.1/", "test:", None);
         assert_eq!(session.key(), "test:session");
+    }
+
+    #[test]
+    fn redis_pop_parser_drops_corrupt_items() {
+        let item = InputItem::from("valid");
+        let raw = serde_json::to_vec(&item).expect("item should serialize");
+
+        assert_eq!(parse_redis_input_item(raw), Some(item));
+        assert_eq!(parse_redis_input_item(b"not json".to_vec()), None);
+        assert_eq!(parse_redis_input_item(vec![0xff]), None);
     }
 }

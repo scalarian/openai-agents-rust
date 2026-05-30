@@ -3,7 +3,7 @@ use agents_core::{
 };
 use async_trait::async_trait;
 use reqwest::StatusCode;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// Dapr state-store backed session using the HTTP state API.
 #[derive(Clone, Debug)]
@@ -64,7 +64,7 @@ impl DaprSession {
         )
     }
 
-    async fn read_all_items(&self) -> Result<Vec<InputItem>> {
+    async fn read_all_values(&self) -> Result<Vec<Value>> {
         let response = self
             .client
             .get(format!("{}/{}", self.state_url(), self.key()))
@@ -92,14 +92,22 @@ impl DaprSession {
         if value.is_null() {
             return Ok(Vec::new());
         }
-        serde_json::from_value::<Vec<InputItem>>(value)
+        serde_json::from_value::<Vec<Value>>(value)
             .map_err(|error| AgentsError::message(error.to_string()))
     }
 
-    async fn write_all_items(&self, items: &[InputItem]) -> Result<()> {
+    async fn read_all_items(&self) -> Result<Vec<InputItem>> {
+        self.read_all_values()
+            .await?
+            .into_iter()
+            .map(parse_dapr_input_item)
+            .collect::<Result<Vec<_>>>()
+    }
+
+    async fn write_all_values(&self, values: &[Value]) -> Result<()> {
         let mut state = json!([{
             "key": self.key(),
-            "value": items,
+            "value": values,
         }]);
         if let Some(ttl_seconds) = self.ttl_seconds {
             state[0]["metadata"] = json!({ "ttlInSeconds": ttl_seconds.to_string() });
@@ -120,6 +128,16 @@ impl DaprSession {
             )));
         }
         Ok(())
+    }
+
+    async fn write_all_items(&self, items: &[InputItem]) -> Result<()> {
+        let values = items
+            .iter()
+            .map(|item| {
+                serde_json::to_value(item).map_err(|error| AgentsError::message(error.to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.write_all_values(&values).await
     }
 }
 
@@ -151,10 +169,16 @@ impl Session for DaprSession {
     }
 
     async fn pop_item(&self) -> Result<Option<InputItem>> {
-        let mut items = self.read_all_items().await?;
-        let popped = items.pop();
-        self.write_all_items(&items).await?;
-        Ok(popped)
+        loop {
+            let mut values = self.read_all_values().await?;
+            let Some(popped) = values.pop() else {
+                return Ok(None);
+            };
+            self.write_all_values(&values).await?;
+            if let Ok(item) = parse_dapr_input_item(popped) {
+                return Ok(Some(item));
+            }
+        }
     }
 
     async fn clear_session(&self) -> Result<()> {
@@ -183,6 +207,15 @@ fn normalize_dapr_address(address: &str) -> String {
     }
 }
 
+fn parse_dapr_input_item(value: Value) -> Result<InputItem> {
+    match value {
+        Value::String(raw) => serde_json::from_str::<InputItem>(&raw)
+            .map_err(|error| AgentsError::message(error.to_string())),
+        other => serde_json::from_value::<InputItem>(other)
+            .map_err(|error| AgentsError::message(error.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +230,16 @@ mod tests {
             normalize_dapr_address("https://example.com"),
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn dapr_item_parser_accepts_direct_and_encoded_items() {
+        let item = InputItem::from("valid");
+        let direct = serde_json::to_value(&item).expect("item should serialize");
+        let encoded = Value::String(serde_json::to_string(&item).expect("item should serialize"));
+
+        assert_eq!(parse_dapr_input_item(direct).ok(), Some(item.clone()));
+        assert_eq!(parse_dapr_input_item(encoded).ok(), Some(item));
+        assert!(parse_dapr_input_item(Value::String("not json".to_owned())).is_err());
     }
 }
