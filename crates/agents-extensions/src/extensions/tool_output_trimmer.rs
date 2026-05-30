@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use agents_core::{CallModelData, InputItem, ModelInputData, Result};
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -10,6 +11,7 @@ pub struct ToolOutputTrimmer {
     pub recent_turns: usize,
     pub max_output_chars: usize,
     pub preview_chars: usize,
+    #[serde(default, deserialize_with = "deserialize_trimmable_tools")]
     pub trimmable_tools: Option<BTreeSet<String>>,
 }
 
@@ -332,6 +334,27 @@ fn extract_tool_names(value: &Value) -> Vec<String> {
     names
 }
 
+fn deserialize_trimmable_tools<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<BTreeSet<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TrimmableTools {
+        Single(String),
+        Multiple(Vec<String>),
+    }
+
+    Ok(
+        Option::<TrimmableTools>::deserialize(deserializer)?.map(|tools| match tools {
+            TrimmableTools::Single(tool) => BTreeSet::from([tool]),
+            TrimmableTools::Multiple(tools) => tools.into_iter().collect(),
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use agents_core::Agent;
@@ -385,5 +408,88 @@ mod tests {
             .and_then(Value::as_str)
             .expect("trimmed output should be text");
         assert!(output.starts_with("[Trimmed:"));
+    }
+
+    #[test]
+    fn string_trimmable_tools_deserializes_as_single_tool_name() {
+        let trimmer: ToolOutputTrimmer = serde_json::from_value(json!({
+            "recent_turns": 1,
+            "max_output_chars": 50,
+            "preview_chars": 10,
+            "trimmable_tools": "search"
+        }))
+        .expect("string allowlist should deserialize");
+
+        assert_eq!(
+            trimmer.trimmable_tools,
+            Some(BTreeSet::from(["search".to_owned()]))
+        );
+
+        let large = "x".repeat(1000);
+        let data = CallModelData {
+            model_data: ModelInputData {
+                input: vec![
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"older"}),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"function_call",
+                            "call_id":"call-search",
+                            "name":"search"
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"function_call_output",
+                            "call_id":"call-search",
+                            "output": large.clone()
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"function_call",
+                            "call_id":"call-short",
+                            "name":"s"
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"function_call_output",
+                            "call_id":"call-short",
+                            "output": large.clone()
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"recent"}),
+                    },
+                ],
+                instructions: None,
+            },
+            agent: Agent::builder("assistant").build(),
+            context: None::<()>,
+        };
+
+        let trimmed = trimmer.apply(&data).expect("trimmer should succeed");
+        let InputItem::Json { value: search } = &trimmed.input[2] else {
+            panic!("expected search output json item");
+        };
+        let InputItem::Json { value: short } = &trimmed.input[4] else {
+            panic!("expected short output json item");
+        };
+        assert!(
+            search
+                .get("output")
+                .and_then(Value::as_str)
+                .expect("search output should be text")
+                .starts_with("[Trimmed:")
+        );
+        assert_eq!(
+            short
+                .get("output")
+                .and_then(Value::as_str)
+                .expect("short output should be text"),
+            large
+        );
     }
 }
