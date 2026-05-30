@@ -1,14 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::agent::Agent;
+use crate::model_settings::ModelSettings;
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AgentToolUseTracker {
     agent_to_tools: HashMap<String, HashSet<String>>,
 }
 
-#[allow(dead_code)]
 impl AgentToolUseTracker {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -19,6 +18,10 @@ impl AgentToolUseTracker {
         agent: &Agent,
         tool_names: impl IntoIterator<Item = String>,
     ) {
+        let tool_names = tool_names.into_iter().collect::<Vec<_>>();
+        if tool_names.is_empty() {
+            return;
+        }
         let entry = self.agent_to_tools.entry(agent.name.clone()).or_default();
         entry.extend(tool_names);
     }
@@ -28,6 +31,17 @@ impl AgentToolUseTracker {
             .get(&agent.name)
             .map(|tools| !tools.is_empty())
             .unwrap_or(false)
+    }
+
+    pub(crate) fn maybe_reset_tool_choice(
+        &self,
+        agent: &Agent,
+        mut settings: ModelSettings,
+    ) -> ModelSettings {
+        if agent.reset_tool_choice && self.has_used_tools(agent) {
+            settings.tool_choice = None;
+        }
+        settings
     }
 
     pub(crate) fn as_serializable(&self) -> HashMap<String, Vec<String>> {

@@ -18,7 +18,7 @@ use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult
 use crate::tracing::Trace;
 use crate::usage::Usage;
 
-pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.10";
+pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.11";
 
 /// Serializable snapshot of the runtime context carried across a run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -123,6 +123,8 @@ pub struct RunState {
     pub output_guardrail_results: Vec<OutputGuardrailResult>,
     pub tool_input_guardrail_results: Vec<ToolInputGuardrailResult>,
     pub tool_output_guardrail_results: Vec<ToolOutputGuardrailResult>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tool_use_tracker: HashMap<String, Vec<String>>,
     pub current_step: Option<RunInterruption>,
     pub persisted_item_count: usize,
     pub trace: Option<Trace>,
@@ -151,6 +153,7 @@ impl Default for RunState {
             output_guardrail_results: Vec::new(),
             tool_input_guardrail_results: Vec::new(),
             tool_output_guardrail_results: Vec::new(),
+            tool_use_tracker: HashMap::new(),
             current_step: None,
             persisted_item_count: 0,
             trace: None,

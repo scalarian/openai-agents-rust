@@ -16,6 +16,7 @@ use crate::internal::oai_conversation as internal_oai_conversation;
 use crate::internal::session_persistence as internal_session_persistence;
 use crate::internal::streaming::StreamRecorder;
 use crate::internal::tool_execution as internal_tool_execution;
+use crate::internal::tool_use_tracker::AgentToolUseTracker;
 use crate::internal::turn_preparation as internal_turn_preparation;
 use crate::internal::turn_resolution as internal_turn_resolution;
 use crate::items::{InputItem, OutputItem, RunItem};
@@ -328,6 +329,7 @@ impl Runner {
             Some(context),
             None,
             None,
+            None,
         )
         .await
     }
@@ -364,6 +366,7 @@ impl Runner {
                     None,
                     Some(context),
                     Some(recorder.clone()),
+                    None,
                     None,
                 )
                 .await;
@@ -438,6 +441,7 @@ impl Runner {
                 Some(context),
                 recorder,
                 None,
+                None,
             )
             .await
         } else {
@@ -449,6 +453,7 @@ impl Runner {
                 None,
                 None,
                 recorder,
+                None,
                 None,
             )
             .await
@@ -483,6 +488,7 @@ impl Runner {
             Some(context),
             recorder,
             None,
+            None,
         )
         .await
     }
@@ -497,6 +503,7 @@ impl Runner {
         context_override: Option<crate::run_context::RunContextWrapper>,
         stream_recorder: Option<StreamRecorder>,
         conversation_hydration: Option<ConversationResumeHydration>,
+        tool_use_tracker_snapshot: Option<std::collections::HashMap<String, Vec<String>>>,
     ) -> Result<RunResult> {
         internal_turn_preparation::validate_run_hooks()?;
 
@@ -639,6 +646,9 @@ impl Runner {
             conversation_tracker
                 .hydrate_from_state(&hydration.state, &hydration.unsent_tool_call_ids);
         }
+        let mut tool_use_tracker = tool_use_tracker_snapshot
+            .map(AgentToolUseTracker::from_serializable)
+            .unwrap_or_default();
 
         let mut max_turns_exceeded = false;
         loop {
@@ -708,6 +718,7 @@ impl Runner {
                     prompt,
                     conversation_tracker.previous_response_id(),
                     conversation_tracker.conversation_id(),
+                    &tool_use_tracker,
                 )
                 .await?;
             usage = internal_agent_runner_helpers::merge_usage(usage, response.usage.clone());
@@ -723,6 +734,12 @@ impl Runner {
             let output = response.output.clone();
             let tool_calls = internal_tool_execution::extract_tool_calls(&output);
             let custom_tool_calls = internal_tool_execution::extract_custom_tool_calls(&output);
+            let tool_names_for_reset = tool_calls
+                .iter()
+                .chain(custom_tool_calls.iter())
+                .map(|call| call.name.clone())
+                .collect::<Vec<_>>();
+            tool_use_tracker.add_tool_use(&current_agent, tool_names_for_reset);
             let runtime_tools = if tool_calls.is_empty() {
                 None
             } else {
@@ -742,6 +759,7 @@ impl Runner {
             raw_responses.push(response);
 
             if let Some((handoff, target_agent)) = resolve_handoff(&current_agent, &output)? {
+                tool_use_tracker.add_tool_use(&current_agent, [handoff.tool_name.clone()]);
                 let mut handoff_tool_items = Vec::new();
                 if !tool_calls.is_empty() || !custom_tool_calls.is_empty() {
                     let mut tool_outcome = if tool_calls.is_empty() {
@@ -1231,6 +1249,7 @@ impl Runner {
         for response in raw_responses.iter().cloned() {
             run_state.push_model_response(response);
         }
+        run_state.tool_use_tracker = tool_use_tracker.as_serializable();
         if let Some(interruption) = interruptions.first().cloned() {
             run_state.current_step = Some(interruption);
         }
@@ -1345,6 +1364,7 @@ impl Runner {
                     None,
                     stream_recorder,
                     Some(hydration),
+                    Some(state.tool_use_tracker.clone()),
                 )
                 .await?
         } else {
@@ -1359,6 +1379,7 @@ impl Runner {
                     None,
                     stream_recorder,
                     None,
+                    Some(state.tool_use_tracker.clone()),
                 )
                 .await?
         };
@@ -1629,6 +1650,7 @@ impl Runner {
                     None,
                     stream_recorder,
                     Some(hydration),
+                    Some(continued_state.tool_use_tracker.clone()),
                 )
                 .await?
         } else {
@@ -1643,6 +1665,7 @@ impl Runner {
                     None,
                     stream_recorder,
                     None,
+                    Some(continued_state.tool_use_tracker.clone()),
                 )
                 .await?
         };
@@ -1706,6 +1729,7 @@ impl Runner {
         prompt: Option<crate::Prompt>,
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
+        tool_use_tracker: &AgentToolUseTracker,
     ) -> Result<ModelResponse> {
         let provider = get_trace_provider();
         let mut span = get_model_tracing_impl(agent.model.as_deref());
@@ -1725,9 +1749,12 @@ impl Runner {
             .model
             .clone()
             .or_else(|| internal_turn_preparation::get_model(agent));
-        let settings = get_default_model_settings(requested_model.as_deref())
-            .resolve(agent.model_settings.as_ref())
-            .resolve(self.config.model_settings.as_ref());
+        let settings = tool_use_tracker.maybe_reset_tool_choice(
+            agent,
+            get_default_model_settings(requested_model.as_deref())
+                .resolve(agent.model_settings.as_ref())
+                .resolve(self.config.model_settings.as_ref()),
+        );
         let model_provider = self
             .model_provider
             .clone()
@@ -1829,6 +1856,7 @@ impl Runner {
         prompt: Option<crate::Prompt>,
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
+        tool_use_tracker: &AgentToolUseTracker,
     ) -> Result<ModelResponse> {
         let requested_model = self
             .config
@@ -1851,6 +1879,7 @@ impl Runner {
                     prompt,
                     previous_response_id,
                     conversation_id,
+                    tool_use_tracker,
                 )
             },
             retry_settings,
@@ -2270,6 +2299,19 @@ fn merge_run_states(previous: &RunState, next: &mut RunState) {
     tool_output_guardrail_results.extend(next.tool_output_guardrail_results.clone());
     next.tool_output_guardrail_results = tool_output_guardrail_results;
 
+    let mut tool_use_tracker = previous.tool_use_tracker.clone();
+    for (agent_name, tool_names) in &next.tool_use_tracker {
+        let entry = tool_use_tracker.entry(agent_name.clone()).or_default();
+        let mut seen = entry.iter().cloned().collect::<HashSet<_>>();
+        for tool_name in tool_names {
+            if seen.insert(tool_name.clone()) {
+                entry.push(tool_name.clone());
+            }
+        }
+        entry.sort();
+    }
+    next.tool_use_tracker = tool_use_tracker;
+
     next.persisted_item_count += previous.persisted_item_count;
     next.trace = previous.trace.clone().or(next.trace.clone());
     next.sandbox = next.sandbox.clone().or_else(|| previous.sandbox.clone());
@@ -2525,6 +2567,58 @@ mod tests {
                 usage: Usage::default(),
                 response_id: Some(format!("resp-two-turn-{calls}")),
                 request_id: Some(format!("req-two-turn-{calls}")),
+            })
+        }
+    }
+
+    #[derive(Clone)]
+    struct ToolChoiceCaptureModel {
+        first_output: Vec<OutputItem>,
+        calls: Arc<Mutex<usize>>,
+        seen_tool_choices: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    impl ToolChoiceCaptureModel {
+        fn new(first_output: Vec<OutputItem>) -> Self {
+            Self {
+                first_output,
+                calls: Arc::new(Mutex::new(0)),
+                seen_tool_choices: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn seen_tool_choices(&self) -> Vec<Option<String>> {
+            self.seen_tool_choices
+                .lock()
+                .expect("tool choice capture lock")
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl Model for ToolChoiceCaptureModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.seen_tool_choices
+                .lock()
+                .expect("tool choice capture lock")
+                .push(request.settings.tool_choice.clone());
+
+            let mut calls = self.calls.lock().expect("tool choice model calls lock");
+            *calls += 1;
+            let output = if *calls == 1 {
+                self.first_output.clone()
+            } else {
+                vec![OutputItem::Text {
+                    text: "done".to_owned(),
+                }]
+            };
+
+            Ok(ModelResponse {
+                model: request.model,
+                output,
+                usage: Usage::default(),
+                response_id: Some(format!("resp-tool-choice-{calls}")),
+                request_id: Some(format!("req-tool-choice-{calls}")),
             })
         }
     }
@@ -3644,6 +3738,89 @@ mod tests {
                     && call_id.as_deref() == Some("call-missing")
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn runner_resets_tool_choice_after_tool_use() {
+        let model = Arc::new(ToolChoiceCaptureModel::new(vec![OutputItem::ToolCall {
+            call_id: "call-search".to_owned(),
+            tool_name: "search".to_owned(),
+            arguments: json!({}),
+            namespace: None,
+        }]));
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, _args: NoArgs| async move { Ok::<_, AgentsError>("tool result") },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .model_settings(crate::ModelSettings {
+                tool_choice: Some("required".to_owned()),
+                ..crate::ModelSettings::default()
+            })
+            .function_tool(search_tool)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            model.seen_tool_choices(),
+            vec![Some("required".to_owned()), None]
+        );
+        assert_eq!(
+            result
+                .run_state
+                .as_ref()
+                .and_then(|state| state.tool_use_tracker.get("assistant"))
+                .cloned(),
+            Some(vec!["search".to_owned()])
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_can_preserve_tool_choice_after_tool_use() {
+        let model = Arc::new(ToolChoiceCaptureModel::new(vec![OutputItem::ToolCall {
+            call_id: "call-search".to_owned(),
+            tool_name: "search".to_owned(),
+            arguments: json!({}),
+            namespace: None,
+        }]));
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, _args: NoArgs| async move { Ok::<_, AgentsError>("tool result") },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .model_settings(crate::ModelSettings {
+                tool_choice: Some("required".to_owned()),
+                ..crate::ModelSettings::default()
+            })
+            .reset_tool_choice(false)
+            .function_tool(search_tool)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            model.seen_tool_choices(),
+            vec![Some("required".to_owned()), Some("required".to_owned())]
+        );
     }
 
     #[tokio::test]

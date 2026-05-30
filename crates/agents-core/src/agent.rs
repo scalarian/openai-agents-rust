@@ -289,7 +289,11 @@ impl ToolUseBehavior {
 }
 
 /// High-level agent definition.
-#[derive(Clone, Default, Serialize, Deserialize)]
+fn default_reset_tool_choice() -> bool {
+    true
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub name: String,
     pub handoff_description: Option<String>,
@@ -314,6 +318,8 @@ pub struct Agent {
     pub handoffs: Vec<Handoff>,
     pub input_guardrails: Vec<InputGuardrail>,
     pub output_guardrails: Vec<OutputGuardrail>,
+    #[serde(default = "default_reset_tool_choice")]
+    pub reset_tool_choice: bool,
     pub model: Option<String>,
     #[serde(skip, default)]
     pub hooks: Option<SharedAgentHooks>,
@@ -325,6 +331,36 @@ pub struct Agent {
     pub sandbox_identity_key: Option<String>,
     #[serde(skip, default)]
     pub sandbox_runtime: Option<crate::sandbox::AgentSandboxRuntime>,
+}
+
+impl Default for Agent {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            handoff_description: None,
+            instructions: None,
+            dynamic_instructions: None,
+            prompt: None,
+            output_schema: None,
+            model_settings: None,
+            tools: Vec::new(),
+            function_tools: Vec::new(),
+            custom_tools: Vec::new(),
+            mcp_servers: Vec::new(),
+            mcp_tool_filter: None,
+            mcp_tool_meta_resolver: None,
+            handoffs: Vec::new(),
+            input_guardrails: Vec::new(),
+            output_guardrails: Vec::new(),
+            reset_tool_choice: true,
+            model: None,
+            hooks: None,
+            tool_use_behavior: ToolUseBehavior::default(),
+            sandbox_definition: None,
+            sandbox_identity_key: None,
+            sandbox_runtime: None,
+        }
+    }
 }
 
 impl fmt::Debug for Agent {
@@ -355,6 +391,7 @@ impl fmt::Debug for Agent {
             .field("handoffs", &self.handoffs)
             .field("input_guardrails", &self.input_guardrails.len())
             .field("output_guardrails", &self.output_guardrails.len())
+            .field("reset_tool_choice", &self.reset_tool_choice)
             .field("model", &self.model)
             .field("hooks", &self.hooks.as_ref().map(|_| "<hooks>"))
             .field("tool_use_behavior", &self.tool_use_behavior)
@@ -886,6 +923,11 @@ impl AgentBuilder {
 
     pub fn tool_use_behavior(mut self, tool_use_behavior: ToolUseBehavior) -> Self {
         self.agent.tool_use_behavior = tool_use_behavior;
+        self
+    }
+
+    pub fn reset_tool_choice(mut self, reset_tool_choice: bool) -> Self {
+        self.agent.reset_tool_choice = reset_tool_choice;
         self
     }
 
