@@ -1007,15 +1007,92 @@ fn normalize_workspace_root(
 ) -> HostedSandboxResult<String> {
     match policy {
         WorkspaceRootPolicy::Strict(required_root) => match requested_root {
-            Some(root) if root != required_root => Err(HostedSandboxError::new(format!(
-                "{provider_name} sandboxes require workspace_root={required_root:?}, got {root:?}"
-            ))),
-            Some(root) => Ok(root.to_owned()),
-            None => Ok(required_root.to_owned()),
+            Some(root) => {
+                validate_absolute_workspace_root(root)?;
+                if root != required_root {
+                    return Err(HostedSandboxError::new(format!(
+                        "{provider_name} sandboxes require workspace_root={required_root:?}, got {root:?}"
+                    )));
+                }
+                Ok(root.to_owned())
+            }
+            None => {
+                validate_absolute_workspace_root(required_root)?;
+                Ok(required_root.to_owned())
+            }
         },
         WorkspaceRootPolicy::Defaulted(default_root) => {
-            Ok(requested_root.unwrap_or(default_root).to_owned())
+            let root = requested_root.unwrap_or(default_root);
+            validate_absolute_workspace_root(root)?;
+            Ok(root.to_owned())
         }
+    }
+}
+
+#[cfg(any(
+    feature = "e2b",
+    feature = "modal",
+    feature = "daytona",
+    feature = "blaxel",
+    feature = "cloudflare",
+    feature = "runloop",
+    feature = "vercel"
+))]
+fn validate_absolute_workspace_root(root: &str) -> HostedSandboxResult<()> {
+    if root.starts_with('/') {
+        Ok(())
+    } else {
+        Err(HostedSandboxError::new(
+            "sandbox workspace root must be absolute",
+        ))
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        feature = "e2b",
+        feature = "modal",
+        feature = "daytona",
+        feature = "blaxel",
+        feature = "cloudflare",
+        feature = "runloop",
+        feature = "vercel"
+    )
+))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosted_workspace_root_rejects_relative_defaulted_root() {
+        let error = normalize_workspace_root(
+            "e2b",
+            WorkspaceRootPolicy::Defaulted("/workspace"),
+            Some("workspace"),
+        )
+        .expect_err("relative workspace roots should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox workspace root must be absolute")
+        );
+    }
+
+    #[test]
+    fn hosted_workspace_root_rejects_relative_strict_root_before_policy_match() {
+        let error = normalize_workspace_root(
+            "cloudflare",
+            WorkspaceRootPolicy::Strict("/workspace"),
+            Some("workspace"),
+        )
+        .expect_err("relative strict workspace roots should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox workspace root must be absolute")
+        );
     }
 }
 
