@@ -117,6 +117,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | sandbox Modal extension | Modal hosted sandbox client feature-gate and session lifecycle | [sandbox_modal_extension.rs](../crates/openai-agents/examples/sandbox_modal_extension.rs) |
 | sandbox Runloop extension | Runloop hosted sandbox client feature-gate and session lifecycle | [sandbox_runloop_extension.rs](../crates/openai-agents/examples/sandbox_runloop_extension.rs) |
 | sandbox Vercel extension | Vercel hosted sandbox client feature-gate and session lifecycle | [sandbox_vercel_extension.rs](../crates/openai-agents/examples/sandbox_vercel_extension.rs) |
+| shell | local read-only shell command tool | [shell.rs](../crates/openai-agents/examples/shell.rs) |
 | SQLAlchemy session example | upstream-named database session entry point | [sqlalchemy_session_example.rs](../crates/openai-agents/examples/sqlalchemy_session_example.rs) |
 | sqlite session example | upstream-named SQLite session entry point | [sqlite_session_example.rs](../crates/openai-agents/examples/sqlite_session_example.rs) |
 | sqlite session | SQLite-backed conversation memory | [sqlite_session.rs](../crates/openai-agents/examples/sqlite_session.rs) |
