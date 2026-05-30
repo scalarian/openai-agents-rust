@@ -60,6 +60,7 @@ pub(crate) fn build_message_output_items(output: &[OutputItem]) -> Vec<RunItem> 
                 arguments,
                 call_id: Some(call_id),
                 namespace,
+                tool_origin: None,
             },
             OutputItem::Handoff { target_agent } => RunItem::HandoffCall { target_agent },
             OutputItem::Reasoning { text } => RunItem::Reasoning { text },

@@ -13,6 +13,7 @@ use crate::model::ModelResponse;
 use crate::run_config::ReasoningItemIdPolicy;
 use crate::run_context::{ApprovalRecord, RunContextWrapper};
 use crate::sandbox::SandboxRunState;
+use crate::tool::ToolOrigin;
 use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult};
 use crate::tracing::Trace;
 use crate::usage::Usage;
@@ -51,6 +52,12 @@ pub struct RunInterruption {
     pub call_id: Option<String>,
     pub tool_name: Option<String>,
     pub namespace: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::tool::deserialize_tool_origin_option"
+    )]
+    pub tool_origin: Option<ToolOrigin>,
     pub reason: Option<String>,
 }
 
@@ -282,6 +289,7 @@ impl RunState {
             call_id,
             tool_name,
             namespace: None,
+            tool_origin: None,
             reason,
         });
     }
@@ -416,6 +424,7 @@ mod tests {
             },
             call_id: Some("call-1".to_owned()),
             namespace: None,
+            tool_origin: None,
         });
         state.approve("tool-1", Some("approved".to_owned()));
         state.reject("tool-2", Some("blocked".to_owned()));
@@ -536,12 +545,75 @@ mod tests {
         state.push_generated_item(RunItem::Reasoning {
             text: "thinking".to_owned(),
         });
+        state.push_generated_item(RunItem::ToolCall {
+            tool_name: "delegate".to_owned(),
+            arguments: json!({}),
+            call_id: Some("call-agent-tool".to_owned()),
+            namespace: None,
+            tool_origin: Some(crate::tool::ToolOrigin::agent_as_tool("worker", "delegate")),
+        });
 
         let json = state.to_json_string().expect("json should serialize");
         let restored = RunState::from_json_str(&json).expect("json should deserialize");
 
         assert_eq!(restored.current_turn, 1);
         assert_eq!(restored.current_agent_name(), Some("router"));
-        assert_eq!(restored.generated_items.len(), 1);
+        assert_eq!(restored.generated_items.len(), 2);
+        assert!(matches!(
+            &restored.generated_items[1],
+            RunItem::ToolCall {
+                tool_origin: Some(tool_origin),
+                ..
+            } if *tool_origin == crate::tool::ToolOrigin::agent_as_tool("worker", "delegate")
+        ));
+    }
+
+    #[test]
+    fn ignores_invalid_tool_origin_metadata_when_deserializing() {
+        let context = RunContextWrapper::new(RunContext::default());
+        let mut state = RunState::new(
+            &context,
+            vec![InputItem::from("start")],
+            Agent::builder("router").build(),
+            Some(3),
+        )
+        .expect("run state should build");
+        state.push_generated_item(RunItem::ToolCall {
+            tool_name: "search".to_owned(),
+            arguments: json!({}),
+            call_id: Some("call-1".to_owned()),
+            namespace: None,
+            tool_origin: Some(crate::tool::ToolOrigin::function()),
+        });
+        state.current_step = Some(RunInterruption {
+            kind: Some(RunInterruptionKind::ToolApproval),
+            approval_id: Some("approval-1".to_owned()),
+            call_id: Some("call-1".to_owned()),
+            tool_name: Some("search".to_owned()),
+            namespace: None,
+            tool_origin: Some(crate::tool::ToolOrigin::function()),
+            reason: Some("waiting".to_owned()),
+        });
+
+        let mut value = serde_json::to_value(&state).expect("state should serialize");
+        value["generated_items"][0]["tool_origin"] = json!({"type": "future_tool_origin"});
+        value["current_step"]["tool_origin"] = json!("invalid");
+        let restored = RunState::from_json_str(&value.to_string())
+            .expect("invalid optional tool origin should be ignored");
+
+        assert!(matches!(
+            &restored.generated_items[0],
+            RunItem::ToolCall {
+                tool_origin: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            restored
+                .current_step
+                .as_ref()
+                .and_then(|step| step.tool_origin.clone()),
+            None
+        );
     }
 }

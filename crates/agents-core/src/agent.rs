@@ -30,7 +30,9 @@ use crate::run_config::RunConfig;
 use crate::run_context::{RunContext, RunContextWrapper};
 use crate::session::Session;
 use crate::stream_events::StreamEvent;
-use crate::tool::{FunctionTool, FunctionToolResult, StaticTool, ToolEnabledFunction, ToolOutput};
+use crate::tool::{
+    FunctionTool, FunctionToolResult, StaticTool, ToolEnabledFunction, ToolOrigin, ToolOutput,
+};
 use crate::tool_context::{ToolCall, ToolContext};
 
 pub type AgentBase = Agent;
@@ -661,12 +663,15 @@ impl Agent {
             .boxed()
         });
 
+        let tool_origin = ToolOrigin::agent_as_tool(self.name.clone(), resolved_tool_name.clone());
         let mut definition =
             crate::tool::ToolDefinition::new(resolved_tool_name, resolved_tool_description)
                 .with_input_json_schema(schema.params_json_schema.clone());
         definition.strict_json_schema = schema.strict_json_schema;
 
-        let mut tool = FunctionTool::new(definition, executor).with_needs_approval(needs_approval);
+        let mut tool = FunctionTool::new(definition, executor)
+            .with_needs_approval(needs_approval)
+            .with_tool_origin(tool_origin);
         tool.enabled = enabled;
         if let Some(is_enabled) = is_enabled {
             tool = tool.with_is_enabled(is_enabled);
@@ -860,6 +865,10 @@ mod tests {
                 AgentAsToolOptions::default(),
             )
             .expect("agent tool should build");
+        assert_eq!(
+            tool.tool_origin,
+            Some(ToolOrigin::agent_as_tool("assistant", "assistant_tool"))
+        );
         let mut run_context = RunContextWrapper::new(RunContext::default());
         set_agent_tool_state_scope(&mut run_context, Some("scope-a".to_owned()));
         run_context.approvals.insert(

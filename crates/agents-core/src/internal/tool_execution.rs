@@ -5,7 +5,10 @@ use crate::items::{OutputItem, RunItem};
 use crate::run_config::{RunConfig, ToolErrorFormatterArgs, ToolNotFoundBehavior};
 use crate::run_context::{ApprovalRecord, RunContextWrapper};
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
-use crate::tool::{FunctionToolResult, Tool, ToolOutput, default_tool_error_function};
+use crate::tool::{
+    FunctionTool, FunctionToolResult, Tool, ToolOutput, default_tool_error_function,
+    get_function_tool_origin,
+};
 use crate::tool_context::{ToolCall, ToolContext};
 use crate::tool_guardrails::{
     ToolGuardrailBehavior, ToolInputGuardrailResult, ToolOutputGuardrailResult,
@@ -56,13 +59,34 @@ pub(crate) async fn execute_local_function_tools(
     stream_recorder: Option<&StreamRecorder>,
     approved_execution: Option<(&RunInterruption, &ApprovalRecord)>,
 ) -> Result<ToolExecutionOutcome> {
+    let runtime_tools = agent.get_all_function_tools(context).await?;
+    execute_local_function_tools_with_runtime_tools(
+        agent,
+        run_config,
+        context,
+        &runtime_tools,
+        tool_calls,
+        stream_recorder,
+        approved_execution,
+    )
+    .await
+}
+
+pub(crate) async fn execute_local_function_tools_with_runtime_tools(
+    agent: &Agent,
+    run_config: &RunConfig,
+    context: &RunContextWrapper,
+    runtime_tools: &[FunctionTool],
+    tool_calls: Vec<ToolCall>,
+    stream_recorder: Option<&StreamRecorder>,
+    approved_execution: Option<(&RunInterruption, &ApprovalRecord)>,
+) -> Result<ToolExecutionOutcome> {
     if let Some(tool_execution) = &run_config.tool_execution {
         tool_execution.validate()?;
     }
 
-    let runtime_tools = agent.get_all_function_tools(context).await?;
-    reject_disabled_function_tool_calls(agent, &runtime_tools, &tool_calls)?;
-    let plans = build_tool_execution_plans(run_config, context, &runtime_tools, tool_calls).await?;
+    reject_disabled_function_tool_calls(agent, runtime_tools, &tool_calls)?;
+    let plans = build_tool_execution_plans(run_config, context, runtime_tools, tool_calls).await?;
     let must_execute_sequentially = approved_execution.is_some()
         || plans.iter().any(|plan| {
             matches!(
@@ -117,6 +141,7 @@ async fn build_tool_execution_plans(
                         output: OutputItem::Text { text: message },
                         call_id: Some(tool_call.id),
                         namespace: tool_call.namespace,
+                        tool_origin: None,
                     },
                 });
                 continue;
@@ -378,6 +403,7 @@ async fn execute_single_function_tool(
                     tool_call.id.clone(),
                     tool_call.namespace.clone(),
                     Some(approval),
+                    get_function_tool_origin(&function_tool),
                 );
                 if let SpanData::Function(data) = &mut span.data {
                     data.output = Some("tool approval rejected".to_owned());
@@ -428,6 +454,7 @@ async fn execute_single_function_tool(
                     call_id: Some(tool_call.id.clone()),
                     tool_name: Some(tool_call.name.clone()),
                     namespace: tool_call.namespace.clone(),
+                    tool_origin: get_function_tool_origin(&function_tool),
                     reason: Some("tool approval required".to_owned()),
                 });
                 return Ok(SingleToolExecutionOutcome {
@@ -568,6 +595,7 @@ async fn execute_single_function_tool(
         output: output.to_output_item(),
         call_id: Some(tool_call.id),
         namespace: tool_call.namespace,
+        tool_origin: get_function_tool_origin(&function_tool),
     };
     let lifecycle_tool_name = match &run_item {
         RunItem::ToolCallOutput { tool_name, .. } => tool_name.clone(),
@@ -755,6 +783,33 @@ pub(crate) fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {
         .collect()
 }
 
+pub(crate) fn apply_tool_origins_to_run_items(
+    items: &mut [RunItem],
+    runtime_tools: &[FunctionTool],
+) {
+    for item in items {
+        let RunItem::ToolCall {
+            tool_name,
+            namespace,
+            tool_origin,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if tool_origin.is_some() {
+            continue;
+        }
+        *tool_origin = runtime_tools
+            .iter()
+            .find(|tool| {
+                tool.definition.name == *tool_name
+                    && tool.definition.namespace.as_deref() == namespace.as_deref()
+            })
+            .and_then(get_function_tool_origin);
+    }
+}
+
 fn raw_tool_arguments(arguments: &serde_json::Value) -> String {
     arguments
         .as_str()
@@ -861,6 +916,7 @@ pub(crate) fn find_pending_tool_call(state: &RunState, call_id: &str) -> Option<
                 arguments,
                 call_id: Some(existing_call_id),
                 namespace,
+                ..
             } if existing_call_id == call_id => Some(ToolCall {
                 id: existing_call_id.clone(),
                 name: tool_name.clone(),

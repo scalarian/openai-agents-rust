@@ -190,9 +190,9 @@ pub use tool::{
     ShellToolContainerReferenceEnvironment, ShellToolContainerSkill, ShellToolEnvironment,
     ShellToolHostedEnvironment, ShellToolInlineSkill, ShellToolInlineSkillSource,
     ShellToolLocalEnvironment, ShellToolLocalSkill, ShellToolSkillReference, StaticTool, Tool,
-    ToolDefinition, ToolOutput, ToolOutputFileContent, ToolOutputImage, ToolOutputText,
-    default_tool_error_function, dispose_resolved_computers, function_tool, resolve_computer,
-    tool_namespace,
+    ToolDefinition, ToolOrigin, ToolOriginType, ToolOutput, ToolOutputFileContent, ToolOutputImage,
+    ToolOutputText, default_tool_error_function, dispose_resolved_computers, function_tool,
+    get_function_tool_origin, resolve_computer, tool_namespace,
 };
 pub use tool_context::{ToolCall, ToolContext};
 pub use tool_guardrails::{

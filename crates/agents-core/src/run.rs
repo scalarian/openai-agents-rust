@@ -682,7 +682,19 @@ impl Runner {
             conversation_tracker.apply_response(&response);
 
             let output = response.output.clone();
-            let response_items = internal_turn_resolution::build_message_output_items(&output);
+            let tool_calls = internal_tool_execution::extract_tool_calls(&output);
+            let runtime_tools = if tool_calls.is_empty() {
+                None
+            } else {
+                Some(current_agent.get_all_function_tools(&context).await?)
+            };
+            let mut response_items = internal_turn_resolution::build_message_output_items(&output);
+            if let Some(runtime_tools) = runtime_tools.as_deref() {
+                internal_tool_execution::apply_tool_origins_to_run_items(
+                    &mut response_items,
+                    runtime_tools,
+                );
+            }
             if let Some(recorder) = &stream_recorder {
                 recorder.push_raw_response(&response).await;
                 recorder.push_run_items(&response_items).await;
@@ -690,18 +702,19 @@ impl Runner {
             raw_responses.push(response);
 
             if let Some((handoff, target_agent)) = resolve_handoff(&current_agent, &output)? {
-                let tool_calls = internal_tool_execution::extract_tool_calls(&output);
                 let mut handoff_tool_items = Vec::new();
                 if !tool_calls.is_empty() {
-                    let tool_outcome = internal_tool_execution::execute_local_function_tools(
-                        &current_agent,
-                        &self.config,
-                        &context,
-                        tool_calls,
-                        stream_recorder.as_ref(),
-                        None,
-                    )
-                    .await?;
+                    let tool_outcome =
+                        internal_tool_execution::execute_local_function_tools_with_runtime_tools(
+                            &current_agent,
+                            &self.config,
+                            &context,
+                            runtime_tools.as_deref().unwrap_or(&[]),
+                            tool_calls,
+                            stream_recorder.as_ref(),
+                            None,
+                        )
+                        .await?;
                     if let Some(recorder) = &stream_recorder {
                         recorder.push_run_items(&tool_outcome.new_items).await;
                     }
@@ -799,7 +812,6 @@ impl Runner {
             normalized_generated_items.extend(response_items.clone());
             session_generated_items.extend(response_items);
 
-            let tool_calls = internal_tool_execution::extract_tool_calls(&output);
             let all_output_guardrails = merged_output_guardrails(&current_agent, &self.config);
             if tool_calls.is_empty() {
                 if let Some(refusal) = internal_turn_resolution::extract_refusal(&output) {
@@ -919,15 +931,17 @@ impl Runner {
                 break;
             }
 
-            let tool_outcome = internal_tool_execution::execute_local_function_tools(
-                &current_agent,
-                &self.config,
-                &context,
-                tool_calls,
-                stream_recorder.as_ref(),
-                None,
-            )
-            .await?;
+            let tool_outcome =
+                internal_tool_execution::execute_local_function_tools_with_runtime_tools(
+                    &current_agent,
+                    &self.config,
+                    &context,
+                    runtime_tools.as_deref().unwrap_or(&[]),
+                    tool_calls,
+                    stream_recorder.as_ref(),
+                    None,
+                )
+                .await?;
             if let Some(recorder) = &stream_recorder {
                 recorder.push_run_items(&tool_outcome.new_items).await;
             }
@@ -2067,7 +2081,7 @@ mod tests {
     use crate::run_config::{ReasoningItemIdPolicy, ToolNotFoundBehavior};
     use crate::run_context::{RunContext, RunContextWrapper};
     use crate::session::MemorySession;
-    use crate::tool::{ToolOutput, function_tool};
+    use crate::tool::{ToolOrigin, ToolOutput, function_tool};
 
     use super::*;
 
@@ -3041,11 +3055,27 @@ mod tests {
         assert!(result.new_items.iter().any(|item| {
             matches!(
                 item,
+                RunItem::ToolCall {
+                    tool_name,
+                    call_id,
+                    tool_origin: Some(tool_origin),
+                    ..
+                } if tool_name == "search"
+                    && call_id.as_deref() == Some("call-1")
+                    && *tool_origin == ToolOrigin::function()
+            )
+        }));
+        assert!(result.new_items.iter().any(|item| {
+            matches!(
+                item,
                 RunItem::ToolCallOutput {
                     tool_name,
                     call_id,
+                    tool_origin: Some(tool_origin),
                     ..
-                } if tool_name == "search" && call_id.as_deref() == Some("call-1")
+                } if tool_name == "search"
+                    && call_id.as_deref() == Some("call-1")
+                    && *tool_origin == ToolOrigin::function()
             )
         }));
         assert_eq!(result.usage.input_tokens, 22);
@@ -3485,6 +3515,10 @@ mod tests {
 
         assert!(initial.final_output.is_none());
         assert_eq!(initial.interruptions.len(), 1);
+        assert_eq!(
+            initial.interruptions[0].tool_origin,
+            Some(ToolOrigin::function())
+        );
         assert!(matches!(
             initial
                 .interruptions
@@ -3516,8 +3550,11 @@ mod tests {
                 RunItem::ToolCallOutput {
                     tool_name,
                     call_id,
+                    tool_origin: Some(tool_origin),
                     ..
-                } if tool_name == "search" && call_id.as_deref() == Some("call-1")
+                } if tool_name == "search"
+                    && call_id.as_deref() == Some("call-1")
+                    && *tool_origin == ToolOrigin::function()
             )
         }));
     }

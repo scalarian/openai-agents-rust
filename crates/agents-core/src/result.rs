@@ -306,6 +306,7 @@ mod tests {
                     },
                     call_id: Some("call-1".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
             ],
             reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,

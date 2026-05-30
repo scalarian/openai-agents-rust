@@ -1,6 +1,7 @@
 use crate::items::{OutputItem, RunItem};
 use crate::run_context::ApprovalRecord;
 use crate::run_state::{RunInterruption, RunInterruptionKind};
+use crate::tool::ToolOrigin;
 
 pub(crate) const REJECTION_MESSAGE: &str = "Tool execution was not approved.";
 
@@ -10,6 +11,7 @@ pub(crate) fn append_approval_error_output(
     call_id: String,
     namespace: Option<String>,
     approval: Option<&ApprovalRecord>,
+    tool_origin: Option<ToolOrigin>,
 ) {
     let message = approval
         .and_then(|approval| approval.reason.as_deref())
@@ -21,6 +23,7 @@ pub(crate) fn append_approval_error_output(
         },
         call_id: Some(call_id),
         namespace,
+        tool_origin,
     });
 }
 

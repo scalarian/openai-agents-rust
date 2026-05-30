@@ -107,6 +107,7 @@ mod tests {
                 arguments: json!({"q":"rust"}),
                 call_id: None,
                 namespace: None,
+                tool_origin: None,
             },
             RunItem::Reasoning {
                 text: "thinking".to_owned(),
@@ -188,6 +189,7 @@ mod tests {
                     arguments: json!({"q":"rust"}),
                     call_id: Some("call-1".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
             ],
             new_items: vec![

@@ -9,7 +9,7 @@ use crate::errors::{AgentsError, Result};
 use crate::exceptions::UserError;
 use crate::mcp::server::{MCPServer, MCPTool};
 use crate::run_context::{RunContext, RunContextWrapper};
-use crate::tool::{FunctionTool, ToolDefinition};
+use crate::tool::{FunctionTool, ToolDefinition, ToolOrigin};
 
 #[derive(Clone)]
 pub struct ToolFilterContext {
@@ -188,6 +188,7 @@ impl MCPUtil {
 
         let tool_name = tool.name.clone();
         let server_name = server.name().to_owned();
+        let origin = ToolOrigin::mcp(server_name.clone());
         let needs_approval = tool.requires_approval;
         let input_schema = tool.input_schema.clone();
         let static_meta = tool.meta.clone();
@@ -219,7 +220,8 @@ impl MCPUtil {
                 })
             }),
         )
-        .with_needs_approval(needs_approval);
+        .with_needs_approval(needs_approval)
+        .with_tool_origin(origin);
 
         Ok(function_tool)
     }
@@ -510,6 +512,7 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert!(tools[0].needs_approval);
         assert_eq!(tools[0].definition.namespace.as_deref(), Some("mcp"));
+        assert_eq!(tools[0].tool_origin, Some(ToolOrigin::mcp("test-server")));
 
         let output = tools[0]
             .invoke(
@@ -889,6 +892,7 @@ mod tests {
                     call_id: Some("call-approved".to_owned()),
                     tool_name: Some("lookup".to_owned()),
                     namespace: Some("mcp".to_owned()),
+                    tool_origin: None,
                     reason: Some("tool approval required".to_owned()),
                 },
                 &crate::run_context::ApprovalRecord {
@@ -911,8 +915,11 @@ mod tests {
                 RunItem::ToolCallOutput {
                     tool_name,
                     namespace,
+                    tool_origin: Some(tool_origin),
                     ..
-                } if tool_name == "lookup" && namespace.as_deref() == Some("mcp")
+                } if tool_name == "lookup"
+                    && namespace.as_deref() == Some("mcp")
+                    && *tool_origin == ToolOrigin::mcp("test-server")
             )
         }));
         assert_eq!(state.tool_calls.load(Ordering::SeqCst), 1);

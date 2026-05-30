@@ -6,7 +6,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::_tool_identity::tool_qualified_name;
@@ -127,6 +127,64 @@ impl From<Value> for ToolOutput {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOriginType {
+    Function,
+    Mcp,
+    AgentAsTool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolOrigin {
+    pub r#type: ToolOriginType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_server_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_tool_name: Option<String>,
+}
+
+impl ToolOrigin {
+    pub fn function() -> Self {
+        Self {
+            r#type: ToolOriginType::Function,
+            mcp_server_name: None,
+            agent_name: None,
+            agent_tool_name: None,
+        }
+    }
+
+    pub fn mcp(server_name: impl Into<String>) -> Self {
+        Self {
+            r#type: ToolOriginType::Mcp,
+            mcp_server_name: Some(server_name.into()),
+            agent_name: None,
+            agent_tool_name: None,
+        }
+    }
+
+    pub fn agent_as_tool(agent_name: impl Into<String>, tool_name: impl Into<String>) -> Self {
+        Self {
+            r#type: ToolOriginType::AgentAsTool,
+            mcp_server_name: None,
+            agent_name: Some(agent_name.into()),
+            agent_tool_name: Some(tool_name.into()),
+        }
+    }
+}
+
+pub fn deserialize_tool_origin_option<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<ToolOrigin>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value::<ToolOrigin>(value).ok()))
+}
+
 #[derive(Clone, Debug)]
 pub struct FunctionToolResult {
     pub tool_name: String,
@@ -196,6 +254,8 @@ pub struct FunctionTool {
     pub needs_approval: bool,
     pub timeout_seconds: Option<f64>,
     pub defer_loading: bool,
+    pub tool_origin: Option<ToolOrigin>,
+    pub emit_tool_origin: bool,
     executor: ToolExecutor,
 }
 
@@ -213,6 +273,8 @@ impl std::fmt::Debug for FunctionTool {
             .field("needs_approval", &self.needs_approval)
             .field("timeout_seconds", &self.timeout_seconds)
             .field("defer_loading", &self.defer_loading)
+            .field("tool_origin", &self.tool_origin)
+            .field("emit_tool_origin", &self.emit_tool_origin)
             .finish()
     }
 }
@@ -228,6 +290,8 @@ impl FunctionTool {
             needs_approval: false,
             timeout_seconds: None,
             defer_loading: false,
+            tool_origin: None,
+            emit_tool_origin: true,
             executor,
         }
     }
@@ -268,6 +332,16 @@ impl FunctionTool {
         self
     }
 
+    pub fn with_tool_origin(mut self, tool_origin: ToolOrigin) -> Self {
+        self.tool_origin = Some(tool_origin);
+        self
+    }
+
+    pub fn with_emit_tool_origin(mut self, emit_tool_origin: bool) -> Self {
+        self.emit_tool_origin = emit_tool_origin;
+        self
+    }
+
     pub async fn enabled_for(
         &self,
         run_context: &RunContextWrapper<RunContext>,
@@ -283,6 +357,19 @@ impl FunctionTool {
 
         is_enabled(run_context.clone(), agent.clone()).await
     }
+}
+
+pub fn get_function_tool_origin(function_tool: &FunctionTool) -> Option<ToolOrigin> {
+    if !function_tool.emit_tool_origin {
+        return None;
+    }
+
+    Some(
+        function_tool
+            .tool_origin
+            .clone()
+            .unwrap_or_else(ToolOrigin::function),
+    )
 }
 
 pub type ApplyPatchTool = StaticTool;

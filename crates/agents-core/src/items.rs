@@ -2,6 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::tool::ToolOrigin;
+
 pub type TResponseInputItem = InputItem;
 
 /// Input items passed into a run.
@@ -97,12 +99,24 @@ pub enum RunItem {
         arguments: Value,
         call_id: Option<String>,
         namespace: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::tool::deserialize_tool_origin_option"
+        )]
+        tool_origin: Option<ToolOrigin>,
     },
     ToolCallOutput {
         tool_name: String,
         output: OutputItem,
         call_id: Option<String>,
         namespace: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::tool::deserialize_tool_origin_option"
+        )]
+        tool_origin: Option<ToolOrigin>,
     },
     HandoffCall {
         target_agent: String,
@@ -330,6 +344,7 @@ impl RunItem {
                 arguments,
                 call_id,
                 namespace,
+                ..
             } => Some(InputItem::Json {
                 value: json!({
                     "type": "tool_call",
@@ -344,6 +359,7 @@ impl RunItem {
                 output,
                 call_id,
                 namespace,
+                ..
             } => Some(InputItem::Json {
                 value: json!({
                     "type": "tool_call_output",
@@ -390,6 +406,7 @@ mod tests {
             },
             call_id: Some("call-1".to_owned()),
             namespace: Some("knowledge".to_owned()),
+            tool_origin: Some(ToolOrigin::function()),
         };
 
         let input = item.to_input_item().expect("tool output should convert");
@@ -419,6 +436,7 @@ mod tests {
                 arguments: json!({"query": "rust"}),
                 call_id: Some("call-1".to_owned()),
                 namespace: None,
+                tool_origin: None,
             },
         };
 
@@ -436,6 +454,7 @@ mod tests {
                 },
                 call_id: Some("call-1".to_owned()),
                 namespace: None,
+                tool_origin: None,
             },
         };
 

@@ -332,6 +332,7 @@ mod tests {
                 },
                 call_id: Some("call-1".to_owned()),
                 namespace: None,
+                tool_origin: None,
             },
         ];
 
@@ -381,6 +382,7 @@ mod tests {
                     },
                     call_id: Some("call-1".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
             ],
             ReasoningItemIdPolicy::Omit,
@@ -421,6 +423,7 @@ mod tests {
                     arguments: json!({}),
                     call_id: Some("orphan-call".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
                 RunItem::Reasoning {
                     text: "paired".to_owned(),
@@ -430,6 +433,7 @@ mod tests {
                     arguments: json!({}),
                     call_id: Some("paired-call".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
                 RunItem::ToolCallOutput {
                     tool_name: "paired".to_owned(),
@@ -438,6 +442,7 @@ mod tests {
                     },
                     call_id: Some("paired-call".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
             ],
             ReasoningItemIdPolicy::Preserve,
@@ -511,6 +516,7 @@ mod tests {
                     arguments: json!({"query":"rust"}),
                     call_id: Some("call-1".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
                 RunItem::ToolCallOutput {
                     tool_name: "search".to_owned(),
@@ -519,6 +525,7 @@ mod tests {
                     },
                     call_id: Some("call-1".to_owned()),
                     namespace: None,
+                    tool_origin: None,
                 },
                 RunItem::MessageOutput {
                     content: OutputItem::Text {
