@@ -13,6 +13,7 @@ cargo run -p openai-agents-rs --example dynamic_system_prompt
 cargo run -p openai-agents-rs --example function_tools
 cargo run -p openai-agents-rs --example handoffs
 cargo run -p openai-agents-rs --example input_guardrail
+cargo run -p openai-agents-rs --example lifecycle_hooks
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example output_guardrail
 cargo run -p openai-agents-rs --example prompt_template
@@ -35,6 +36,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `function_tools` | typed local function tools with structured arguments | [docs/tools.md](../docs/tools.md) |
 | `handoffs` | control transfer between agents | [docs/handoffs.md](../docs/handoffs.md) |
 | `input_guardrail` | tripwire handling before model execution | [docs/guardrails.md](../docs/guardrails.md) |
+| `lifecycle_hooks` | run and agent lifecycle callbacks | [docs/running_agents.md](../docs/running_agents.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `output_guardrail` | tripwire handling for final model output | [docs/guardrails.md](../docs/guardrails.md) |
 | `prompt_template` | static and dynamic reusable prompt config | [docs/agents.md](../docs/agents.md) |
