@@ -11,6 +11,8 @@ Use this page when you want the model to trigger typed behavior instead of only 
 | hosted OpenAI tools | code interpreter, file search, web search, image generation |
 | MCP tools | external tools discovered from MCP servers |
 
+Function tools can return text, JSON, image, or file outputs. See [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) for an image-returning function tool.
+
 ## Function Tool Example
 
 ```rust,no_run
