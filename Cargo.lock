@@ -1289,6 +1289,8 @@ dependencies = [
  "openai-agents-openai-rs",
  "openai-agents-realtime-rs",
  "openai-agents-voice-rs",
+ "schemars",
+ "serde",
  "serde_json",
  "tokio",
 ]
