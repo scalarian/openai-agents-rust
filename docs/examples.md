@@ -112,6 +112,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
 | sandbox agent capabilities | sandbox tool surface controlled by capability flags | [sandbox_agent_capabilities.rs](../crates/openai-agents/examples/sandbox_agent_capabilities.rs) |
 | sandbox agent with tools | sandbox agent combined with function, MCP, and static tools | [sandbox_agent_with_tools.rs](../crates/openai-agents/examples/sandbox_agent_with_tools.rs) |
+| sandbox agents as tools | sandbox specialist agents exposed as callable tools | [sandbox_agents_as_tools.rs](../crates/openai-agents/examples/sandbox_agents_as_tools.rs) |
 | sandbox basic | local sandbox workspace with filesystem and shell tools | [sandbox_basic.rs](../crates/openai-agents/examples/sandbox_basic.rs) |
 | sandbox coding task | local sandbox coding task with patch and shell verification | [sandbox_coding_task.rs](../crates/openai-agents/examples/sandbox_coding_task.rs) |
 | sandbox handoffs | sandbox-backed handoff workflow across specialist agents | [sandbox_handoffs.rs](../crates/openai-agents/examples/sandbox_handoffs.rs) |
