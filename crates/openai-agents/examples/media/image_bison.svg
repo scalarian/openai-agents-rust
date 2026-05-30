@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Stylized bison on grass">
+  <rect width="320" height="180" fill="#d7ecff"/>
+  <rect y="120" width="320" height="60" fill="#7bb661"/>
+  <ellipse cx="155" cy="105" rx="82" ry="40" fill="#704a2a"/>
+  <circle cx="86" cy="91" r="33" fill="#5d3a22"/>
+  <path d="M63 70 C42 48 33 57 51 81" fill="none" stroke="#372214" stroke-width="8" stroke-linecap="round"/>
+  <path d="M104 70 C126 47 135 57 116 81" fill="none" stroke="#372214" stroke-width="8" stroke-linecap="round"/>
+  <rect x="112" y="132" width="16" height="32" fill="#4d301d"/>
+  <rect x="185" y="132" width="16" height="32" fill="#4d301d"/>
+  <circle cx="75" cy="86" r="4" fill="#111"/>
+  <path d="M56 101 Q83 116 110 101" fill="none" stroke="#2e1c11" stroke-width="5" stroke-linecap="round"/>
+</svg>
