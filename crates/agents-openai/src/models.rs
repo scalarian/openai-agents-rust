@@ -457,9 +457,12 @@ impl Model for OpenAIResponsesWsModel {
 
             match payload.get("type").and_then(Value::as_str) {
                 Some("error") | Some("response.error") => {
-                    return Err(AgentsError::message(format!(
-                        "responses websocket error: {}",
-                        payload
+                    let event_type = payload
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    return Err(AgentsError::message(format_response_error_event(
+                        event_type, &payload,
                     )));
                 }
                 Some("response.completed") => {
@@ -520,6 +523,37 @@ fn format_response_terminal_failure(event_type: &str, response: Option<&Value>) 
         message = format!("{message} {}.", details.join("; "));
     }
     message
+}
+
+fn format_response_error_event(event_type: &str, event: &Value) -> String {
+    let mut message = format!("Responses stream ended with terminal event `{event_type}`.");
+    let mut details = Vec::new();
+
+    if let Some(code) = response_error_event_detail(event, "code") {
+        details.push(format!("code={code}"));
+    }
+    if let Some(error_message) = response_error_event_detail(event, "message") {
+        details.push(format!("message={error_message}"));
+    }
+    if let Some(param) = response_error_event_detail(event, "param") {
+        details.push(format!("param={param}"));
+    }
+
+    if !details.is_empty() {
+        message = format!("{message} {}.", details.join("; "));
+    }
+    message
+}
+
+fn response_error_event_detail(event: &Value, key: &str) -> Option<String> {
+    event
+        .get(key)
+        .or_else(|| event.get("error").and_then(|error| error.get(key)))
+        .and_then(|value| match value {
+            Value::Null => None,
+            Value::String(text) if !text.is_empty() => Some(text.clone()),
+            other => Some(other.to_string()),
+        })
 }
 
 fn make_websocket_ping_interval(
@@ -3195,5 +3229,70 @@ mod tests {
         assert!(message.contains("response.failed"));
         assert!(message.contains("status=failed"));
         assert!(message.contains("rate_limit_exceeded"));
+    }
+
+    #[tokio::test]
+    async fn websocket_model_formats_response_error_terminal_event() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("socket should accept");
+            let mut ws_stream = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("websocket handshake should succeed");
+
+            ws_stream
+                .next()
+                .await
+                .expect("request frame should arrive")
+                .expect("request frame should be readable");
+            ws_stream
+                .send(Message::Text(
+                    json!({
+                        "type": "response.error",
+                        "error": {
+                            "code": "invalid_request_error",
+                            "message": "bad request",
+                            "param": "input"
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("error terminal event should send");
+        });
+
+        let model = OpenAIResponsesWsModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned()))
+                .with_base_url("http://127.0.0.1:1")
+                .with_websocket_base_url(format!("ws://{address}")),
+        );
+
+        let error = model
+            .generate(ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .await
+            .expect_err("error terminal event should reject the response");
+
+        server.await.expect("server task should finish");
+        let message = error.to_string();
+        assert!(message.contains("response.error"));
+        assert!(message.contains("code=invalid_request_error"));
+        assert!(message.contains("message=bad request"));
+        assert!(message.contains("param=input"));
+        assert!(!message.contains("responses websocket error"));
     }
 }
