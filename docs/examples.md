@@ -109,6 +109,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | stream text | streamed message text output | [stream_text.rs](../crates/openai-agents/examples/stream_text.rs) |
 | stream WebSocket | Responses WebSocket streaming with approvals and previous response ids | [stream_ws.rs](../crates/openai-agents/examples/stream_ws.rs) |
 | streamed run | live events and completion | [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) |
+| streaming guardrails | incremental output checks during streaming | [streaming_guardrails.rs](../crates/openai-agents/examples/streaming_guardrails.rs) |
 | tool guardrails | function-tool input and output guardrails | [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs) |
 | tool search | hosted tool search with namespaces and top-level deferred tools | [tool_search.rs](../crates/openai-agents/examples/tool_search.rs) |
 | tools | upstream-style basic function tool example | [tools.rs](../crates/openai-agents/examples/tools.rs) |
