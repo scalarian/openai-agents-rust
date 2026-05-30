@@ -48,6 +48,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | encrypted session | encrypted session wrapper over SQLite storage | [encrypted_session.rs](../crates/openai-agents/examples/encrypted_session.rs) |
 | file session | file-backed extension session rehydrated by session id | [file_session.rs](../crates/openai-agents/examples/file_session.rs) |
 | file search | hosted file search with vector store options and included results | [file_search.rs](../crates/openai-agents/examples/file_search.rs) |
+| file HITL | file-backed session with approval interruption persistence | [file_hitl.rs](../crates/openai-agents/examples/file_hitl.rs) |
 | file HITL example | upstream-named file session HITL entry point | [file_hitl_example.rs](../crates/openai-agents/examples/file_hitl_example.rs) |
 | function tools | typed local tools with JSON-schema inputs | [function_tools.rs](../crates/openai-agents/examples/function_tools.rs) |
 | forcing tool use | required tool choice and stop-on-tool behavior | [forcing_tool_use.rs](../crates/openai-agents/examples/forcing_tool_use.rs) |
