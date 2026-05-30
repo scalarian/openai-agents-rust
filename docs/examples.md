@@ -63,6 +63,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | mcp get all MCP tools example | upstream-named MCP tool-prefetch entry point | [mcp_get_all_mcp_tools_example.rs](../crates/openai-agents/examples/mcp_get_all_mcp_tools_example.rs) |
 | mcp git example | upstream-named MCP git entry point | [mcp_git_example.rs](../crates/openai-agents/examples/mcp_git_example.rs) |
 | mcp manager example | upstream-named MCP manager entry point | [mcp_manager_example.rs](../crates/openai-agents/examples/mcp_manager_example.rs) |
+| mcp SSE example | upstream-named MCP SSE transport entry point | [mcp_sse_example.rs](../crates/openai-agents/examples/mcp_sse_example.rs) |
 | mcp tool filter | static MCP tool filtering before model-visible tool discovery | [mcp_tool_filter.rs](../crates/openai-agents/examples/mcp_tool_filter.rs) |
 | MongoDB session example | upstream-named MongoDB session entry point | [mongodb_session_example.rs](../crates/openai-agents/examples/mongodb_session_example.rs) |
 | mongodb session | MongoDB-backed extension session with shared client isolation | [mongodb_session.rs](../crates/openai-agents/examples/mongodb_session.rs) |
