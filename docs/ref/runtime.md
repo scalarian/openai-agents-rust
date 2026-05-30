@@ -43,6 +43,15 @@ Use this page when you already know the concept you need and want the shortest p
 - `SQLiteSession`
 - `SessionSettings`
 
+## Sandbox Surfaces
+
+- `SandboxAgent`
+- `SandboxRunConfig`
+- `Manifest`
+- `File`, `Dir`, `LocalDir`
+- `LocalSandboxSession`
+- `prepare_sandbox_run`
+
 ## Tracing Surfaces
 
 - `Trace`
