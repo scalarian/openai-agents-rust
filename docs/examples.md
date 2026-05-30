@@ -21,6 +21,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | function tools | typed local tools with JSON-schema inputs | [function_tools.rs](../crates/openai-agents/examples/function_tools.rs) |
 | forcing tool use | required tool choice and stop-on-tool behavior | [forcing_tool_use.rs](../crates/openai-agents/examples/forcing_tool_use.rs) |
 | handoffs | control transfer between agents | [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) |
+| human in the loop | approval-required tool calls with saved run state | [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) |
 | image tool output | function tool returning an image output item | [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) |
 | input guardrail | local tripwire handling before model execution | [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs) |
 | lifecycle hooks | run and agent lifecycle callbacks | [lifecycle_hooks.rs](../crates/openai-agents/examples/lifecycle_hooks.rs) |

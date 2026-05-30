@@ -27,6 +27,8 @@ Keep approval prompts:
 
 The runtime already carries the call identity. Use that instead of inventing your own ad-hoc approval bookkeeping.
 
+Runnable version: [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs).
+
 ## Interruptions
 
 Interruptions let you stop or branch a run without losing the run state model. That is the right surface for:
