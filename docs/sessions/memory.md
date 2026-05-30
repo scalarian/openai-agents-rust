@@ -15,6 +15,8 @@ Use this page when you need a local session backend without OpenAI-specific conv
 | `MemorySession` | tests, demos, short-lived app state |
 | `SQLiteSession` | local persistence, desktop apps, prototypes that need durability |
 
+Runnable examples: [memory_session.rs](../../crates/openai-agents/examples/memory_session.rs) for in-memory state and [sqlite_session.rs](../../crates/openai-agents/examples/sqlite_session.rs) for SQLite-backed state.
+
 ## Session Settings
 
 Use `SessionSettings` when you need bounds such as history limits. That is the right layer for controlling replay growth without rewriting session storage code.

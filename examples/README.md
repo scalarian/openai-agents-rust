@@ -32,6 +32,7 @@ cargo run -p openai-agents-rs --example previous_response_id
 cargo run -p openai-agents-rs --example prompt_template
 cargo run -p openai-agents-rs --example prompt_template -- --dynamic
 cargo run -p openai-agents-rs --example sandbox_workspace
+cargo run -p openai-agents-rs --example sqlite_session
 cargo run -p openai-agents-rs --example stream_items
 cargo run -p openai-agents-rs --example streamed_run
 cargo run -p openai-agents-rs --example tool_guardrails
@@ -70,6 +71,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `previous_response_id` | Responses API conversation continuation by id | [docs/running_agents.md](../docs/running_agents.md) |
 | `prompt_template` | static and dynamic reusable prompt config | [docs/agents.md](../docs/agents.md) |
 | `sandbox_workspace` | local sandbox manifest staging and shell confinement | [docs/sandbox_agents.md](../docs/sandbox_agents.md) |
+| `sqlite_session` | SQLite-backed conversation memory | [docs/sessions/memory.md](../docs/sessions/memory.md) |
 | `stream_items` | streamed run-item events for tool calls and messages | [docs/streaming.md](../docs/streaming.md) |
 | `streamed_run` | live streamed execution with `run_streamed` | [docs/streaming.md](../docs/streaming.md) |
 | `tool_guardrails` | input and output guardrails around function tools | [docs/guardrails.md](../docs/guardrails.md) |
