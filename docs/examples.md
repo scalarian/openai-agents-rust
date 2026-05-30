@@ -110,6 +110,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | reasoning content GPT OSS stream | optional local GPT-OSS reasoning stream smoke example | [reasoning_content_gpt_oss_stream.rs](../crates/openai-agents/examples/reasoning_content_gpt_oss_stream.rs) |
 | reasoning content runner example | upstream-named reasoning content Runner entry point | [reasoning_content_runner_example.rs](../crates/openai-agents/examples/reasoning_content_runner_example.rs) |
 | realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
+| sandbox basic | local sandbox workspace with filesystem and shell tools | [sandbox_basic.rs](../crates/openai-agents/examples/sandbox_basic.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
 | sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
 | sandbox Cloudflare extension | Cloudflare hosted sandbox client feature-gate and session lifecycle | [sandbox_cloudflare_extension.rs](../crates/openai-agents/examples/sandbox_cloudflare_extension.rs) |
