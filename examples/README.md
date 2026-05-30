@@ -19,6 +19,7 @@ cargo run -p openai-agents-rs --example compaction_session_stateless
 cargo run -p openai-agents-rs --example custom_agent_model
 cargo run -p openai-agents-rs --example custom_model_provider
 cargo run -p openai-agents-rs --example database_session
+cargo run -p openai-agents-rs --example dapr_session
 cargo run -p openai-agents-rs --example default_model_provider
 cargo run -p openai-agents-rs --example deterministic_flow
 cargo run -p openai-agents-rs --example dynamic_system_prompt
@@ -81,6 +82,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `custom_agent_model` | per-agent model name resolved by a custom provider | [docs/models/providers.md](../docs/models/providers.md) |
 | `custom_model_provider` | per-run custom model provider selection | [docs/models/providers.md](../docs/models/providers.md) |
 | `database_session` | database-session extension using an in-memory SQLite URL | [docs/sessions/memory.md](../docs/sessions/memory.md) |
+| `dapr_session` | Dapr state-store backed extension session with graceful availability check | [docs/sessions/memory.md](../docs/sessions/memory.md) |
 | `default_model_provider` | global default runner model provider | [docs/models/providers.md](../docs/models/providers.md) |
 | `deterministic_flow` | multi-step agent workflow with an explicit gate | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `dynamic_system_prompt` | per-run agent instructions | [docs/agents.md](../docs/agents.md) |

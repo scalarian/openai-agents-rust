@@ -20,6 +20,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | custom agent model | per-agent model name resolved by a custom provider | [custom_agent_model.rs](../crates/openai-agents/examples/custom_agent_model.rs) |
 | custom model provider | per-run custom model provider selection | [custom_model_provider.rs](../crates/openai-agents/examples/custom_model_provider.rs) |
 | database session | database-session extension using an in-memory SQLite URL | [database_session.rs](../crates/openai-agents/examples/database_session.rs) |
+| dapr session | Dapr state-store backed extension session with graceful availability check | [dapr_session.rs](../crates/openai-agents/examples/dapr_session.rs) |
 | default model provider | global default runner model provider | [default_model_provider.rs](../crates/openai-agents/examples/default_model_provider.rs) |
 | deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
 | dynamic system prompt | per-run agent instructions | [dynamic_system_prompt.rs](../crates/openai-agents/examples/dynamic_system_prompt.rs) |
