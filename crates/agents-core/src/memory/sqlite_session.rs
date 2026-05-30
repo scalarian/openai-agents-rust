@@ -204,35 +204,37 @@ impl Session for SQLiteSession {
     }
 
     async fn pop_item(&self) -> Result<Option<InputItem>> {
-        let row = sqlx::query(&format!(
-            "SELECT id, message_data FROM {} WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-            self.messages_table
-        ))
-        .bind(&self.session_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|error| AgentsError::message(error.to_string()))?;
-
-        let Some(row) = row else {
-            return Ok(None);
-        };
-
-        let id = row
-            .try_get::<i64, _>("id")
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-        let message_data = row
-            .try_get::<String, _>("message_data")
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-
-        sqlx::query(&format!("DELETE FROM {} WHERE id = ?", self.messages_table))
-            .bind(id)
-            .execute(&self.pool)
+        loop {
+            let row = sqlx::query(&format!(
+                "SELECT id, message_data FROM {} WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                self.messages_table
+            ))
+            .bind(&self.session_id)
+            .fetch_optional(&self.pool)
             .await
             .map_err(|error| AgentsError::message(error.to_string()))?;
 
-        let item = serde_json::from_str::<InputItem>(&message_data)
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-        Ok(Some(item))
+            let Some(row) = row else {
+                return Ok(None);
+            };
+
+            let id = row
+                .try_get::<i64, _>("id")
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+            let message_data = row
+                .try_get::<String, _>("message_data")
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+
+            sqlx::query(&format!("DELETE FROM {} WHERE id = ?", self.messages_table))
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+
+            if let Ok(item) = serde_json::from_str::<InputItem>(&message_data) {
+                return Ok(Some(item));
+            }
+        }
     }
 
     async fn clear_session(&self) -> Result<()> {
@@ -316,5 +318,68 @@ mod tests {
         session.clear_session().await.expect("session should clear");
         let items = session.get_items().await.expect("items should load");
         assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sqlite_session_pop_skips_corrupt_newest_row() {
+        let session = SQLiteSession::open_in_memory("session")
+            .await
+            .expect("sqlite session should open");
+        let valid_item = InputItem::from("valid");
+        session
+            .add_items(vec![valid_item.clone()])
+            .await
+            .expect("items should save");
+        insert_corrupt_message(&session)
+            .await
+            .expect("corrupt item should save");
+
+        let popped = session.pop_item().await.expect("item should pop");
+        assert_eq!(popped, Some(valid_item));
+
+        let items = session.get_items().await.expect("items should load");
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sqlite_session_pop_returns_none_after_dropping_only_corrupt_rows() {
+        let session = SQLiteSession::open_in_memory("session")
+            .await
+            .expect("sqlite session should open");
+        insert_corrupt_message(&session)
+            .await
+            .expect("corrupt item should save");
+
+        let popped = session
+            .pop_item()
+            .await
+            .expect("pop should skip corrupt rows");
+        assert_eq!(popped, None);
+
+        let items = session.get_items().await.expect("items should load");
+        assert!(items.is_empty());
+    }
+
+    async fn insert_corrupt_message(session: &SQLiteSession) -> Result<()> {
+        sqlx::query(&format!(
+            "INSERT OR IGNORE INTO {} (session_id) VALUES (?)",
+            session.sessions_table
+        ))
+        .bind(&session.session_id)
+        .execute(&session.pool)
+        .await
+        .map_err(|error| AgentsError::message(error.to_string()))?;
+
+        sqlx::query(&format!(
+            "INSERT INTO {} (session_id, message_data) VALUES (?, ?)",
+            session.messages_table
+        ))
+        .bind(&session.session_id)
+        .bind("not valid json {{{")
+        .execute(&session.pool)
+        .await
+        .map_err(|error| AgentsError::message(error.to_string()))?;
+
+        Ok(())
     }
 }
