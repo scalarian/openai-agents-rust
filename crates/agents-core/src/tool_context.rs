@@ -47,10 +47,8 @@ impl<TContext> ToolContext<TContext> {
     }
 
     pub fn qualified_tool_name(&self) -> String {
-        match &self.tool_namespace {
-            Some(namespace) => format!("{namespace}.{}", self.tool_name),
-            None => self.tool_name.clone(),
-        }
+        tool_trace_name(&self.tool_name, self.tool_namespace.as_deref())
+            .unwrap_or_else(|| self.tool_name.clone())
     }
 
     pub fn trace_name(&self) -> String {
@@ -141,5 +139,24 @@ mod tests {
         assert_eq!(context.qualified_tool_name(), "knowledge.search");
         assert_eq!(context.trace_name(), "knowledge.search");
         assert_eq!(context.agent_tool_state_scope().as_deref(), Some("scope-1"));
+    }
+
+    #[test]
+    fn qualified_tool_name_collapses_synthetic_namespace() {
+        let run_context = RunContextWrapper::new(RunContext::default());
+
+        let context = ToolContext::from_tool_call(
+            &run_context,
+            ToolCall {
+                id: "call-weather".to_owned(),
+                name: "get_weather".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: Some("get_weather".to_owned()),
+            },
+        );
+
+        assert_eq!(context.tool_namespace.as_deref(), Some("get_weather"));
+        assert_eq!(context.qualified_tool_name(), "get_weather");
+        assert_eq!(context.trace_name(), "get_weather");
     }
 }
