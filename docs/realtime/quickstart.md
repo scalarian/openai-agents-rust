@@ -48,5 +48,7 @@ For a larger agent configuration, see [realtime_app_agent.rs](../../crates/opena
 ## What To Read Next
 
 - [README.md](README.md): section overview and minimal type map
+- [guide.md](guide.md): lifecycle, events, tools, and session state
+- [transport.md](transport.md): WebSocket, SIP, Twilio, and Cloudflare transport choices
 - [events.md](events.md): event families emitted by a session
 - [audio.md](audio.md): audio formats and playback state

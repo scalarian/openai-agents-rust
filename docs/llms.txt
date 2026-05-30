@@ -44,8 +44,12 @@ Compact export of the markdown docs tree.
   Use this page when your realtime flow includes audio input, audio output, or playback state tracking.
 - realtime/events.md: Realtime Events
   Use this page when you want to understand what flows through a realtime session as it runs.
+- realtime/guide.md: Realtime Guide
+  Realtime sessions are long-lived runtime objects. A session can accept user text or audio, emit events, execute realtime tools, and move between realtime agents through handoffs.
 - realtime/quickstart.md: Realtime Quickstart
   Realtime agents keep a live session open so your application can send input and receive incremental events without waiting for one final text-only result.
+- realtime/transport.md: Realtime Transport
+  Use this page to choose the transport shape beneath a Rust realtime session.
 - realtime/transports.md: Realtime Transports
   Use this page when you need to choose or understand the transport beneath a realtime session.
 - ref/README.md: Curated Reference
