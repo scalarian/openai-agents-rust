@@ -76,6 +76,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | llm as a judge | iterative generator and evaluator agent loop | [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs) |
 | local file | local file input item encoded as data URL content | [local_file.rs](../crates/openai-agents/examples/local_file.rs) |
 | local image | local image input item encoded as data URL content | [local_image.rs](../crates/openai-agents/examples/local_image.rs) |
+| local shell skill | local shell environment with inline skill metadata | [local_shell_skill.rs](../crates/openai-agents/examples/local_shell_skill.rs) |
 | memory session HITL example | upstream-named memory session HITL entry point | [memory_session_hitl_example.rs](../crates/openai-agents/examples/memory_session_hitl_example.rs) |
 | memory session | session-backed follow-up turns | [memory_session.rs](../crates/openai-agents/examples/memory_session.rs) |
 | mcp filesystem example | upstream-named MCP filesystem entry point | [mcp_filesystem_example.rs](../crates/openai-agents/examples/mcp_filesystem_example.rs) |
