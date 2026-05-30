@@ -24,6 +24,7 @@ cargo run -p openai-agents-rs --example streamed_run
 cargo run -p openai-agents-rs --example tool_guardrails
 cargo run -p openai-agents-rs --example usage_tracking
 cargo run -p openai-agents-rs --example realtime_session
+cargo run -p openai-agents-rs --example retry
 cargo run -p openai-agents-rs --example voice_pipeline
 ```
 
@@ -47,6 +48,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `tool_guardrails` | input and output guardrails around function tools | [docs/guardrails.md](../docs/guardrails.md) |
 | `usage_tracking` | token usage from a completed run | [docs/usage.md](../docs/usage.md) |
 | `realtime_session` | a long-lived realtime session with live text interaction | [docs/realtime/README.md](../docs/realtime/README.md) |
+| `retry` | runner-managed model retry settings | [docs/models/settings.md](../docs/models/settings.md) |
 | `voice_pipeline` | a voice workflow and buffered audio pipeline | [docs/voice/README.md](../docs/voice/README.md) |
 
 ## When To Prefer Docs

@@ -18,6 +18,8 @@ Use this page when you need to shape provider requests without hardcoding those 
 - add request-specific overrides in `RunConfig`
 - avoid storing provider request details in your agent instructions
 
+Use `ModelSettings::retry` with `ModelRetrySettings` and `retry_policies` when the runner should retry transient model failures instead of leaving recovery to the model provider.
+
 ## Read Next
 
 - [providers.md](providers.md)

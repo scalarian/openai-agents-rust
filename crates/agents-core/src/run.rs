@@ -1649,17 +1649,33 @@ impl Runner {
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
     ) -> Result<ModelResponse> {
-        internal_model_retry::get_response_with_retry(|| {
-            self.call_model(
-                agent,
-                context,
-                trace_id,
-                model_data,
-                prompt,
-                previous_response_id,
-                conversation_id,
-            )
-        })
+        let requested_model = self
+            .config
+            .model
+            .clone()
+            .or_else(|| internal_turn_preparation::get_model(agent));
+        let retry_settings = get_default_model_settings(requested_model.as_deref())
+            .resolve(agent.model_settings.as_ref())
+            .resolve(self.config.model_settings.as_ref())
+            .retry;
+        internal_model_retry::get_response_with_retry(
+            || {
+                let model_data = model_data.clone();
+                let prompt = prompt.clone();
+                self.call_model(
+                    agent,
+                    context,
+                    trace_id,
+                    model_data,
+                    prompt,
+                    previous_response_id,
+                    conversation_id,
+                )
+            },
+            retry_settings,
+            previous_response_id.map(ToOwned::to_owned),
+            conversation_id.map(ToOwned::to_owned),
+        )
         .await
     }
 }

@@ -4,6 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::retry::{ModelRetryBackoffSettings, ModelRetrySettings};
+
 /// Provider-agnostic model tuning parameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ModelSettings {
@@ -34,6 +36,8 @@ pub struct ModelSettings {
     pub extra_headers: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra_args: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<ModelRetrySettings>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -99,6 +103,9 @@ impl ModelSettings {
         }
         if !self.metadata.is_empty() {
             traceable.insert("metadata".to_owned(), json!(self.metadata));
+        }
+        if let Some(value) = &self.retry {
+            traceable.insert("retry".to_owned(), json!(value));
         }
         traceable
     }
@@ -177,7 +184,45 @@ impl ModelSettings {
                 .extra_args
                 .extend(override_settings.extra_args.clone());
         }
+        resolved.retry =
+            merge_retry_settings(resolved.retry.as_ref(), override_settings.retry.as_ref());
         resolved
+    }
+}
+
+fn merge_retry_settings(
+    base: Option<&ModelRetrySettings>,
+    override_settings: Option<&ModelRetrySettings>,
+) -> Option<ModelRetrySettings> {
+    match (base, override_settings) {
+        (None, None) => None,
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(override_settings)) => Some(override_settings.clone()),
+        (Some(base), Some(override_settings)) => Some(ModelRetrySettings {
+            max_retries: override_settings.max_retries.or(base.max_retries),
+            backoff: merge_retry_backoff(base.backoff.as_ref(), override_settings.backoff.as_ref()),
+            policy: override_settings
+                .policy
+                .clone()
+                .or_else(|| base.policy.clone()),
+        }),
+    }
+}
+
+fn merge_retry_backoff(
+    base: Option<&ModelRetryBackoffSettings>,
+    override_settings: Option<&ModelRetryBackoffSettings>,
+) -> Option<ModelRetryBackoffSettings> {
+    match (base, override_settings) {
+        (None, None) => None,
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(override_settings)) => Some(override_settings.clone()),
+        (Some(base), Some(override_settings)) => Some(ModelRetryBackoffSettings {
+            initial_delay: override_settings.initial_delay.or(base.initial_delay),
+            max_delay: override_settings.max_delay.or(base.max_delay),
+            multiplier: override_settings.multiplier.or(base.multiplier),
+            jitter: override_settings.jitter.or(base.jitter),
+        }),
     }
 }
 
@@ -216,6 +261,7 @@ mod tests {
             extra_body: BTreeMap::from([("store".to_owned(), json!(false))]),
             extra_headers: BTreeMap::from([("x-base".to_owned(), json!("1"))]),
             extra_args: BTreeMap::from([("timeout".to_owned(), json!(10))]),
+            retry: None,
         };
         let override_settings = ModelSettings {
             temperature: Some(0.8),
@@ -244,6 +290,7 @@ mod tests {
             extra_body: BTreeMap::from([("parallel_tool_calls".to_owned(), json!(true))]),
             extra_headers: BTreeMap::from([("x-route".to_owned(), json!("fast"))]),
             extra_args: BTreeMap::from([("retry".to_owned(), json!(2))]),
+            retry: None,
         };
 
         let resolved = base.resolve(Some(&override_settings));
@@ -297,6 +344,16 @@ mod tests {
     fn traceable_model_settings_omit_request_extras() {
         let settings = ModelSettings {
             temperature: Some(0.5),
+            retry: Some(ModelRetrySettings {
+                max_retries: Some(2),
+                backoff: Some(ModelRetryBackoffSettings {
+                    initial_delay: Some(0.0),
+                    max_delay: Some(1.0),
+                    multiplier: Some(2.0),
+                    jitter: Some(false),
+                }),
+                policy: None,
+            }),
             context_management: vec![json!({
                 "type": "compaction",
                 "compact_threshold": 200_000
@@ -326,9 +383,64 @@ mod tests {
             traceable.get("metadata"),
             Some(&json!({"purpose": "trace"}))
         );
+        assert_eq!(
+            traceable.get("retry"),
+            Some(&json!({
+                "max_retries": 2,
+                "backoff": {
+                    "initial_delay": 0.0,
+                    "max_delay": 1.0,
+                    "multiplier": 2.0,
+                    "jitter": false
+                }
+            }))
+        );
         assert!(!traceable.contains_key("extra_query"));
         assert!(!traceable.contains_key("extra_body"));
         assert!(!traceable.contains_key("extra_headers"));
         assert!(!traceable.contains_key("extra_args"));
+    }
+
+    #[test]
+    fn model_retry_settings_merge_nested_backoff() {
+        let base = ModelSettings {
+            retry: Some(ModelRetrySettings {
+                max_retries: Some(1),
+                backoff: Some(ModelRetryBackoffSettings {
+                    initial_delay: Some(0.25),
+                    max_delay: Some(2.0),
+                    multiplier: Some(2.0),
+                    jitter: Some(true),
+                }),
+                policy: None,
+            }),
+            ..ModelSettings::default()
+        };
+        let override_settings = ModelSettings {
+            retry: Some(ModelRetrySettings {
+                max_retries: Some(3),
+                backoff: Some(ModelRetryBackoffSettings {
+                    initial_delay: Some(0.0),
+                    max_delay: None,
+                    multiplier: None,
+                    jitter: Some(false),
+                }),
+                policy: None,
+            }),
+            ..ModelSettings::default()
+        };
+
+        let resolved = base.resolve(Some(&override_settings));
+        let retry = resolved.retry.expect("retry settings should merge");
+        assert_eq!(retry.max_retries, Some(3));
+        assert_eq!(
+            retry.backoff,
+            Some(ModelRetryBackoffSettings {
+                initial_delay: Some(0.0),
+                max_delay: Some(2.0),
+                multiplier: Some(2.0),
+                jitter: Some(false),
+            })
+        );
     }
 }
