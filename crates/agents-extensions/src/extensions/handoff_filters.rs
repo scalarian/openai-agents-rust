@@ -31,6 +31,17 @@ fn is_filtered_input_item(item: &InputItem) -> bool {
                 | "mcp_approval_request"
                 | "mcp_approval_response"
                 | "reasoning"
+                | "code_interpreter_call"
+                | "image_generation_call"
+                | "local_shell_call"
+                | "local_shell_call_output"
+                | "shell_call"
+                | "shell_call_output"
+                | "apply_patch_call"
+                | "apply_patch_call_output"
+                | "custom_tool_call"
+                | "custom_tool_call_output"
+                | "hosted_tool_call"
                 | "tool_call"
                 | "tool_call_output"
                 | "handoff_call"
@@ -85,5 +96,40 @@ mod tests {
 
         let filtered = remove_all_tools(&items);
         assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn filters_hosted_tool_calls_from_input_items() {
+        let items = vec![
+            InputItem::from("keep"),
+            InputItem::Json {
+                value: json!({
+                    "type": "hosted_tool_call",
+                    "id": "hosted-1",
+                }),
+            },
+            InputItem::Json {
+                value: json!({
+                    "type": "custom_tool_call_output",
+                    "id": "custom-1",
+                }),
+            },
+            InputItem::Json {
+                value: json!({
+                    "type": "message",
+                    "content": "also keep",
+                }),
+            },
+        ];
+
+        let filtered = remove_tool_types_from_input(&items);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(matches!(filtered[0], InputItem::Text { .. }));
+        assert!(matches!(
+            &filtered[1],
+            InputItem::Json { value }
+                if value.get("type").and_then(serde_json::Value::as_str) == Some("message")
+        ));
     }
 }
