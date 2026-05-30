@@ -1,5 +1,6 @@
 use std::any::TypeId;
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -36,6 +37,9 @@ use crate::tool::{
 use crate::tool_context::{ToolCall, ToolContext};
 
 pub type AgentBase = Agent;
+
+pub type DynamicInstructionsFunction =
+    Arc<dyn Fn(RunContextWrapper, Agent) -> BoxFuture<'static, Result<String>> + Send + Sync>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StopAtTools {
@@ -285,6 +289,8 @@ pub struct Agent {
     pub name: String,
     pub handoff_description: Option<String>,
     pub instructions: Option<String>,
+    #[serde(skip, default)]
+    pub dynamic_instructions: Option<DynamicInstructionsFunction>,
     pub output_schema: Option<OutputSchemaDefinition>,
     pub model_settings: Option<ModelSettings>,
     pub tools: Vec<StaticTool>,
@@ -318,6 +324,10 @@ impl fmt::Debug for Agent {
             .field("name", &self.name)
             .field("handoff_description", &self.handoff_description)
             .field("instructions", &self.instructions)
+            .field(
+                "dynamic_instructions",
+                &self.dynamic_instructions.as_ref().map(|_| "<function>"),
+            )
             .field("output_schema", &self.output_schema)
             .field("model_settings", &self.model_settings)
             .field("tools", &self.tools)
@@ -442,6 +452,16 @@ impl Agent {
         let mut cloned = self.clone();
         apply(&mut cloned);
         cloned
+    }
+
+    pub async fn resolve_instructions(
+        &self,
+        context: &RunContextWrapper,
+    ) -> Result<Option<String>> {
+        if let Some(callback) = &self.dynamic_instructions {
+            return callback(context.clone(), self.clone()).await.map(Some);
+        }
+        Ok(self.instructions.clone())
     }
 
     pub fn as_tool<TArgs>(
@@ -698,6 +718,19 @@ impl AgentBuilder {
 
     pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.agent.instructions = Some(instructions.into());
+        self.agent.dynamic_instructions = None;
+        self
+    }
+
+    pub fn dynamic_instructions<F, Fut>(mut self, instructions: F) -> Self
+    where
+        F: Fn(RunContextWrapper, Agent) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<String>> + Send + 'static,
+    {
+        self.agent.instructions = None;
+        self.agent.dynamic_instructions = Some(Arc::new(move |context, agent| {
+            instructions(context, agent).boxed()
+        }));
         self
     }
 

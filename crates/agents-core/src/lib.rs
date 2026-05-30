@@ -73,8 +73,8 @@ pub use _tool_identity::{
 pub use agent::{
     Agent, AgentAsToolOptions, AgentBase, AgentBuilder, AgentToolFailureFormatter,
     AgentToolOutputExtractor, AgentToolRunResult, AgentToolStreamEvent, AgentToolStreamHandler,
-    StopAtTools, StructuredToolInputBuilder, ToolUseBehavior, ToolsToFinalOutputFunction,
-    ToolsToFinalOutputResult,
+    DynamicInstructionsFunction, StopAtTools, StructuredToolInputBuilder, ToolUseBehavior,
+    ToolsToFinalOutputFunction, ToolsToFinalOutputResult,
 };
 pub use agent_output::{AgentOutputSchema, AgentOutputSchemaBase, OutputSchemaDefinition};
 pub use agent_tool_input::{

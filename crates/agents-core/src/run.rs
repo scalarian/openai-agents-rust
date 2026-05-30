@@ -647,7 +647,7 @@ impl Runner {
                 &context,
                 ModelInputData {
                     input: prepared_input.clone(),
-                    instructions: current_agent.instructions.clone(),
+                    instructions: current_agent.resolve_instructions(&context).await?,
                 },
                 prepared_source_refs.as_deref(),
             )
@@ -2305,6 +2305,7 @@ mod tests {
     struct RequestCaptureModel {
         previous_response_id: Arc<Mutex<Option<String>>>,
         conversation_id: Arc<Mutex<Option<String>>>,
+        instructions: Arc<Mutex<Option<String>>>,
         output_schema: Arc<Mutex<Option<crate::OutputSchemaDefinition>>>,
         metadata: Arc<Mutex<std::collections::BTreeMap<String, serde_json::Value>>>,
     }
@@ -2321,6 +2322,10 @@ mod tests {
                 .conversation_id
                 .lock()
                 .expect("request capture conversation id lock") = request.conversation_id.clone();
+            *self
+                .instructions
+                .lock()
+                .expect("request capture instructions lock") = request.instructions.clone();
             *self
                 .output_schema
                 .lock()
@@ -4238,6 +4243,37 @@ mod tests {
         assert_eq!(
             model_config.get("base_url"),
             Some(&json!("https://example.test/v1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_resolves_dynamic_agent_instructions() {
+        let model = Arc::new(RequestCaptureModel::default());
+        let provider = Arc::new(StaticProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant")
+            .dynamic_instructions(|context, agent| async move {
+                Ok(format!(
+                    "{} input_tokens={}",
+                    agent.name, context.usage.input_tokens
+                ))
+            })
+            .build();
+
+        Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(
+            model
+                .instructions
+                .lock()
+                .expect("instructions lock")
+                .as_deref(),
+            Some("assistant input_tokens=0")
         );
     }
 
