@@ -1,0 +1,7 @@
+%PDF-1.4
+% Minimal text fixture for the Rust local_file example.
+
+Introduction
+This system card discusses OpenAI o3 and o4-mini. It is a compact fixture used to demonstrate local file input items without requiring network access.
+
+%%EOF

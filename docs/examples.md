@@ -28,6 +28,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | input guardrail | local tripwire handling before model execution | [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs) |
 | lifecycle hooks | run and agent lifecycle callbacks | [lifecycle_hooks.rs](../crates/openai-agents/examples/lifecycle_hooks.rs) |
 | llm as a judge | iterative generator and evaluator agent loop | [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs) |
+| local file | local file input item encoded as data URL content | [local_file.rs](../crates/openai-agents/examples/local_file.rs) |
 | memory session | session-backed follow-up turns | [memory_session.rs](../crates/openai-agents/examples/memory_session.rs) |
 | non-strict output type | structured output validation with non-strict and custom schemas | [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs) |
 | output guardrail | final output tripwire handling | [output_guardrail.rs](../crates/openai-agents/examples/output_guardrail.rs) |

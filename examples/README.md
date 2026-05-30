@@ -27,6 +27,7 @@ cargo run -p openai-agents-rs --example image_tool_output
 cargo run -p openai-agents-rs --example input_guardrail
 cargo run -p openai-agents-rs --example lifecycle_hooks
 cargo run -p openai-agents-rs --example llm_as_a_judge
+cargo run -p openai-agents-rs --example local_file
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example non_strict_output_type
 cargo run -p openai-agents-rs --example output_guardrail
@@ -72,6 +73,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `input_guardrail` | tripwire handling before model execution | [docs/guardrails.md](../docs/guardrails.md) |
 | `lifecycle_hooks` | run and agent lifecycle callbacks | [docs/running_agents.md](../docs/running_agents.md) |
 | `llm_as_a_judge` | iterative generator and evaluator agent loop | [docs/multi_agent.md](../docs/multi_agent.md) |
+| `local_file` | local file input item encoded as data URL content | [docs/agents.md](../docs/agents.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `non_strict_output_type` | structured output validation with non-strict and custom schemas | [docs/agents.md](../docs/agents.md) |
 | `output_guardrail` | tripwire handling for final model output | [docs/guardrails.md](../docs/guardrails.md) |
