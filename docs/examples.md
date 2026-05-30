@@ -47,6 +47,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | human in the loop stream | streamed approval interruption and streamed resume | [human_in_the_loop_stream.rs](../crates/openai-agents/examples/human_in_the_loop_stream.rs) |
 | image generator | hosted image generation tool configuration and result decoding | [image_generator.rs](../crates/openai-agents/examples/image_generator.rs) |
 | image tool output | function tool returning an image output item | [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) |
+| input guardrails | upstream-named input guardrail entry point | [input_guardrails.rs](../crates/openai-agents/examples/input_guardrails.rs) |
 | input guardrail | local tripwire handling before model execution | [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs) |
 | lifecycle hooks | run and agent lifecycle callbacks | [lifecycle_hooks.rs](../crates/openai-agents/examples/lifecycle_hooks.rs) |
 | llm as a judge | iterative generator and evaluator agent loop | [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs) |
