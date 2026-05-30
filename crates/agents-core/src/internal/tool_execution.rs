@@ -194,44 +194,43 @@ pub(crate) async fn execute_local_function_tools(
         let mut output = if let Some(rejected) = invocation_rejected {
             rejected
         } else {
-            let parsed_arguments = serde_json::from_str::<serde_json::Value>(&tool_call.arguments)
-                .unwrap_or(serde_json::Value::Null);
-            match function_tool
-                .invoke(tool_context.clone(), parsed_arguments)
-                .await
-            {
-                Ok(output) => output,
+            match parse_function_tool_json_input(&tool_call.name, &tool_call.arguments) {
                 Err(error) => {
-                    let default_message = "Tool execution failed.".to_owned();
-                    let formatted = if let Some(formatter) = &run_config.tool_error_formatter {
-                        formatter(crate::run_config::ToolErrorFormatterArgs {
-                            kind: "invoke_error",
-                            tool_type: "function",
-                            tool_name: tool_call.name.clone(),
-                            call_id: tool_call.id.clone(),
-                            default_message: default_message.clone(),
-                            run_context: context.clone(),
-                        })
-                        .await?
-                    } else {
-                        Some(default_tool_error_function(
-                            &crate::run_config::ToolErrorFormatterArgs {
-                                kind: "invoke_error",
-                                tool_type: "function",
-                                tool_name: tool_call.name.clone(),
-                                call_id: tool_call.id.clone(),
-                                default_message: default_message.clone(),
-                                run_context: context.clone(),
-                            },
-                        ))
-                    };
-
-                    if let Some(message) = formatted {
-                        ToolOutput::from(message)
+                    if let Some(output) = resolve_function_tool_error_output(
+                        context,
+                        run_config,
+                        &tool_call,
+                        "invalid_json_input",
+                        error.to_string(),
+                    )
+                    .await?
+                    {
+                        output
                     } else {
                         return Err(error);
                     }
                 }
+                Ok(parsed_arguments) => match function_tool
+                    .invoke(tool_context.clone(), parsed_arguments)
+                    .await
+                {
+                    Ok(output) => output,
+                    Err(error) => {
+                        if let Some(output) = resolve_function_tool_error_output(
+                            context,
+                            run_config,
+                            &tool_call,
+                            "invoke_error",
+                            "Tool execution failed.".to_owned(),
+                        )
+                        .await?
+                        {
+                            output
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                },
             }
         };
 
@@ -392,12 +391,75 @@ pub(crate) fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {
             } => Some(ToolCall {
                 id: call_id.clone(),
                 name: tool_name.clone(),
-                arguments: serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_owned()),
+                arguments: raw_tool_arguments(arguments),
                 namespace: namespace.clone(),
             }),
             _ => None,
         })
         .collect()
+}
+
+fn raw_tool_arguments(arguments: &serde_json::Value) -> String {
+    arguments
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_owned()))
+}
+
+fn parse_function_tool_json_input(tool_name: &str, input_json: &str) -> Result<serde_json::Value> {
+    let parsed = if input_json.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str::<serde_json::Value>(input_json).map_err(|_| {
+            let base_message = format!("Invalid JSON input for tool {tool_name}");
+            let message = if crate::_debug::dont_log_tool_data() {
+                base_message
+            } else {
+                format!("{base_message}: {input_json}")
+            };
+            ModelBehaviorError { message }
+        })?
+    };
+
+    if !parsed.is_object() {
+        return Err(ModelBehaviorError {
+            message: format!("Invalid JSON input for tool {tool_name}: expected a JSON object"),
+        }
+        .into());
+    }
+
+    Ok(parsed)
+}
+
+async fn resolve_function_tool_error_output(
+    context: &RunContextWrapper,
+    run_config: &RunConfig,
+    tool_call: &ToolCall,
+    kind: &'static str,
+    default_message: String,
+) -> Result<Option<ToolOutput>> {
+    if let Some(formatter) = &run_config.tool_error_formatter {
+        return formatter(ToolErrorFormatterArgs {
+            kind,
+            tool_type: "function",
+            tool_name: tool_call.name.clone(),
+            call_id: tool_call.id.clone(),
+            default_message,
+            run_context: context.clone(),
+        })
+        .await
+        .map(|message| message.map(ToolOutput::from));
+    }
+
+    let args = ToolErrorFormatterArgs {
+        kind,
+        tool_type: "function",
+        tool_name: tool_call.name.clone(),
+        call_id: tool_call.id.clone(),
+        default_message,
+        run_context: context.clone(),
+    };
+    Ok(Some(ToolOutput::from(default_tool_error_function(&args))))
 }
 
 pub(crate) fn resolve_handoff_agent(
@@ -446,9 +508,171 @@ pub(crate) fn find_pending_tool_call(state: &RunState, call_id: &str) -> Option<
             } if existing_call_id == call_id => Some(ToolCall {
                 id: existing_call_id.clone(),
                 name: tool_name.clone(),
-                arguments: serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_owned()),
+                arguments: raw_tool_arguments(arguments),
                 namespace: namespace.clone(),
             }),
             _ => None,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use schemars::JsonSchema;
+    use serde::Deserialize;
+    use serde_json::json;
+
+    use crate::errors::AgentsError;
+    use crate::run_context::RunContext;
+    use crate::tool::function_tool;
+
+    use super::*;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    fn tool_logging_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn invalid_tool_json_redacts_payload_when_tool_logging_is_disabled() {
+        let _lock = tool_logging_env_lock()
+            .lock()
+            .expect("tool logging env lock");
+        let _env = EnvVarGuard::set("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "true");
+        let bad_json = "{\"secret\":\"SECRET_TOKEN_123\"";
+
+        let error = parse_function_tool_json_input("echo_tool", bad_json)
+            .expect_err("invalid JSON should fail");
+
+        assert_eq!(error.to_string(), "Invalid JSON input for tool echo_tool");
+        assert!(!error.to_string().contains("SECRET_TOKEN_123"));
+    }
+
+    #[test]
+    fn invalid_tool_json_includes_payload_when_tool_logging_is_enabled() {
+        let _lock = tool_logging_env_lock()
+            .lock()
+            .expect("tool logging env lock");
+        let _env = EnvVarGuard::set("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "false");
+        let bad_json = "{\"secret\":\"SECRET_TOKEN_123\"";
+
+        let error = parse_function_tool_json_input("echo_tool", bad_json)
+            .expect_err("invalid JSON should fail");
+
+        assert_eq!(
+            error.to_string(),
+            format!("Invalid JSON input for tool echo_tool: {bad_json}")
+        );
+        assert!(error.to_string().contains("SECRET_TOKEN_123"));
+    }
+
+    #[test]
+    fn function_tool_json_input_must_be_object() {
+        let error = parse_function_tool_json_input("echo_tool", "[1,2,3]")
+            .expect_err("non-object JSON should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "Invalid JSON input for tool echo_tool: expected a JSON object"
+        );
+    }
+
+    #[test]
+    fn tool_call_extraction_preserves_raw_string_arguments() {
+        let bad_json = "{\"secret\":\"SECRET_TOKEN_123\"";
+
+        let calls = extract_tool_calls(&[OutputItem::ToolCall {
+            call_id: "call-1".to_owned(),
+            tool_name: "echo_tool".to_owned(),
+            arguments: json!(bad_json),
+            namespace: None,
+        }]);
+
+        assert_eq!(calls[0].arguments, bad_json);
+    }
+
+    #[test]
+    fn tool_call_extraction_serializes_structured_arguments() {
+        let calls = extract_tool_calls(&[OutputItem::ToolCall {
+            call_id: "call-1".to_owned(),
+            tool_name: "echo_tool".to_owned(),
+            arguments: json!({"query": "rust"}),
+            namespace: None,
+        }]);
+
+        assert_eq!(calls[0].arguments, "{\"query\":\"rust\"}");
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    struct EchoArgs {
+        value: String,
+    }
+
+    #[tokio::test]
+    async fn invalid_tool_json_default_error_output_redacts_payload() {
+        let _lock = tool_logging_env_lock()
+            .lock()
+            .expect("tool logging env lock");
+        let _env = EnvVarGuard::set("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "true");
+        let tool = function_tool(
+            "echo_tool",
+            "Echo input",
+            |_ctx, args: EchoArgs| async move { Ok::<_, AgentsError>(args.value) },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant").function_tool(tool).build();
+        let bad_json = "{\"secret\":\"SECRET_TOKEN_123\"";
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-1".to_owned(),
+                name: "echo_tool".to_owned(),
+                arguments: bad_json.to_owned(),
+                namespace: None,
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("invalid JSON should be returned to the model by default");
+
+        let RunItem::ToolCallOutput {
+            output: OutputItem::Text { text },
+            ..
+        } = &outcome.new_items[0]
+        else {
+            panic!("expected text tool-call output");
+        };
+        assert_eq!(
+            text,
+            "Tool `echo_tool` failed: Invalid JSON input for tool echo_tool"
+        );
+        assert!(!text.contains("SECRET_TOKEN_123"));
+    }
 }
