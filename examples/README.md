@@ -17,6 +17,7 @@ cargo run -p openai-agents-rs --example custom_model_provider
 cargo run -p openai-agents-rs --example default_model_provider
 cargo run -p openai-agents-rs --example deterministic_flow
 cargo run -p openai-agents-rs --example dynamic_system_prompt
+cargo run -p openai-agents-rs --example file_search
 cargo run -p openai-agents-rs --example forcing_tool_use
 cargo run -p openai-agents-rs --example function_tools
 cargo run -p openai-agents-rs --example handoffs
@@ -68,6 +69,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `default_model_provider` | global default runner model provider | [docs/models/providers.md](../docs/models/providers.md) |
 | `deterministic_flow` | multi-step agent workflow with an explicit gate | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `dynamic_system_prompt` | per-run agent instructions | [docs/agents.md](../docs/agents.md) |
+| `file_search` | hosted file search with vector store options and included results | [docs/tools.md](../docs/tools.md) |
 | `forcing_tool_use` | required tool choice with stop-on-tool output | [docs/models/settings.md](../docs/models/settings.md) |
 | `function_tools` | typed local function tools with structured arguments | [docs/tools.md](../docs/tools.md) |
 | `handoffs` | control transfer between agents | [docs/handoffs.md](../docs/handoffs.md) |
