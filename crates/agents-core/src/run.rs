@@ -907,6 +907,7 @@ impl Runner {
                 session,
                 session_input_items.as_deref().unwrap_or(&original_input),
                 &session_generated_items,
+                self.config.reasoning_item_id_policy,
             )
             .await?
         } else {

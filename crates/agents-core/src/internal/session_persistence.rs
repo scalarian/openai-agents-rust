@@ -2,6 +2,7 @@ use crate::errors::Result;
 use crate::exceptions::UserError;
 use crate::items::{InputItem, RunItem};
 use crate::memory::resolve_session_limit;
+use crate::run_config::ReasoningItemIdPolicy;
 use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
@@ -120,6 +121,7 @@ pub(crate) async fn save_result_to_session(
     session: &(dyn Session + Sync),
     original_input: &[InputItem],
     new_items: &[RunItem],
+    reasoning_item_id_policy: ReasoningItemIdPolicy,
 ) -> Result<usize> {
     let provider = get_trace_provider();
     let mut span = custom_span(
@@ -130,14 +132,101 @@ pub(crate) async fn save_result_to_session(
         )]),
     );
     provider.start_span(&mut span, true);
+    let preserve_openai_conversation_items = session.preserves_openai_conversation_item_identity();
+    let persistence_reasoning_policy = if preserve_openai_conversation_items {
+        ReasoningItemIdPolicy::Preserve
+    } else {
+        reasoning_item_id_policy
+    };
     let mut items = original_input.to_vec();
-    items.extend(new_items.iter().filter_map(RunItem::to_input_item));
+    items.extend(new_items.iter().filter_map(|run_item| {
+        crate::internal::items::run_item_to_input_item(run_item, persistence_reasoning_policy)
+    }));
     let count = items.len();
-    if count > 0 {
+    if preserve_openai_conversation_items {
+        items = items
+            .into_iter()
+            .filter(|item| !is_unpersistable_openai_conversation_reasoning_item(item))
+            .map(sanitize_openai_conversation_item)
+            .collect();
+    }
+    if !items.is_empty() {
         session.add_items(items).await?;
     }
     provider.finish_span(&mut span, true);
     Ok(count)
+}
+
+fn sanitize_openai_conversation_item(item: InputItem) -> InputItem {
+    let InputItem::Json {
+        value: serde_json::Value::Object(mut object),
+    } = item
+    else {
+        return item;
+    };
+
+    let item_type = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    if item_type.as_deref() != Some("reasoning")
+        && !openai_conversation_item_requires_id(item_type.as_deref())
+    {
+        object.remove("id");
+    }
+    object.remove("provider_data");
+
+    InputItem::Json {
+        value: serde_json::Value::Object(object),
+    }
+}
+
+fn openai_conversation_item_requires_id(item_type: Option<&str>) -> bool {
+    matches!(
+        item_type,
+        Some(
+            "file_search_call"
+                | "web_search_call"
+                | "computer_call"
+                | "code_interpreter_call"
+                | "image_generation_call"
+                | "local_shell_call"
+                | "local_shell_call_output"
+                | "mcp_list_tools"
+                | "mcp_approval_request"
+                | "mcp_call"
+                | "item_reference"
+        )
+    )
+}
+
+fn is_unpersistable_openai_conversation_reasoning_item(item: &InputItem) -> bool {
+    let InputItem::Json {
+        value: serde_json::Value::Object(object),
+    } = item
+    else {
+        return false;
+    };
+    if object.get("type").and_then(serde_json::Value::as_str) != Some("reasoning") {
+        return false;
+    }
+    !truthy_json_field(object.get("id")) && !truthy_json_field(object.get("encrypted_content"))
+}
+
+fn truthy_json_field(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        Some(serde_json::Value::String(text)) => !text.is_empty(),
+        Some(serde_json::Value::Array(values)) => !values.is_empty(),
+        Some(serde_json::Value::Object(values)) => !values.is_empty(),
+        Some(serde_json::Value::Bool(value)) => *value,
+        Some(serde_json::Value::Number(number)) => number
+            .as_i64()
+            .map(|value| value != 0)
+            .or_else(|| number.as_u64().map(|value| value != 0))
+            .or_else(|| number.as_f64().map(|value| value != 0.0))
+            .unwrap_or(true),
+        Some(serde_json::Value::Null) | None => false,
+    }
 }
 
 pub(crate) fn validate_session_conversation_settings(
@@ -372,9 +461,73 @@ fn prefers_new_frequency_match(item: &InputItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::MemorySession;
+    use crate::OutputItem;
+    use crate::memory::{OpenAIConversationAwareSession, OpenAIConversationSessionState};
+    use crate::session::{MemorySession, Session};
+    use async_trait::async_trait;
     use futures::FutureExt;
     use serde_json::{Value, json};
+
+    struct OpenAIConversationLikeSession {
+        inner: MemorySession,
+    }
+
+    impl OpenAIConversationLikeSession {
+        fn new() -> Self {
+            Self {
+                inner: MemorySession::new("openai-conversation"),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Session for OpenAIConversationLikeSession {
+        fn session_id(&self) -> &str {
+            self.inner.session_id()
+        }
+
+        fn preserves_openai_conversation_item_identity(&self) -> bool {
+            true
+        }
+
+        async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+            self.inner.get_items_with_limit(limit).await
+        }
+
+        async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
+            self.inner.add_items(items).await
+        }
+
+        async fn pop_item(&self) -> Result<Option<InputItem>> {
+            self.inner.pop_item().await
+        }
+
+        async fn clear_session(&self) -> Result<()> {
+            self.inner.clear_session().await
+        }
+
+        fn conversation_session(&self) -> Option<&dyn OpenAIConversationAwareSession> {
+            Some(self)
+        }
+    }
+
+    #[async_trait]
+    impl OpenAIConversationAwareSession for OpenAIConversationLikeSession {
+        async fn load_openai_conversation_state(&self) -> Result<OpenAIConversationSessionState> {
+            Ok(OpenAIConversationSessionState {
+                conversation_id: Some("conv-test".to_owned()),
+                previous_response_id: None,
+                auto_previous_response_id: true,
+            })
+        }
+
+        async fn save_openai_conversation_state(
+            &self,
+            _state: OpenAIConversationSessionState,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn prepares_input_by_prefixing_session_history() {
@@ -407,6 +560,7 @@ mod tests {
             &[RunItem::Reasoning {
                 text: "thinking".to_owned(),
             }],
+            ReasoningItemIdPolicy::Preserve,
         )
         .await
         .expect("session should save");
@@ -414,6 +568,223 @@ mod tests {
         let items = session.get_items().await.expect("items should load");
         assert_eq!(count, 2);
         assert_eq!(items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn save_result_to_session_omits_reasoning_when_policy_requests_it() {
+        let session = MemorySession::new("session");
+
+        let count = save_result_to_session(
+            &session,
+            &[InputItem::from("hello")],
+            &[RunItem::Reasoning {
+                text: "sensitive chain of thought".to_owned(),
+            }],
+            ReasoningItemIdPolicy::Omit,
+        )
+        .await
+        .expect("session should save");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(count, 1);
+        assert_eq!(items, vec![InputItem::from("hello")]);
+    }
+
+    #[tokio::test]
+    async fn save_result_to_openai_conversation_keeps_reasoning_id_and_strips_provider_data() {
+        let session = OpenAIConversationLikeSession::new();
+
+        let count = save_result_to_session(
+            &session,
+            &[],
+            &[RunItem::MessageOutput {
+                content: crate::items::OutputItem::Json {
+                    value: json!({
+                        "type": "reasoning",
+                        "id": "rs_openai_conversation",
+                        "summary": [],
+                        "provider_data": {"server": "metadata"}
+                    }),
+                },
+            }],
+            ReasoningItemIdPolicy::Omit,
+        )
+        .await
+        .expect("conversation session should save");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(count, 1);
+        assert_eq!(items.len(), 1);
+        let InputItem::Json { value } = &items[0] else {
+            panic!("expected json reasoning item");
+        };
+        assert_eq!(value.get("type").and_then(Value::as_str), Some("reasoning"));
+        assert_eq!(
+            value.get("id").and_then(Value::as_str),
+            Some("rs_openai_conversation")
+        );
+        assert!(value.get("provider_data").is_none());
+    }
+
+    #[tokio::test]
+    async fn save_result_to_openai_conversation_drops_unpersistable_reasoning_item() {
+        let session = OpenAIConversationLikeSession::new();
+
+        let count = save_result_to_session(
+            &session,
+            &[],
+            &[RunItem::Reasoning {
+                text: "text-only reasoning".to_owned(),
+            }],
+            ReasoningItemIdPolicy::Omit,
+        )
+        .await
+        .expect("conversation session should process item");
+
+        assert_eq!(count, 1);
+        assert!(
+            session
+                .get_items()
+                .await
+                .expect("items should load")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn save_result_to_openai_conversation_keeps_reasoning_encrypted_content() {
+        let session = OpenAIConversationLikeSession::new();
+
+        let count = save_result_to_session(
+            &session,
+            &[],
+            &[RunItem::MessageOutput {
+                content: crate::items::OutputItem::Json {
+                    value: json!({
+                        "type": "reasoning",
+                        "summary": [],
+                        "encrypted_content": "encrypted"
+                    }),
+                },
+            }],
+            ReasoningItemIdPolicy::Omit,
+        )
+        .await
+        .expect("conversation session should save");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(count, 1);
+        assert_eq!(items.len(), 1);
+        let InputItem::Json { value } = &items[0] else {
+            panic!("expected json reasoning item");
+        };
+        assert_eq!(
+            value.get("encrypted_content").and_then(Value::as_str),
+            Some("encrypted")
+        );
+    }
+
+    #[tokio::test]
+    async fn save_result_to_openai_conversation_preserves_required_hosted_item_ids() {
+        let required_id_types = [
+            "file_search_call",
+            "web_search_call",
+            "computer_call",
+            "code_interpreter_call",
+            "image_generation_call",
+            "local_shell_call",
+            "local_shell_call_output",
+            "mcp_list_tools",
+            "mcp_approval_request",
+            "mcp_call",
+            "item_reference",
+        ];
+        let session = OpenAIConversationLikeSession::new();
+        let new_items = required_id_types
+            .iter()
+            .map(|item_type| RunItem::MessageOutput {
+                content: OutputItem::Json {
+                    value: json!({
+                        "type": item_type,
+                        "id": format!("{item_type}_abc123"),
+                        "status": "completed",
+                        "provider_data": {"server": "metadata"}
+                    }),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let count =
+            save_result_to_session(&session, &[], &new_items, ReasoningItemIdPolicy::Preserve)
+                .await
+                .expect("conversation session should save hosted items");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(count, required_id_types.len());
+        assert_eq!(items.len(), required_id_types.len());
+        for (item, item_type) in items.iter().zip(required_id_types) {
+            let InputItem::Json { value } = item else {
+                panic!("expected json hosted item");
+            };
+            assert_eq!(value.get("type").and_then(Value::as_str), Some(item_type));
+            assert_eq!(
+                value.get("id").and_then(Value::as_str),
+                Some(format!("{item_type}_abc123").as_str())
+            );
+            assert!(value.get("provider_data").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn save_result_to_openai_conversation_strips_optional_ids() {
+        let optional_id_items = [
+            json!({
+                "type": "message",
+                "id": "msg_abc",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi"}]
+            }),
+            json!({
+                "type": "function_call",
+                "id": "fc_abc",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": "{}"
+            }),
+            json!({
+                "type": "function_call_output",
+                "id": "out_abc",
+                "call_id": "call_abc",
+                "output": "{}"
+            }),
+            json!({
+                "type": "tool_search_call",
+                "id": "ts_abc",
+                "status": "completed"
+            }),
+        ];
+        let session = OpenAIConversationLikeSession::new();
+        let new_items = optional_id_items
+            .into_iter()
+            .map(|value| RunItem::MessageOutput {
+                content: OutputItem::Json { value },
+            })
+            .collect::<Vec<_>>();
+
+        let count =
+            save_result_to_session(&session, &[], &new_items, ReasoningItemIdPolicy::Preserve)
+                .await
+                .expect("conversation session should save optional-id items");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(count, new_items.len());
+        assert_eq!(items.len(), new_items.len());
+        for item in items {
+            let InputItem::Json { value } = item else {
+                panic!("expected json item");
+            };
+            assert!(value.get("id").is_none());
+        }
     }
 
     #[tokio::test]

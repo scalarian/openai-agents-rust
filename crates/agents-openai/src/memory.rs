@@ -126,6 +126,10 @@ impl Session for OpenAIConversationsSession {
         self.inner.session_settings()
     }
 
+    fn preserves_openai_conversation_item_identity(&self) -> bool {
+        true
+    }
+
     async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
         self.inner.get_items_with_limit(limit).await
     }

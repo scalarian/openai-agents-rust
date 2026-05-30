@@ -35,6 +35,10 @@ pub trait Session: Send + Sync {
         None
     }
 
+    fn preserves_openai_conversation_item_identity(&self) -> bool {
+        false
+    }
+
     async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>>;
 
     async fn add_items(&self, items: Vec<InputItem>) -> Result<()>;

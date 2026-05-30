@@ -631,6 +631,7 @@ fn openai_response_json_item(value: &Value) -> Value {
             "name": first_non_empty_string(value, &["tool_name", "name"]).unwrap_or_default(),
             "arguments": serialize_json_argument(value.get("arguments").unwrap_or(&Value::Null)),
         }),
+        Some("reasoning") if has_reasoning_persistence_identity(value) => value.clone(),
         Some("reasoning") => json!({
             "type": "message",
             "role": "assistant",
@@ -833,6 +834,11 @@ fn parse_responses_response(
                         });
                     }
                 }
+                "reasoning" if has_reasoning_persistence_identity(item) => {
+                    output.push(OutputItem::Json {
+                        value: item.clone(),
+                    });
+                }
                 "reasoning" => {
                     let reasoning_text = item
                         .get("summary")
@@ -952,6 +958,27 @@ fn parse_json_maybe_string(value: Option<&Value>) -> Value {
         Some(Value::String(text)) => serde_json::from_str(text).unwrap_or_else(|_| json!(text)),
         Some(other) => other.clone(),
         None => Value::Null,
+    }
+}
+
+fn has_reasoning_persistence_identity(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("reasoning")
+        && (truthy_json_field(value.get("id")) || truthy_json_field(value.get("encrypted_content")))
+}
+
+fn truthy_json_field(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(text)) => !text.is_empty(),
+        Some(Value::Array(values)) => !values.is_empty(),
+        Some(Value::Object(values)) => !values.is_empty(),
+        Some(Value::Bool(value)) => *value,
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .map(|value| value != 0)
+            .or_else(|| number.as_u64().map(|value| value != 0))
+            .or_else(|| number.as_f64().map(|value| value != 0.0))
+            .unwrap_or(true),
+        Some(Value::Null) | None => false,
     }
 }
 
@@ -1406,6 +1433,38 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_preserves_persistable_reasoning_items() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: Some("conv_123".to_owned()),
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "reasoning",
+                        "id": "rs_123",
+                        "summary": [],
+                        "encrypted_content": "encrypted"
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(payload["input"][0]["type"], "reasoning");
+        assert_eq!(payload["input"][0]["id"], "rs_123");
+        assert_eq!(payload["input"][0]["encrypted_content"], "encrypted");
+    }
+
+    #[test]
     fn responses_payload_carries_conversation_tracking_fields() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",
@@ -1487,6 +1546,32 @@ mod tests {
         assert!(matches!(parsed.output[0], OutputItem::Reasoning { .. }));
         assert!(matches!(parsed.output[1], OutputItem::ToolCall { .. }));
         assert!(matches!(parsed.output[2], OutputItem::Text { .. }));
+    }
+
+    #[test]
+    fn parses_responses_reasoning_with_identity_as_raw_json() {
+        let parsed = parse_responses_response(
+            "gpt-5",
+            &json!({
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_123",
+                        "summary": [{"text": "thinking"}],
+                        "encrypted_content": "encrypted"
+                    }
+                ],
+                "id": "resp_123"
+            }),
+            None,
+        );
+
+        let OutputItem::Json { value } = &parsed.output[0] else {
+            panic!("reasoning with persistence identity should stay raw");
+        };
+        assert_eq!(value["type"], "reasoning");
+        assert_eq!(value["id"], "rs_123");
+        assert_eq!(value["encrypted_content"], "encrypted");
     }
 
     #[test]
