@@ -46,6 +46,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | stream text | streamed message text output | [stream_text.rs](../crates/openai-agents/examples/stream_text.rs) |
 | streamed run | live events and completion | [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) |
 | tool guardrails | function-tool input and output guardrails | [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs) |
+| tool search | hosted tool search with namespaces and top-level deferred tools | [tool_search.rs](../crates/openai-agents/examples/tool_search.rs) |
 | usage tracking | token usage from a completed run | [usage_tracking.rs](../crates/openai-agents/examples/usage_tracking.rs) |
 | realtime session | long-lived realtime interaction | [realtime_session.rs](../crates/openai-agents/examples/realtime_session.rs) |
 | remote image | remote image input item by URL | [remote_image.rs](../crates/openai-agents/examples/remote_image.rs) |

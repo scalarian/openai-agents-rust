@@ -46,6 +46,7 @@ cargo run -p openai-agents-rs --example stream_items
 cargo run -p openai-agents-rs --example stream_text
 cargo run -p openai-agents-rs --example streamed_run
 cargo run -p openai-agents-rs --example tool_guardrails
+cargo run -p openai-agents-rs --example tool_search
 cargo run -p openai-agents-rs --example usage_tracking
 cargo run -p openai-agents-rs --example realtime_session
 cargo run -p openai-agents-rs --example remote_image
@@ -99,6 +100,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `stream_text` | streamed message text output | [docs/streaming.md](../docs/streaming.md) |
 | `streamed_run` | live streamed execution with `run_streamed` | [docs/streaming.md](../docs/streaming.md) |
 | `tool_guardrails` | input and output guardrails around function tools | [docs/guardrails.md](../docs/guardrails.md) |
+| `tool_search` | hosted tool search with namespaces and top-level deferred tools | [docs/tools.md](../docs/tools.md) |
 | `usage_tracking` | token usage from a completed run | [docs/usage.md](../docs/usage.md) |
 | `realtime_session` | a long-lived realtime session with live text interaction | [docs/realtime/README.md](../docs/realtime/README.md) |
 | `remote_image` | remote image input item by URL | [docs/agents.md](../docs/agents.md) |
