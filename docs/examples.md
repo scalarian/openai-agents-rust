@@ -131,6 +131,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | sandbox dataroom metric extract | sandboxed synthetic 10-K metric extraction into verified JSONL output | [sandbox_dataroom_metric_extract.rs](../crates/openai-agents/examples/sandbox_dataroom_metric_extract.rs) |
 | sandbox dataroom QA | sandboxed synthetic 10-K question answering with cited source anchors | [sandbox_dataroom_qa.rs](../crates/openai-agents/examples/sandbox_dataroom_qa.rs) |
 | sandbox handoffs | sandbox-backed handoff workflow across specialist agents | [sandbox_handoffs.rs](../crates/openai-agents/examples/sandbox_handoffs.rs) |
+| sandbox healthcare support | sandboxed healthcare eligibility workflow with approval-gated human queue routing | [sandbox_healthcare_support.rs](../crates/openai-agents/examples/sandbox_healthcare_support.rs) |
 | sandbox memory | sandbox session memory restored across runs | [sandbox_memory.rs](../crates/openai-agents/examples/sandbox_memory.rs) |
 | sandbox memory multi-agent | shared sandbox session with separate agent memory namespaces | [sandbox_memory_multi_agent.rs](../crates/openai-agents/examples/sandbox_memory_multi_agent.rs) |
 | sandbox memory S3 | persistent sandbox memory layout mirrored to workspace files | [sandbox_memory_s3.rs](../crates/openai-agents/examples/sandbox_memory_s3.rs) |
