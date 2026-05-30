@@ -235,6 +235,55 @@ impl From<RealtimeCustomVoice> for RealtimeVoice {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RealtimeMaxOutputTokens {
+    Count(u32),
+    Infinite,
+}
+
+impl RealtimeMaxOutputTokens {
+    pub fn count(value: u32) -> Self {
+        Self::Count(value)
+    }
+
+    pub fn infinite() -> Self {
+        Self::Infinite
+    }
+}
+
+impl Serialize for RealtimeMaxOutputTokens {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Count(value) => serializer.serialize_u32(*value),
+            Self::Infinite => serializer.serialize_str("inf"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RealtimeMaxOutputTokens {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match Value::deserialize(deserializer)? {
+            Value::Number(value) => value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .map(Self::Count)
+                .ok_or_else(|| {
+                    serde::de::Error::custom("max_output_tokens must be a non-negative integer")
+                }),
+            Value::String(value) if value == "inf" => Ok(Self::Infinite),
+            _ => Err(serde::de::Error::custom(
+                "max_output_tokens must be an integer or \"inf\"",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeAudioOutputConfig {
     pub format: Option<RealtimeAudioFormat>,
@@ -375,6 +424,7 @@ pub struct RealtimeSessionModelSettings {
     pub audio: Option<RealtimeAudioConfig>,
     pub voice: Option<RealtimeVoice>,
     pub speed: Option<f32>,
+    pub max_output_tokens: Option<RealtimeMaxOutputTokens>,
     pub input_audio_format: Option<RealtimeAudioFormat>,
     pub output_audio_format: Option<RealtimeAudioFormat>,
     pub input_audio_transcription: Option<RealtimeInputAudioTranscriptionConfig>,
@@ -465,6 +515,10 @@ impl RealtimeSessionModelSettings {
                 (Some(current), None) => Some(current.clone()),
                 (None, None) => None,
             },
+            max_output_tokens: update
+                .max_output_tokens
+                .clone()
+                .or_else(|| self.max_output_tokens.clone()),
             voice: if update.clear_voice {
                 None
             } else {

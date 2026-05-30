@@ -253,6 +253,12 @@ impl OpenAIRealtimeWebSocketModel {
                 serde_json::json!(output_modalities),
             );
         }
+        if let Some(max_output_tokens) = &settings.max_output_tokens {
+            session.insert(
+                "max_output_tokens".to_owned(),
+                serde_json::to_value(max_output_tokens).unwrap_or(Value::Null),
+            );
+        }
         if let Some(tool_choice) = &settings.tool_choice {
             session.insert("tool_choice".to_owned(), Value::String(tool_choice.clone()));
         }
@@ -598,6 +604,31 @@ mod tests {
 
         let transcription = serde_json::json!({ "type": "transcription" });
         assert!(OpenAIRealtimeWebSocketModel::normalize_session_payload(&transcription).is_none());
+    }
+
+    #[test]
+    fn session_payload_passes_max_output_tokens() {
+        let model = OpenAIRealtimeWebSocketModel::default();
+        let payload = model.session_payload_from_settings(&RealtimeSessionModelSettings {
+            max_output_tokens: Some(crate::RealtimeMaxOutputTokens::count(256)),
+            ..RealtimeSessionModelSettings::default()
+        });
+        assert_eq!(
+            payload.get("max_output_tokens"),
+            Some(&serde_json::json!(256))
+        );
+
+        let payload = model.session_payload_from_settings(&RealtimeSessionModelSettings {
+            max_output_tokens: Some(crate::RealtimeMaxOutputTokens::infinite()),
+            ..RealtimeSessionModelSettings::default()
+        });
+        assert_eq!(
+            payload.get("max_output_tokens"),
+            Some(&serde_json::json!("inf"))
+        );
+
+        let payload = model.session_payload_from_settings(&RealtimeSessionModelSettings::default());
+        assert!(payload.get("max_output_tokens").is_none());
     }
 
     #[tokio::test]

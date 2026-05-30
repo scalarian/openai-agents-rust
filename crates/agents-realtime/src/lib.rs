@@ -23,8 +23,8 @@ pub use config::{
     RealtimeAudioConfig, RealtimeAudioInputConfig, RealtimeAudioOutputConfig,
     RealtimeClientMessage, RealtimeCustomVoice, RealtimeGuardrailsSettings,
     RealtimeInputAudioNoiseReductionConfig, RealtimeInputAudioTranscriptionConfig,
-    RealtimeModelTracingConfig, RealtimeRunConfig, RealtimeSessionModelSettings,
-    RealtimeTurnDetectionConfig, RealtimeVoice,
+    RealtimeMaxOutputTokens, RealtimeModelTracingConfig, RealtimeRunConfig,
+    RealtimeSessionModelSettings, RealtimeTurnDetectionConfig, RealtimeVoice,
 };
 pub use events::{
     RealtimeAgentEndEvent, RealtimeAgentStartEvent, RealtimeErrorEvent, RealtimeEvent,
