@@ -33,6 +33,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | prompt template | static and dynamic reusable prompt config | [prompt_template.rs](../crates/openai-agents/examples/prompt_template.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
 | sqlite session | SQLite-backed conversation memory | [sqlite_session.rs](../crates/openai-agents/examples/sqlite_session.rs) |
+| stream function call args | streamed tool-call argument items | [stream_function_call_args.rs](../crates/openai-agents/examples/stream_function_call_args.rs) |
 | stream items | streamed run-item events for tool calls and messages | [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) |
 | streamed run | live events and completion | [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) |
 | tool guardrails | function-tool input and output guardrails | [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs) |
