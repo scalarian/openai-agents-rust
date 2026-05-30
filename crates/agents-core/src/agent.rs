@@ -841,6 +841,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn mcp_tool_filter(mut self, filter: ToolFilter) -> Self {
+        self.agent.mcp_tool_filter = Some(filter);
+        self
+    }
+
     pub fn hooks(mut self, hooks: SharedAgentHooks) -> Self {
         self.agent.hooks = Some(hooks);
         self
