@@ -1811,10 +1811,10 @@ mod tests {
     use crate::lifecycle::{AgentHooks, RunHooks};
     use crate::memory::SessionSettings;
     use crate::model::Model;
-    use crate::run_config::ReasoningItemIdPolicy;
+    use crate::run_config::{ReasoningItemIdPolicy, ToolNotFoundBehavior};
     use crate::run_context::{RunContext, RunContextWrapper};
     use crate::session::MemorySession;
-    use crate::tool::function_tool;
+    use crate::tool::{ToolOutput, function_tool};
 
     use super::*;
 
@@ -1969,6 +1969,61 @@ mod tests {
     impl ModelProvider for StaticProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
+        }
+    }
+
+    #[derive(Clone)]
+    struct TwoTurnModel {
+        first_output: Vec<OutputItem>,
+        final_text: String,
+        calls: Arc<Mutex<usize>>,
+        seen_inputs: Arc<Mutex<Vec<Vec<InputItem>>>>,
+    }
+
+    impl TwoTurnModel {
+        fn new(first_output: Vec<OutputItem>, final_text: impl Into<String>) -> Self {
+            Self {
+                first_output,
+                final_text: final_text.into(),
+                calls: Arc::new(Mutex::new(0)),
+                seen_inputs: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn seen_inputs(&self) -> Vec<Vec<InputItem>> {
+            self.seen_inputs
+                .lock()
+                .expect("two-turn model inputs lock")
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl Model for TwoTurnModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.seen_inputs
+                .lock()
+                .expect("two-turn model inputs lock")
+                .push(request.input.clone());
+
+            let mut calls = self.calls.lock().expect("two-turn model calls lock");
+            *calls += 1;
+
+            let output = if *calls == 1 {
+                self.first_output.clone()
+            } else {
+                vec![OutputItem::Text {
+                    text: self.final_text.clone(),
+                }]
+            };
+
+            Ok(ModelResponse {
+                model: request.model,
+                output,
+                usage: Usage::default(),
+                response_id: Some(format!("resp-two-turn-{calls}")),
+                request_id: Some(format!("req-two-turn-{calls}")),
+            })
         }
     }
 
@@ -2360,6 +2415,20 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct RawToolOutputRecorder {
+        output: Arc<Mutex<Option<ToolOutput>>>,
+    }
+
+    impl RawToolOutputRecorder {
+        fn output(&self) -> Option<ToolOutput> {
+            self.output
+                .lock()
+                .expect("raw tool output recorder lock")
+                .clone()
+        }
+    }
+
     #[async_trait]
     impl RunHooks for HookRecorder {
         async fn on_llm_start(
@@ -2412,7 +2481,7 @@ mod tests {
             _context: &crate::run_context::RunContextWrapper,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
-            _result: &str,
+            _result: &ToolOutput,
         ) {
             self.bump("run.tool_end");
         }
@@ -2447,7 +2516,7 @@ mod tests {
             _context: &crate::run_context::RunContextWrapper,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
-            _result: &str,
+            _result: &ToolOutput,
         ) {
             self.bump("agent.tool_end");
         }
@@ -2469,6 +2538,32 @@ mod tests {
             _response: &ModelResponse,
         ) {
             self.bump("agent.llm_end");
+        }
+    }
+
+    #[async_trait]
+    impl RunHooks for RawToolOutputRecorder {
+        async fn on_tool_end(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+            result: &ToolOutput,
+        ) {
+            *self.output.lock().expect("raw tool output recorder lock") = Some(result.clone());
+        }
+    }
+
+    #[async_trait]
+    impl AgentHooks for RawToolOutputRecorder {
+        async fn on_tool_end(
+            &self,
+            _context: &crate::run_context::RunContextWrapper,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+            result: &ToolOutput,
+        ) {
+            *self.output.lock().expect("raw tool output recorder lock") = Some(result.clone());
         }
     }
 
@@ -2522,10 +2617,31 @@ mod tests {
         }
     }
 
+    fn tool_call_output_text(input: &[InputItem], call_id: &str) -> Option<String> {
+        input.iter().find_map(|item| match item {
+            InputItem::Json { value } => (value.get("type").and_then(Value::as_str)
+                == Some("tool_call_output")
+                && value.get("call_id").and_then(Value::as_str) == Some(call_id))
+            .then(|| {
+                value
+                    .get("output")
+                    .and_then(Value::as_object)
+                    .and_then(|output| output.get("text"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .flatten(),
+            InputItem::Text { .. } => None,
+        })
+    }
+
     #[derive(Debug, Deserialize, JsonSchema)]
     struct SearchArgs {
         query: String,
     }
+
+    #[derive(Debug, Deserialize, JsonSchema)]
+    struct NoArgs {}
 
     #[derive(Debug, Deserialize, Serialize, JsonSchema)]
     struct StructuredAnswer {
@@ -2600,6 +2716,162 @@ mod tests {
         }));
         assert_eq!(result.usage.input_tokens, 22);
         assert_eq!(result.usage.output_tokens, 11);
+    }
+
+    #[tokio::test]
+    async fn tool_not_found_behavior_returns_error_to_model() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::ToolCall {
+                call_id: "call-missing".to_owned(),
+                tool_name: "missing_tool".to_owned(),
+                arguments: json!({}),
+                namespace: None,
+            }],
+            "recovered",
+        ));
+        let agent = Agent::builder("assistant").build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .with_config(RunConfig {
+                tool_not_found_behavior: ToolNotFoundBehavior::ReturnErrorToModel,
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("missing tool should be returned to the model");
+
+        assert_eq!(result.final_output.as_deref(), Some("recovered"));
+        let seen_inputs = model.seen_inputs();
+        assert_eq!(
+            tool_call_output_text(&seen_inputs[1], "call-missing").as_deref(),
+            Some("Tool 'missing_tool' not found.")
+        );
+        assert!(result.new_items.iter().any(|item| {
+            matches!(
+                item,
+                RunItem::ToolCallOutput {
+                    tool_name,
+                    output: OutputItem::Text { text },
+                    call_id,
+                    ..
+                } if tool_name == "missing_tool"
+                    && text == "Tool 'missing_tool' not found."
+                    && call_id.as_deref() == Some("call-missing")
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn tool_not_found_behavior_uses_tool_error_formatter() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::ToolCall {
+                call_id: "call-missing".to_owned(),
+                tool_name: "missing_tool".to_owned(),
+                arguments: json!({}),
+                namespace: None,
+            }],
+            "recovered",
+        ));
+        let seen_kinds = Arc::new(Mutex::new(Vec::new()));
+        let formatter_kinds = seen_kinds.clone();
+        let agent = Agent::builder("assistant").build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .with_config(RunConfig {
+                tool_not_found_behavior: ToolNotFoundBehavior::ReturnErrorToModel,
+                tool_error_formatter: Some(Arc::new(move |args| {
+                    formatter_kinds
+                        .lock()
+                        .expect("formatter kinds lock")
+                        .push(args.kind.to_owned());
+                    async move {
+                        Ok(Some(format!(
+                            "{} unavailable for {}",
+                            args.tool_name, args.call_id
+                        )))
+                    }
+                    .boxed()
+                })),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("missing tool should be returned to the model");
+
+        assert_eq!(result.final_output.as_deref(), Some("recovered"));
+        assert_eq!(
+            seen_kinds.lock().expect("formatter kinds lock").as_slice(),
+            ["tool_not_found"]
+        );
+        let seen_inputs = model.seen_inputs();
+        assert_eq!(
+            tool_call_output_text(&seen_inputs[1], "call-missing").as_deref(),
+            Some("missing_tool unavailable for call-missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_not_found_behavior_handles_mixed_function_tool_calls() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![
+                OutputItem::ToolCall {
+                    call_id: "call-missing".to_owned(),
+                    tool_name: "missing_tool".to_owned(),
+                    arguments: json!({}),
+                    namespace: None,
+                },
+                OutputItem::ToolCall {
+                    call_id: "call-known".to_owned(),
+                    tool_name: "known_tool".to_owned(),
+                    arguments: json!({}),
+                    namespace: None,
+                },
+            ],
+            "done",
+        ));
+        let invocations = Arc::new(Mutex::new(0usize));
+        let invocation_count = invocations.clone();
+        let known_tool = function_tool("known_tool", "Known tool", move |_ctx, _args: NoArgs| {
+            let invocation_count = invocation_count.clone();
+            async move {
+                *invocation_count.lock().expect("known tool invocation lock") += 1;
+                Ok::<_, AgentsError>("known result")
+            }
+        })
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(known_tool)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .with_config(RunConfig {
+                tool_not_found_behavior: ToolNotFoundBehavior::ReturnErrorToModel,
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("mixed tool calls should continue");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(*invocations.lock().expect("known tool invocation lock"), 1);
+        let seen_inputs = model.seen_inputs();
+        assert_eq!(
+            tool_call_output_text(&seen_inputs[1], "call-missing").as_deref(),
+            Some("Tool 'missing_tool' not found.")
+        );
+        assert_eq!(
+            tool_call_output_text(&seen_inputs[1], "call-known").as_deref(),
+            Some("known result")
+        );
     }
 
     #[tokio::test]
@@ -4581,6 +4853,60 @@ mod tests {
         assert_eq!(agent_hooks.count("agent.llm_end"), 2);
         assert_eq!(agent_hooks.count("agent.tool_start"), 1);
         assert_eq!(agent_hooks.count("agent.tool_end"), 1);
+    }
+
+    #[tokio::test]
+    async fn tool_end_hooks_receive_raw_function_tool_output() {
+        let metadata = json!({"status":"ok","count":1});
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::ToolCall {
+                call_id: "call-metadata".to_owned(),
+                tool_name: "get_metadata".to_owned(),
+                arguments: json!({}),
+                namespace: None,
+            }],
+            "done",
+        ));
+        let tool_metadata = metadata.clone();
+        let metadata_tool = function_tool(
+            "get_metadata",
+            "Get metadata",
+            move |_ctx, _args: NoArgs| {
+                let tool_metadata = tool_metadata.clone();
+                async move { Ok::<_, AgentsError>(tool_metadata) }
+            },
+        )
+        .expect("function tool should build");
+        let run_hooks = Arc::new(RawToolOutputRecorder::default());
+        let agent_hooks = Arc::new(RawToolOutputRecorder::default());
+        let agent = Agent::builder("assistant")
+            .function_tool(metadata_tool)
+            .hooks(agent_hooks.clone())
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .with_config(RunConfig {
+                run_hooks: Some(run_hooks.clone()),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            run_hooks.output(),
+            Some(ToolOutput::Json {
+                value: metadata.clone()
+            })
+        );
+        assert_eq!(
+            agent_hooks.output(),
+            Some(ToolOutput::Json { value: metadata })
+        );
     }
 
     #[tokio::test]

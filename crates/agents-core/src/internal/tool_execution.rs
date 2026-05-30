@@ -2,7 +2,7 @@ use crate::agent::Agent;
 use crate::errors::Result;
 use crate::exceptions::{ModelBehaviorError, UserError};
 use crate::items::{OutputItem, RunItem};
-use crate::run_config::RunConfig;
+use crate::run_config::{RunConfig, ToolErrorFormatterArgs, ToolNotFoundBehavior};
 use crate::run_context::{ApprovalRecord, RunContextWrapper};
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
 use crate::tool::{FunctionToolResult, Tool, ToolOutput, default_tool_error_function};
@@ -40,18 +40,30 @@ pub(crate) async fn execute_local_function_tools(
     let mut interruptions = Vec::new();
 
     for tool_call in tool_calls {
-        let function_tool = runtime_tools
-            .iter()
-            .find(|tool| {
-                tool.definition.name == tool_call.name
-                    && tool.definition.namespace.as_deref() == tool_call.namespace.as_deref()
-            })
-            .ok_or_else(|| ModelBehaviorError {
+        let Some(function_tool) = runtime_tools.iter().find(|tool| {
+            tool.definition.name == tool_call.name
+                && tool.definition.namespace.as_deref() == tool_call.namespace.as_deref()
+        }) else {
+            if run_config.tool_not_found_behavior == ToolNotFoundBehavior::ReturnErrorToModel {
+                let message =
+                    resolve_tool_not_found_message(context, run_config, &tool_call).await?;
+                new_items.push(RunItem::ToolCallOutput {
+                    tool_name: tool_call.name,
+                    output: OutputItem::Text { text: message },
+                    call_id: Some(tool_call.id),
+                    namespace: tool_call.namespace,
+                });
+                continue;
+            }
+
+            return Err(ModelBehaviorError {
                 message: format!(
                     "model requested unknown local function tool `{}`",
                     tool_call.name
                 ),
-            })?;
+            }
+            .into());
+        };
 
         let tool_context = ToolContext::from_tool_call(context, tool_call.clone())
             .with_agent(agent.clone())
@@ -292,22 +304,12 @@ pub(crate) async fn execute_local_function_tools(
         });
         if let Some(hooks) = &run_config.run_hooks {
             hooks
-                .on_tool_end(
-                    context,
-                    agent,
-                    &function_tool.definition,
-                    output_text.as_deref().unwrap_or_default(),
-                )
+                .on_tool_end(context, agent, &function_tool.definition, &output)
                 .await;
         }
         if let Some(hooks) = &agent.hooks {
             hooks
-                .on_tool_end(
-                    context,
-                    agent,
-                    &function_tool.definition,
-                    output_text.as_deref().unwrap_or_default(),
-                )
+                .on_tool_end(context, agent, &function_tool.definition, &output)
                 .await;
         }
         if let SpanData::Function(data) = &mut span.data {
@@ -353,6 +355,29 @@ fn approval_matches_tool_call(
         && interruption.call_id.as_deref() == Some(tool_call.id.as_str())
         && interruption.tool_name.as_deref() == Some(tool_call.name.as_str())
         && interruption.namespace == tool_call.namespace
+}
+
+async fn resolve_tool_not_found_message(
+    context: &RunContextWrapper,
+    run_config: &RunConfig,
+    tool_call: &ToolCall,
+) -> Result<String> {
+    let default_message = format!("Tool '{}' not found.", tool_call.name);
+    let Some(formatter) = &run_config.tool_error_formatter else {
+        return Ok(default_message);
+    };
+
+    let formatted = formatter(ToolErrorFormatterArgs {
+        kind: "tool_not_found",
+        tool_type: "function",
+        tool_name: tool_call.name.clone(),
+        call_id: tool_call.id.clone(),
+        default_message: default_message.clone(),
+        run_context: context.clone(),
+    })
+    .await?;
+
+    Ok(formatted.unwrap_or(default_message))
 }
 
 pub(crate) fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {

@@ -157,7 +157,7 @@ pub use run::{
 };
 pub use run_config::{
     CallModelData, DEFAULT_MAX_TURNS, ModelInputData, ReasoningItemIdPolicy, RunConfig, RunOptions,
-    SessionInputCallback, ToolErrorFormatter, ToolErrorFormatterArgs,
+    SessionInputCallback, ToolErrorFormatter, ToolErrorFormatterArgs, ToolNotFoundBehavior,
 };
 pub use run_context::{AgentHookContext, ApprovalRecord, RunContext, RunContextWrapper};
 pub use run_error_handlers::{

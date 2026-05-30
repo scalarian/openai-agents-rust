@@ -40,6 +40,14 @@ pub enum ReasoningItemIdPolicy {
     Omit,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolNotFoundBehavior {
+    #[default]
+    RaiseError,
+    ReturnErrorToModel,
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolErrorFormatterArgs<TContext = RunContext> {
     pub kind: &'static str,
@@ -85,6 +93,7 @@ pub struct RunConfig {
     pub tracing: Option<TracingConfig>,
     pub model_settings: Option<ModelSettings>,
     pub sandbox: Option<SandboxRunConfig>,
+    pub tool_not_found_behavior: ToolNotFoundBehavior,
     #[serde(skip, default)]
     pub sandbox_resume_state: Option<crate::sandbox::SandboxRunState>,
     pub session_settings: Option<SessionSettings>,
@@ -132,6 +141,7 @@ impl std::fmt::Debug for RunConfig {
             .field("tracing", &self.tracing)
             .field("model_settings", &self.model_settings)
             .field("sandbox", &self.sandbox)
+            .field("tool_not_found_behavior", &self.tool_not_found_behavior)
             .field(
                 "sandbox_resume_state",
                 &self
@@ -203,6 +213,7 @@ impl Default for RunConfig {
             tracing: None,
             model_settings: None,
             sandbox: None,
+            tool_not_found_behavior: ToolNotFoundBehavior::RaiseError,
             sandbox_resume_state: None,
             session_settings: None,
             model_provider: None,

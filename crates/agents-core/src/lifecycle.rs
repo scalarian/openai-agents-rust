@@ -5,7 +5,7 @@ use crate::agent::Agent;
 use crate::items::InputItem;
 use crate::model::ModelResponse;
 use crate::run_context::{AgentHookContext, RunContext, RunContextWrapper};
-use crate::tool::ToolDefinition;
+use crate::tool::{ToolDefinition, ToolOutput};
 
 #[async_trait]
 pub trait RunHooks<TContext = RunContext>: Send + Sync {
@@ -57,7 +57,7 @@ pub trait RunHooks<TContext = RunContext>: Send + Sync {
         _context: &RunContextWrapper<TContext>,
         _agent: &Agent,
         _tool: &ToolDefinition,
-        _result: &str,
+        _result: &ToolOutput,
     ) {
     }
 }
@@ -95,7 +95,7 @@ pub trait AgentHooks<TContext = RunContext>: Send + Sync {
         _context: &RunContextWrapper<TContext>,
         _agent: &Agent,
         _tool: &ToolDefinition,
-        _result: &str,
+        _result: &ToolOutput,
     ) {
     }
 
