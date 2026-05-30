@@ -92,6 +92,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | mcp SSE example | upstream-named MCP SSE transport entry point | [mcp_sse_example.rs](../crates/openai-agents/examples/mcp_sse_example.rs) |
 | mcp SSE | MCP SSE transport configuration with mocked tools | [mcp_sse.rs](../crates/openai-agents/examples/mcp_sse.rs) |
 | mcp SSE remote example | upstream-named MCP remote SSE transport entry point | [mcp_sse_remote_example.rs](../crates/openai-agents/examples/mcp_sse_remote_example.rs) |
+| mcp SSE remote | remote MCP SSE transport configuration with local fallback | [mcp_sse_remote.rs](../crates/openai-agents/examples/mcp_sse_remote.rs) |
 | mcp streamable HTTP custom client example | upstream-named MCP streamable HTTP custom client entry point | [mcp_streamablehttp_custom_client_example.rs](../crates/openai-agents/examples/mcp_streamablehttp_custom_client_example.rs) |
 | mcp streamable HTTP example | upstream-named MCP streamable HTTP entry point | [mcp_streamablehttp_example.rs](../crates/openai-agents/examples/mcp_streamablehttp_example.rs) |
 | mcp streamable HTTP remote example | upstream-named MCP remote streamable HTTP entry point | [mcp_streamable_http_remote_example.rs](../crates/openai-agents/examples/mcp_streamable_http_remote_example.rs) |
