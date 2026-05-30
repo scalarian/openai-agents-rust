@@ -206,8 +206,8 @@ pub use tracing::{
     TranscriptionSpanData, TurnSpanData, add_trace_processor, agent_span, custom_span,
     flush_traces, function_span, gen_group_id, gen_span_id, gen_trace_id, generation_span,
     get_current_span, get_current_trace, guardrail_span, handoff_span, mcp_tools_span,
-    set_trace_processors, set_trace_provider, set_tracing_disabled, speech_group_span, speech_span,
-    task_span, trace, transcription_span, turn_span,
+    response_span, set_trace_processors, set_trace_provider, set_tracing_disabled,
+    speech_group_span, speech_span, task_span, trace, transcription_span, turn_span,
 };
 pub use usage::Usage;
 pub use util::{
