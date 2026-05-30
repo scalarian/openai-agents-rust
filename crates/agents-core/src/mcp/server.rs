@@ -474,6 +474,8 @@ pub struct MCPServerStdio {
     pub params: MCPServerStdioParams,
     require_approval: Option<RequireApprovalSetting>,
     connected: Arc<AtomicBool>,
+    tools: Arc<Mutex<Vec<MCPTool>>>,
+    tool_outputs: Arc<Mutex<HashMap<String, ToolOutput>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
@@ -496,6 +498,8 @@ impl MCPServerStdio {
             params,
             require_approval: None,
             connected: Arc::new(AtomicBool::new(false)),
+            tools: Arc::new(Mutex::new(Vec::new())),
+            tool_outputs: Arc::new(Mutex::new(HashMap::new())),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
@@ -510,6 +514,16 @@ impl MCPServerStdio {
         require_approval.validate()?;
         self.require_approval = Some(require_approval);
         Ok(self)
+    }
+
+    pub fn with_tools(mut self, tools: Vec<MCPTool>) -> Self {
+        self.tools = Arc::new(Mutex::new(tools));
+        self
+    }
+
+    pub fn with_tool_outputs(mut self, tool_outputs: HashMap<String, ToolOutput>) -> Self {
+        self.tool_outputs = Arc::new(Mutex::new(tool_outputs));
+        self
     }
 
     pub fn with_resources(mut self, resources: Vec<MCPResource>) -> Self {
@@ -563,7 +577,7 @@ impl MCPServer for MCPServerStdio {
     }
 
     async fn list_tools(&self) -> Result<Vec<MCPTool>> {
-        Ok(Vec::new())
+        Ok(self.tools.lock().await.clone())
     }
 
     async fn call_tool(
@@ -572,7 +586,13 @@ impl MCPServer for MCPServerStdio {
         _arguments: Value,
         _meta: Option<Value>,
     ) -> Result<ToolOutput> {
-        Ok(ToolOutput::from(format!("mcp:{tool_name}")))
+        Ok(self
+            .tool_outputs
+            .lock()
+            .await
+            .get(tool_name)
+            .cloned()
+            .unwrap_or_else(|| ToolOutput::from(format!("mcp:{tool_name}"))))
     }
 
     async fn list_resources(&self, _cursor: Option<String>) -> Result<MCPListResourcesResult> {
@@ -617,6 +637,8 @@ pub struct MCPServerSse {
     connected: Arc<AtomicBool>,
     client_builder: Option<MCPTransportClientBuilder>,
     current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
+    tools: Arc<Mutex<Vec<MCPTool>>>,
+    tool_outputs: Arc<Mutex<HashMap<String, ToolOutput>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
@@ -641,6 +663,8 @@ impl MCPServerSse {
             connected: Arc::new(AtomicBool::new(false)),
             client_builder: None,
             current_client: Arc::new(StdMutex::new(None)),
+            tools: Arc::new(Mutex::new(Vec::new())),
+            tool_outputs: Arc::new(Mutex::new(HashMap::new())),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
@@ -659,6 +683,16 @@ impl MCPServerSse {
 
     pub fn with_client_builder(mut self, client_builder: MCPTransportClientBuilder) -> Self {
         self.client_builder = Some(client_builder);
+        self
+    }
+
+    pub fn with_tools(mut self, tools: Vec<MCPTool>) -> Self {
+        self.tools = Arc::new(Mutex::new(tools));
+        self
+    }
+
+    pub fn with_tool_outputs(mut self, tool_outputs: HashMap<String, ToolOutput>) -> Self {
+        self.tool_outputs = Arc::new(Mutex::new(tool_outputs));
         self
     }
 
@@ -751,7 +785,7 @@ impl MCPServer for MCPServerSse {
     }
 
     async fn list_tools(&self) -> Result<Vec<MCPTool>> {
-        Ok(Vec::new())
+        Ok(self.tools.lock().await.clone())
     }
 
     async fn call_tool(
@@ -760,7 +794,13 @@ impl MCPServer for MCPServerSse {
         _arguments: Value,
         _meta: Option<Value>,
     ) -> Result<ToolOutput> {
-        Ok(ToolOutput::from(format!("mcp:{tool_name}")))
+        Ok(self
+            .tool_outputs
+            .lock()
+            .await
+            .get(tool_name)
+            .cloned()
+            .unwrap_or_else(|| ToolOutput::from(format!("mcp:{tool_name}"))))
     }
 
     async fn list_resources(&self, _cursor: Option<String>) -> Result<MCPListResourcesResult> {
@@ -805,6 +845,8 @@ pub struct MCPServerStreamableHttp {
     connected: Arc<AtomicBool>,
     client_builder: Option<MCPTransportClientBuilder>,
     current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
+    tools: Arc<Mutex<Vec<MCPTool>>>,
+    tool_outputs: Arc<Mutex<HashMap<String, ToolOutput>>>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
@@ -829,6 +871,8 @@ impl MCPServerStreamableHttp {
             connected: Arc::new(AtomicBool::new(false)),
             client_builder: None,
             current_client: Arc::new(StdMutex::new(None)),
+            tools: Arc::new(Mutex::new(Vec::new())),
+            tool_outputs: Arc::new(Mutex::new(HashMap::new())),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
@@ -847,6 +891,16 @@ impl MCPServerStreamableHttp {
 
     pub fn with_client_builder(mut self, client_builder: MCPTransportClientBuilder) -> Self {
         self.client_builder = Some(client_builder);
+        self
+    }
+
+    pub fn with_tools(mut self, tools: Vec<MCPTool>) -> Self {
+        self.tools = Arc::new(Mutex::new(tools));
+        self
+    }
+
+    pub fn with_tool_outputs(mut self, tool_outputs: HashMap<String, ToolOutput>) -> Self {
+        self.tool_outputs = Arc::new(Mutex::new(tool_outputs));
         self
     }
 
@@ -947,7 +1001,7 @@ impl MCPServer for MCPServerStreamableHttp {
     }
 
     async fn list_tools(&self) -> Result<Vec<MCPTool>> {
-        Ok(Vec::new())
+        Ok(self.tools.lock().await.clone())
     }
 
     async fn call_tool(
@@ -956,7 +1010,13 @@ impl MCPServer for MCPServerStreamableHttp {
         _arguments: Value,
         _meta: Option<Value>,
     ) -> Result<ToolOutput> {
-        Ok(ToolOutput::from(format!("mcp:{tool_name}")))
+        Ok(self
+            .tool_outputs
+            .lock()
+            .await
+            .get(tool_name)
+            .cloned()
+            .unwrap_or_else(|| ToolOutput::from(format!("mcp:{tool_name}"))))
     }
 
     async fn list_resources(&self, _cursor: Option<String>) -> Result<MCPListResourcesResult> {
@@ -1302,5 +1362,41 @@ mod tests {
                 .to_string()
                 .contains("resource `file:///missing.md` not found")
         );
+    }
+
+    #[tokio::test]
+    async fn streamable_http_tools_can_be_configured_for_transport_examples() {
+        let server = MCPServerStreamableHttp::new(
+            "math",
+            MCPServerStreamableHttpParams {
+                url: "http://localhost:8000/mcp".to_owned(),
+                ..MCPServerStreamableHttpParams::default()
+            },
+        )
+        .with_tools(vec![MCPTool {
+            name: "add".to_owned(),
+            description: Some("Add two numbers.".to_owned()),
+            ..MCPTool::default()
+        }])
+        .with_tool_outputs(HashMap::from([("add".to_owned(), ToolOutput::from("29"))]));
+
+        server.connect().await.expect("connect should succeed");
+
+        let tools = server.list_tools().await.expect("tools should load");
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["add"]
+        );
+
+        let output = server
+            .call_tool("add", serde_json::json!({"a": 7, "b": 22}), None)
+            .await
+            .expect("tool should run");
+        assert_eq!(output, ToolOutput::from("29"));
+
+        server.cleanup().await.expect("cleanup should succeed");
     }
 }
