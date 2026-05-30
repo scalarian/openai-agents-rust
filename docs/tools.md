@@ -7,11 +7,14 @@ Use this page when you want the model to trigger typed behavior instead of only 
 | Tool family | When to use it |
 | --- | --- |
 | function tools | normal Rust functions with typed arguments |
+| custom tools | raw string inputs for Responses custom-tool calls |
 | shell and computer tools | local or hosted execution environments |
 | hosted OpenAI tools | code interpreter, file search, web search, image generation |
 | MCP tools | external tools discovered from MCP servers |
 
 Function tools can return text, JSON, image, or file outputs. See [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) for an image-returning function tool.
+
+Custom tools use one raw string input instead of JSON arguments. Use `custom_tool(...)` when the model should send free-form text such as patches, document edits, or mini-language commands. See [custom_tool.rs](../crates/openai-agents/examples/custom_tool.rs) for a deterministic raw-input example. Custom tools also support approval interruptions and `with_on_approval(...)` callbacks for automatic approval or rejection.
 
 Hosted tools are added as static tools on the agent. For example, [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) configures an auto code interpreter container, [file_search.rs](../crates/openai-agents/examples/file_search.rs) configures vector store search with included results, [image_generator.rs](../crates/openai-agents/examples/image_generator.rs) decodes an image generation result, [tool_search.rs](../crates/openai-agents/examples/tool_search.rs) shows deferred namespace loading, [web_search.rs](../crates/openai-agents/examples/web_search.rs) configures `web_search_tool_with_options(...)` with an approximate user location, and [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) shows domain filters plus source includes.
 
