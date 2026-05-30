@@ -31,6 +31,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | Dapr session example | upstream-named Dapr session entry point | [dapr_session_example.rs](../crates/openai-agents/examples/dapr_session_example.rs) |
 | dapr session | Dapr state-store backed extension session with graceful availability check | [dapr_session.rs](../crates/openai-agents/examples/dapr_session.rs) |
 | default model provider | global default runner model provider | [default_model_provider.rs](../crates/openai-agents/examples/default_model_provider.rs) |
+| deterministic | upstream-named deterministic workflow entry point | [deterministic.rs](../crates/openai-agents/examples/deterministic.rs) |
 | deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
 | dynamic system prompt | per-run agent instructions | [dynamic_system_prompt.rs](../crates/openai-agents/examples/dynamic_system_prompt.rs) |
 | encrypted session example | upstream-named encrypted session entry point | [encrypted_session_example.rs](../crates/openai-agents/examples/encrypted_session_example.rs) |
