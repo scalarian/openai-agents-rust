@@ -33,6 +33,7 @@ agents-realtime = { package = "openai-agents-realtime-rs", version = "0.1.2", pa
 async-trait.workspace = true
 base64.workspace = true
 chacha20poly1305.workspace = true
+mongodb.workspace = true
 rand_core.workspace = true
 redis.workspace = true
 reqwest.workspace = true
