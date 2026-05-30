@@ -157,8 +157,8 @@ pub use retry::{
 };
 pub use run::{
     AgentRunner, Runner, get_default_agent_runner, resume_streamed, resume_streamed_with_agent,
-    run, run_streamed, run_streamed_with_options, run_sync, run_sync_with_options,
-    run_with_options, run_with_session, set_default_agent_runner,
+    resume_with_agent_and_session, run, run_streamed, run_streamed_with_options, run_sync,
+    run_sync_with_options, run_with_options, run_with_session, set_default_agent_runner,
 };
 pub use run_config::{
     CallModelData, DEFAULT_MAX_TURNS, ModelInputData, ReasoningItemIdPolicy, RunConfig, RunOptions,

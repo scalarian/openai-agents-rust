@@ -1384,6 +1384,44 @@ impl Runner {
         self.resume_with_agent_inner(state, agent, None).await
     }
 
+    pub async fn resume_with_agent_and_session(
+        &self,
+        state: &RunState,
+        agent: &Agent,
+        session: &(dyn Session + Sync),
+    ) -> Result<RunResult> {
+        let mut result = self.resume_with_agent_inner(state, agent, None).await?;
+        self.persist_resumed_result_to_session(state, &mut result, session)
+            .await?;
+        Ok(result)
+    }
+
+    async fn persist_resumed_result_to_session(
+        &self,
+        state: &RunState,
+        result: &mut RunResult,
+        session: &(dyn Session + Sync),
+    ) -> Result<()> {
+        internal_agent_runner_helpers::validate_session_conversation_settings(
+            &self.config,
+            session,
+        )?;
+        let replay_items = result.to_input_list();
+        let already_persisted = state.persisted_item_count.min(replay_items.len());
+        let pending_items = replay_items
+            .into_iter()
+            .skip(already_persisted)
+            .collect::<Vec<_>>();
+        let added_count = pending_items.len();
+        if !pending_items.is_empty() {
+            session.add_items(pending_items).await?;
+        }
+        if let Some(run_state) = result.run_state.as_mut() {
+            run_state.persisted_item_count = state.persisted_item_count + added_count;
+        }
+        Ok(())
+    }
+
     async fn resume_with_agent_inner(
         &self,
         state: &RunState,
@@ -1810,6 +1848,16 @@ pub async fn resume_streamed_with_agent(
 ) -> Result<RunResultStreaming> {
     get_default_agent_runner()
         .resume_streamed_with_agent(state, agent)
+        .await
+}
+
+pub async fn resume_with_agent_and_session(
+    state: &RunState,
+    agent: &Agent,
+    session: &(dyn Session + Sync),
+) -> Result<RunResult> {
+    get_default_agent_runner()
+        .resume_with_agent_and_session(state, agent, session)
         .await
 }
 
@@ -3753,6 +3801,76 @@ mod tests {
                     && *tool_origin == ToolOrigin::function()
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn runner_resume_with_agent_and_session_persists_resumed_outputs() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+        let session = MemorySession::new("hitl-session");
+        let runner = Runner::new().with_model_provider(provider);
+
+        let initial = runner
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect("initial run should interrupt");
+        let persisted_before = session.get_items().await.expect("session should load");
+        assert_eq!(
+            initial
+                .durable_state()
+                .map(|state| state.persisted_item_count),
+            Some(persisted_before.len())
+        );
+
+        let mut state = initial
+            .durable_state()
+            .cloned()
+            .expect("state should exist");
+        state.approve_for_tool(
+            "call-1",
+            Some("search".to_owned()),
+            Some("approved".to_owned()),
+        );
+
+        let resumed = runner
+            .resume_with_agent_and_session(&state, &agent, &session)
+            .await
+            .expect("resume should persist");
+        assert_eq!(resumed.final_output.as_deref(), Some("final:result:rust"));
+
+        let persisted_after = session.get_items().await.expect("session should load");
+        assert!(persisted_after.len() > persisted_before.len());
+        assert_eq!(
+            resumed
+                .durable_state()
+                .map(|state| state.persisted_item_count),
+            Some(persisted_after.len())
+        );
+        assert!(persisted_after.iter().any(|item| {
+            matches!(
+                item,
+                InputItem::Json { value }
+                    if value.get("type").and_then(Value::as_str)
+                        == Some("tool_call_output")
+            )
+        }));
+        assert_eq!(
+            persisted_after.last().and_then(InputItem::as_text),
+            Some("final:result:rust")
+        );
     }
 
     #[tokio::test]
