@@ -46,6 +46,8 @@ let _runner = Runner::new();
 - tracing helpers
 - handoff and approval flows that depend on caller state
 
+Tool hooks receive `ToolContext`, which includes the tool name, call id, raw tool arguments, namespace, and the wrapped run context.
+
 ## What Not To Put In Context
 
 - durable conversational history

@@ -2797,6 +2797,30 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct ToolContextRecorder {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ToolContextRecorder {
+        fn record(&self, event: &str, context: &crate::tool_context::ToolContext) {
+            self.events
+                .lock()
+                .expect("tool context recorder lock")
+                .push(format!(
+                    "{}:{}:{}:{}",
+                    event, context.tool_name, context.tool_call_id, context.tool_arguments
+                ));
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .expect("tool context recorder lock")
+                .clone()
+        }
+    }
+
     #[async_trait]
     impl RunHooks for HookRecorder {
         async fn on_llm_start(
@@ -2837,7 +2861,7 @@ mod tests {
 
         async fn on_tool_start(
             &self,
-            _context: &crate::run_context::RunContextWrapper,
+            _context: &crate::tool_context::ToolContext,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
         ) {
@@ -2846,7 +2870,7 @@ mod tests {
 
         async fn on_tool_end(
             &self,
-            _context: &crate::run_context::RunContextWrapper,
+            _context: &crate::tool_context::ToolContext,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
             _result: &ToolOutput,
@@ -2872,7 +2896,7 @@ mod tests {
 
         async fn on_tool_start(
             &self,
-            _context: &crate::run_context::RunContextWrapper,
+            _context: &crate::tool_context::ToolContext,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
         ) {
@@ -2881,7 +2905,7 @@ mod tests {
 
         async fn on_tool_end(
             &self,
-            _context: &crate::run_context::RunContextWrapper,
+            _context: &crate::tool_context::ToolContext,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
             _result: &ToolOutput,
@@ -2913,7 +2937,7 @@ mod tests {
     impl RunHooks for RawToolOutputRecorder {
         async fn on_tool_end(
             &self,
-            _context: &crate::run_context::RunContextWrapper,
+            _context: &crate::tool_context::ToolContext,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
             result: &ToolOutput,
@@ -2926,12 +2950,56 @@ mod tests {
     impl AgentHooks for RawToolOutputRecorder {
         async fn on_tool_end(
             &self,
-            _context: &crate::run_context::RunContextWrapper,
+            _context: &crate::tool_context::ToolContext,
             _agent: &Agent,
             _tool: &crate::tool::ToolDefinition,
             result: &ToolOutput,
         ) {
             *self.output.lock().expect("raw tool output recorder lock") = Some(result.clone());
+        }
+    }
+
+    #[async_trait]
+    impl RunHooks for ToolContextRecorder {
+        async fn on_tool_start(
+            &self,
+            context: &crate::tool_context::ToolContext,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+        ) {
+            self.record("run.start", context);
+        }
+
+        async fn on_tool_end(
+            &self,
+            context: &crate::tool_context::ToolContext,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+            _result: &ToolOutput,
+        ) {
+            self.record("run.end", context);
+        }
+    }
+
+    #[async_trait]
+    impl AgentHooks for ToolContextRecorder {
+        async fn on_tool_start(
+            &self,
+            context: &crate::tool_context::ToolContext,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+        ) {
+            self.record("agent.start", context);
+        }
+
+        async fn on_tool_end(
+            &self,
+            context: &crate::tool_context::ToolContext,
+            _agent: &Agent,
+            _tool: &crate::tool::ToolDefinition,
+            _result: &ToolOutput,
+        ) {
+            self.record("agent.end", context);
         }
     }
 
@@ -5798,6 +5866,52 @@ mod tests {
         assert_eq!(agent_hooks.count("agent.llm_end"), 2);
         assert_eq!(agent_hooks.count("agent.tool_start"), 1);
         assert_eq!(agent_hooks.count("agent.tool_end"), 1);
+    }
+
+    #[tokio::test]
+    async fn tool_hooks_receive_tool_context_metadata() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let run_hooks = Arc::new(ToolContextRecorder::default());
+        let agent_hooks = Arc::new(ToolContextRecorder::default());
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .hooks(agent_hooks.clone())
+            .build();
+
+        Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                run_hooks: Some(run_hooks.clone()),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(
+            run_hooks.events(),
+            vec![
+                r#"run.start:search:call-1:{"query":"rust"}"#.to_owned(),
+                r#"run.end:search:call-1:{"query":"rust"}"#.to_owned(),
+            ]
+        );
+        assert_eq!(
+            agent_hooks.events(),
+            vec![
+                r#"agent.start:search:call-1:{"query":"rust"}"#.to_owned(),
+                r#"agent.end:search:call-1:{"query":"rust"}"#.to_owned(),
+            ]
+        );
     }
 
     #[tokio::test]

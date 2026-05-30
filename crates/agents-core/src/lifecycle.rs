@@ -6,6 +6,7 @@ use crate::items::InputItem;
 use crate::model::ModelResponse;
 use crate::run_context::{AgentHookContext, RunContext, RunContextWrapper};
 use crate::tool::{ToolDefinition, ToolOutput};
+use crate::tool_context::ToolContext;
 
 #[async_trait]
 pub trait RunHooks<TContext = RunContext>: Send + Sync {
@@ -46,7 +47,7 @@ pub trait RunHooks<TContext = RunContext>: Send + Sync {
 
     async fn on_tool_start(
         &self,
-        _context: &RunContextWrapper<TContext>,
+        _context: &ToolContext<TContext>,
         _agent: &Agent,
         _tool: &ToolDefinition,
     ) {
@@ -54,7 +55,7 @@ pub trait RunHooks<TContext = RunContext>: Send + Sync {
 
     async fn on_tool_end(
         &self,
-        _context: &RunContextWrapper<TContext>,
+        _context: &ToolContext<TContext>,
         _agent: &Agent,
         _tool: &ToolDefinition,
         _result: &ToolOutput,
@@ -84,7 +85,7 @@ pub trait AgentHooks<TContext = RunContext>: Send + Sync {
 
     async fn on_tool_start(
         &self,
-        _context: &RunContextWrapper<TContext>,
+        _context: &ToolContext<TContext>,
         _agent: &Agent,
         _tool: &ToolDefinition,
     ) {
@@ -92,7 +93,7 @@ pub trait AgentHooks<TContext = RunContext>: Send + Sync {
 
     async fn on_tool_end(
         &self,
-        _context: &RunContextWrapper<TContext>,
+        _context: &ToolContext<TContext>,
         _agent: &Agent,
         _tool: &ToolDefinition,
         _result: &ToolOutput,

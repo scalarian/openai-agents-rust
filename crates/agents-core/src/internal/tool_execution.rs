@@ -382,12 +382,12 @@ async fn execute_single_function_tool(
     }
     if let Some(hooks) = &run_config.run_hooks {
         hooks
-            .on_tool_start(context, agent, &function_tool.definition)
+            .on_tool_start(&tool_context, agent, &function_tool.definition)
             .await;
     }
     if let Some(hooks) = &agent.hooks {
         hooks
-            .on_tool_start(context, agent, &function_tool.definition)
+            .on_tool_start(&tool_context, agent, &function_tool.definition)
             .await;
     }
     provider.start_span(&mut span, true);
@@ -632,12 +632,12 @@ async fn execute_single_function_tool(
     });
     if let Some(hooks) = &run_config.run_hooks {
         hooks
-            .on_tool_end(context, agent, &function_tool.definition, &output)
+            .on_tool_end(&tool_context, agent, &function_tool.definition, &output)
             .await;
     }
     if let Some(hooks) = &agent.hooks {
         hooks
-            .on_tool_end(context, agent, &function_tool.definition, &output)
+            .on_tool_end(&tool_context, agent, &function_tool.definition, &output)
             .await;
     }
     if let SpanData::Function(data) = &mut span.data {
