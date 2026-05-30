@@ -31,7 +31,7 @@ async fn main() -> Result<(), openai_agents::AgentsError> {
 }
 ```
 
-Runnable versions: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) for a minimal stream and [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) for run-item events around a tool call.
+Runnable versions: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) for a minimal stream, [stream_text.rs](../crates/openai-agents/examples/stream_text.rs) for message text, and [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) for run-item events around a tool call.
 For tool-call arguments, [stream_function_call_args.rs](../crates/openai-agents/examples/stream_function_call_args.rs) shows the `RunItem::ToolCall` event payload.
 For nested agent tools, [agents_as_tools_streaming.rs](../crates/openai-agents/examples/agents_as_tools_streaming.rs) shows `AgentAsToolOptions::on_stream`.
 
