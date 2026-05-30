@@ -1,4 +1,4 @@
-use crate::_tool_identity::is_reserved_synthetic_tool_namespace;
+use crate::_tool_identity::{get_tool_call_trace_name, is_reserved_synthetic_tool_namespace};
 use crate::agent::Agent;
 use crate::errors::Result;
 use crate::exceptions::{ModelBehaviorError, UserError};
@@ -221,7 +221,7 @@ async fn build_tool_execution_plans(
             return Err(ModelBehaviorError {
                 message: format!(
                     "model requested unknown local function tool `{}`",
-                    tool_call.name
+                    tool_call_display_name(&tool_call)
                 ),
             }
             .into());
@@ -1175,7 +1175,8 @@ async fn resolve_tool_not_found_message(
     run_config: &RunConfig,
     tool_call: &ToolCall,
 ) -> Result<String> {
-    let default_message = format!("Tool '{}' not found.", tool_call.name);
+    let tool_name = tool_call_display_name(tool_call);
+    let default_message = format!("Tool '{tool_name}' not found.");
     let Some(formatter) = &run_config.tool_error_formatter else {
         return Ok(default_message);
     };
@@ -1183,7 +1184,7 @@ async fn resolve_tool_not_found_message(
     let formatted = formatter(ToolErrorFormatterArgs {
         kind: "tool_not_found",
         tool_type: "function",
-        tool_name: tool_call.name.clone(),
+        tool_name,
         call_id: tool_call.id.clone(),
         default_message: default_message.clone(),
         run_context: context.clone(),
@@ -1191,6 +1192,10 @@ async fn resolve_tool_not_found_message(
     .await?;
 
     Ok(formatted.unwrap_or(default_message))
+}
+
+fn tool_call_display_name(tool_call: &ToolCall) -> String {
+    get_tool_call_trace_name(tool_call).unwrap_or_else(|| tool_call.name.clone())
 }
 
 pub(crate) fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {
@@ -1748,6 +1753,81 @@ mod tests {
         .await
         .expect("synthetic namespace should route to deferred tool");
         assert_tool_text_outputs(&deferred_outcome.new_items, &["deferred"]);
+    }
+
+    #[tokio::test]
+    async fn namespaced_missing_tool_uses_qualified_not_found_name() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let invocations_for_tool = invocations.clone();
+        let bare_tool = function_tool(
+            "lookup_account",
+            "Bare lookup",
+            move |_ctx, _args: serde_json::Value| {
+                let invocations = invocations_for_tool.clone();
+                async move {
+                    invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>("bare")
+                }
+            },
+        )
+        .expect("bare function tool should build");
+        let agent = Agent::builder("assistant").function_tool(bare_tool).build();
+
+        let error = match execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-billing".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: Some("billing".to_owned()),
+            }],
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(_) => panic!("namespaced call should not fall back to the bare tool"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("model requested unknown local function tool `billing.lookup_account`")
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn tool_not_found_return_error_uses_qualified_name() {
+        let agent = Agent::builder("assistant").build();
+        let run_config = RunConfig {
+            tool_not_found_behavior: ToolNotFoundBehavior::ReturnErrorToModel,
+            ..RunConfig::default()
+        };
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &run_config,
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-billing".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: Some("billing".to_owned()),
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("missing tool should be returned to the model");
+
+        assert_tool_text_outputs(
+            &outcome.new_items,
+            &["Tool 'billing.lookup_account' not found."],
+        );
     }
 
     #[tokio::test]
