@@ -783,7 +783,7 @@ fn apply_chat_model_settings(
         payload.insert("parallel_tool_calls".to_owned(), json!(value));
     }
     if let Some(value) = &settings.tool_choice {
-        payload.insert("tool_choice".to_owned(), Value::String(value.clone()));
+        payload.insert("tool_choice".to_owned(), chat_tool_choice_value(value));
     } else if has_tools {
         payload.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
     }
@@ -795,6 +795,18 @@ fn apply_chat_model_settings(
         payload.insert(key.clone(), value.clone());
     }
     Ok(())
+}
+
+fn chat_tool_choice_value(tool_choice: &str) -> Value {
+    match tool_choice {
+        "auto" | "required" | "none" => Value::String(tool_choice.to_owned()),
+        _ => json!({
+            "type": "function",
+            "function": {
+                "name": tool_choice,
+            },
+        }),
+    }
 }
 
 fn validate_extra_body_keys(
@@ -2075,6 +2087,43 @@ mod tests {
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_converts_named_function_tool_choice() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    tool_choice: Some("search".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("search", "Search")
+                        .with_input_json_schema(json!({"type": "object"})),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("chat payload should build");
+
+        assert_eq!(
+            payload["tool_choice"],
+            json!({
+                "type": "function",
+                "function": {
+                    "name": "search"
+                }
+            })
+        );
     }
 
     #[test]
