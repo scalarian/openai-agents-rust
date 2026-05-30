@@ -7,7 +7,7 @@ use crate::tracing::setup::get_trace_provider;
 use crate::tracing::span_data::{
     AgentSpanData, CustomSpanData, FunctionSpanData, GenerationSpanData, GuardrailSpanData,
     HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, SpanData, SpeechGroupSpanData,
-    SpeechSpanData, TranscriptionSpanData,
+    SpeechSpanData, TaskSpanData, TranscriptionSpanData, TurnSpanData,
 };
 use crate::tracing::{Span, Trace};
 
@@ -90,6 +90,28 @@ pub fn response_span(response_id: Option<String>) -> Span {
     get_trace_provider().create_span(
         "response",
         SpanData::Response(ResponseSpanData { response_id }),
+        None,
+        None,
+        None,
+        false,
+    )
+}
+
+pub fn task_span(name: &str) -> Span {
+    get_trace_provider().create_span(
+        "task",
+        TaskSpanData::new(name).into_span_data(),
+        None,
+        None,
+        None,
+        false,
+    )
+}
+
+pub fn turn_span(turn: usize, agent_name: &str) -> Span {
+    get_trace_provider().create_span(
+        "turn",
+        TurnSpanData::new(turn, agent_name).into_span_data(),
         None,
         None,
         None,

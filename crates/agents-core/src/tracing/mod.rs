@@ -20,7 +20,7 @@ pub use context::{TraceCtxManager, create_trace_for_run};
 pub use create::{
     agent_span, custom_span, function_span, generation_span, get_current_span, get_current_trace,
     guardrail_span, handoff_span, mcp_tools_span, response_span, speech_group_span, speech_span,
-    trace, transcription_span,
+    task_span, trace, transcription_span, turn_span,
 };
 pub use model_tracing::get_model_tracing_impl;
 pub use processor_interface::{TracingExporter, TracingProcessor};
@@ -35,7 +35,7 @@ pub use setup::{
 pub use span_data::{
     AgentSpanData, CustomSpanData, FunctionSpanData, GenerationSpanData, GuardrailSpanData,
     HandoffSpanData, MCPListToolsSpanData, ResponseSpanData, SpanData, SpeechGroupSpanData,
-    SpeechSpanData, TranscriptionSpanData,
+    SpeechSpanData, TaskSpanData, TranscriptionSpanData, TurnSpanData,
 };
 pub use spans::{Span, SpanError};
 pub use traces::Trace;
