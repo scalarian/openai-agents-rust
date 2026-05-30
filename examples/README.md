@@ -49,6 +49,7 @@ cargo run -p openai-agents-rs --example parallelization
 cargo run -p openai-agents-rs --example previous_response_id
 cargo run -p openai-agents-rs --example prompt_template
 cargo run -p openai-agents-rs --example prompt_template -- --dynamic
+cargo run -p openai-agents-rs --example reasoning_content
 cargo run -p openai-agents-rs --example sandbox_workspace
 cargo run -p openai-agents-rs --example sqlite_session
 cargo run -p openai-agents-rs --example stream_function_call_args
@@ -114,6 +115,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `parallelization` | concurrent agent calls followed by a picker agent | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `previous_response_id` | Responses API conversation continuation by id | [docs/running_agents.md](../docs/running_agents.md) |
 | `prompt_template` | static and dynamic reusable prompt config | [docs/agents.md](../docs/agents.md) |
+| `reasoning_content` | reasoning items from normal and streamed runner output | [docs/models/settings.md](../docs/models/settings.md) |
 | `sandbox_workspace` | local sandbox manifest staging and shell confinement | [docs/sandbox_agents.md](../docs/sandbox_agents.md) |
 | `sqlite_session` | SQLite-backed conversation memory | [docs/sessions/memory.md](../docs/sessions/memory.md) |
 | `stream_function_call_args` | streamed tool-call argument items | [docs/streaming.md](../docs/streaming.md) |
