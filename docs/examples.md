@@ -37,6 +37,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | custom example provider | upstream-named custom model provider entry point | [custom_example_provider.rs](../crates/openai-agents/examples/custom_example_provider.rs) |
 | custom agent model | per-agent model name resolved by a custom provider | [custom_agent_model.rs](../crates/openai-agents/examples/custom_agent_model.rs) |
 | custom model provider | per-run custom model provider selection | [custom_model_provider.rs](../crates/openai-agents/examples/custom_model_provider.rs) |
+| customer service | airline triage handoffs, FAQ lookup, seat updates, and shared context | [customer_service.rs](../crates/openai-agents/examples/customer_service.rs) |
 | database session | database-session extension using an in-memory SQLite URL | [database_session.rs](../crates/openai-agents/examples/database_session.rs) |
 | Dapr session example | upstream-named Dapr session entry point | [dapr_session_example.rs](../crates/openai-agents/examples/dapr_session_example.rs) |
 | dapr session | Dapr state-store backed extension session with graceful availability check | [dapr_session.rs](../crates/openai-agents/examples/dapr_session.rs) |
