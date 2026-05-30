@@ -1083,7 +1083,7 @@ async fn resolve_approval_rejection_message_for_tool_type(
     let formatted = formatter(ToolErrorFormatterArgs {
         kind: "approval_rejected",
         tool_type,
-        tool_name: tool_call.name.clone(),
+        tool_name: tool_call_display_name(tool_call),
         call_id: tool_call.id.clone(),
         default_message: default_message.clone(),
         run_context: context.clone(),
@@ -1828,6 +1828,72 @@ mod tests {
             &outcome.new_items,
             &["Tool 'billing.lookup_account' not found."],
         );
+    }
+
+    #[tokio::test]
+    async fn approval_rejection_formatter_uses_qualified_display_name() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let invocations_for_tool = invocations.clone();
+        let mut tool = function_tool(
+            "lookup_account",
+            "Lookup",
+            move |_ctx, _args: serde_json::Value| {
+                let invocations = invocations_for_tool.clone();
+                async move {
+                    invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>("should-not-run")
+                }
+            },
+        )
+        .expect("function tool should build");
+        tool.definition.namespace = Some("billing".to_owned());
+        let agent = Agent::builder("assistant").function_tool(tool).build();
+        let run_config = RunConfig {
+            tool_error_formatter: Some(Arc::new(|args| {
+                async move { Ok(Some(format!("{} denied {}", args.tool_name, args.call_id))) }
+                    .boxed()
+            })),
+            ..RunConfig::default()
+        };
+        let interruption = RunInterruption {
+            kind: Some(RunInterruptionKind::ToolApproval),
+            approval_id: Some("approval-billing".to_owned()),
+            call_id: Some("call-billing".to_owned()),
+            tool_name: Some("lookup_account".to_owned()),
+            namespace: Some("billing".to_owned()),
+            tool_origin: None,
+            reason: Some("tool approval required".to_owned()),
+        };
+        let approval = ApprovalRecord {
+            approved: false,
+            reason: None,
+            approval_id: Some("approval-billing".to_owned()),
+            call_id: Some("call-billing".to_owned()),
+            tool_name: Some("lookup_account".to_owned()),
+            namespace: Some("billing".to_owned()),
+        };
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &run_config,
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-billing".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: Some("billing".to_owned()),
+            }],
+            None,
+            Some((&interruption, &approval)),
+        )
+        .await
+        .expect("rejected approval should return formatter output");
+
+        assert_tool_text_outputs(
+            &outcome.new_items,
+            &["billing.lookup_account denied call-billing"],
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
