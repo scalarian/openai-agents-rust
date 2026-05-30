@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::agent::Agent;
-use crate::exceptions::MaxTurnsExceeded;
+use crate::exceptions::{MaxTurnsExceeded, ModelRefusalError};
 use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::ModelResponse;
@@ -31,6 +31,13 @@ pub struct RunErrorHandlerInput {
 }
 
 #[derive(Clone, Debug)]
+pub struct ModelRefusalHandlerInput {
+    pub error: ModelRefusalError,
+    pub context: RunContextWrapper<RunContext>,
+    pub run_data: RunErrorData,
+}
+
+#[derive(Clone, Debug)]
 pub struct RunErrorHandlerResult {
     pub final_output: Value,
     pub include_in_history: bool,
@@ -49,15 +56,26 @@ pub type RunErrorHandler = Arc<
     dyn Fn(RunErrorHandlerInput) -> BoxFuture<'static, Option<RunErrorHandlerResult>> + Send + Sync,
 >;
 
+pub type ModelRefusalHandler = Arc<
+    dyn Fn(ModelRefusalHandlerInput) -> BoxFuture<'static, Option<RunErrorHandlerResult>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone, Default)]
 pub struct RunErrorHandlers {
     pub max_turns: Option<RunErrorHandler>,
+    pub model_refusal: Option<ModelRefusalHandler>,
 }
 
 impl fmt::Debug for RunErrorHandlers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RunErrorHandlers")
             .field("max_turns", &self.max_turns.as_ref().map(|_| "<handler>"))
+            .field(
+                "model_refusal",
+                &self.model_refusal.as_ref().map(|_| "<handler>"),
+            )
             .finish()
     }
 }

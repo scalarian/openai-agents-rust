@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::agent::Agent;
 use crate::errors::Result;
-use crate::exceptions::{MaxTurnsExceeded, ModelBehaviorError, UserError};
+use crate::exceptions::{MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, UserError};
 use crate::handoff::{Handoff, HandoffInputData, nest_handoff_history_with_mapper};
 use crate::internal::agent_runner_helpers as internal_agent_runner_helpers;
 use crate::internal::error_handlers as internal_error_handlers;
@@ -23,7 +23,7 @@ use crate::lifecycle::{SharedAgentHooks, SharedRunHooks};
 use crate::model::{ModelProvider, ModelRequest, ModelResponse, get_default_model_settings};
 use crate::result::{RunResult, RunResultStreaming};
 use crate::run_config::{DEFAULT_MAX_TURNS, ModelInputData, RunConfig, RunOptions};
-use crate::run_error_handlers::{RunErrorData, RunErrorHandlerInput};
+use crate::run_error_handlers::{ModelRefusalHandlerInput, RunErrorData, RunErrorHandlerInput};
 use crate::run_state::{RunInterruptionKind, RunState};
 use crate::session::Session;
 use crate::tracing::{
@@ -748,6 +748,81 @@ impl Runner {
             let tool_calls = internal_tool_execution::extract_tool_calls(&output);
             let all_output_guardrails = merged_output_guardrails(&current_agent, &self.config);
             if tool_calls.is_empty() {
+                if let Some(refusal) = internal_turn_resolution::extract_refusal(&output) {
+                    let refusal_error = ModelRefusalError { refusal };
+                    if let Some(handler) = &self.config.run_error_handlers.model_refusal {
+                        let history = internal_items::prepare_model_input_items(
+                            &current_input_history,
+                            &normalized_generated_items,
+                            self.config.reasoning_item_id_policy,
+                        );
+                        let handler_result = handler(ModelRefusalHandlerInput {
+                            error: refusal_error.clone(),
+                            context: context.clone(),
+                            run_data: RunErrorData {
+                                input: original_input.clone(),
+                                new_items: session_generated_items.clone(),
+                                history,
+                                output: output.clone(),
+                                raw_responses: raw_responses.clone(),
+                                input_guardrail_results: input_guardrail_results.clone(),
+                                output_guardrail_results: output_guardrail_results.clone(),
+                                last_agent: current_agent.clone(),
+                            },
+                        })
+                        .await;
+
+                        if let Some(handler_result) = handler_result {
+                            internal_error_handlers::validate_handler_final_output(
+                                &handler_result.final_output,
+                                current_agent.output_schema.as_ref(),
+                            )?;
+                            if let Some((text, output_item, include_in_history)) =
+                                internal_error_handlers::resolve_run_error_handler_result(Some(
+                                    handler_result,
+                                ))
+                            {
+                                final_output = Some(text);
+                                final_output_items = vec![output_item.clone()];
+                                if include_in_history {
+                                    let history_item = RunItem::MessageOutput {
+                                        content: output_item,
+                                    };
+                                    normalized_generated_items.push(history_item.clone());
+                                    session_generated_items.push(history_item.clone());
+                                    if let Some(recorder) = &stream_recorder {
+                                        recorder.push_run_items(&[history_item]).await;
+                                    }
+                                }
+                            }
+                            dispatch_agent_end(
+                                self.config.run_hooks.as_ref(),
+                                current_agent.hooks.as_ref(),
+                                &context,
+                                &current_agent,
+                                final_output.as_deref(),
+                                raw_responses.len(),
+                            )
+                            .await;
+                            if let Some(recorder) = &stream_recorder {
+                                recorder
+                                    .push_lifecycle(
+                                        "agent_end",
+                                        Some(serde_json::json!({
+                                            "agent_name": current_agent.name.clone(),
+                                            "final_output": final_output.clone(),
+                                        })),
+                                    )
+                                    .await;
+                            }
+                            break;
+                        }
+                    }
+
+                    let _ = trace_manager.finish();
+                    return Err(refusal_error.into());
+                }
+
                 output_guardrail_results = internal_guardrails::run_output_guardrails(
                     &current_agent,
                     &all_output_guardrails,
@@ -5422,6 +5497,7 @@ mod tests {
                         }
                         .boxed()
                     })),
+                    ..Default::default()
                 },
                 ..RunConfig::default()
             });
@@ -5443,6 +5519,80 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, OutputItem::Json { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn runner_surfaces_model_refusal() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::Refusal {
+                refusal: "I cannot help with that request.".to_owned(),
+            }],
+            "unused",
+        ));
+        let provider = Arc::new(StaticProvider { model });
+        let agent = Agent::builder("assistant").build();
+
+        let error = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect_err("model refusal should fail the run");
+
+        match error {
+            AgentsError::ModelRefusal(refusal) => {
+                assert_eq!(refusal.refusal, "I cannot help with that request.");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_uses_model_refusal_handler_for_terminal_output() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::Refusal {
+                refusal: "I cannot help with that request.".to_owned(),
+            }],
+            "unused",
+        ));
+        let provider = Arc::new(StaticProvider { model });
+        let agent = Agent::builder("assistant").build();
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                run_error_handlers: crate::run_error_handlers::RunErrorHandlers {
+                    model_refusal: Some(Arc::new(|input| {
+                        async move {
+                            assert_eq!(input.error.refusal, "I cannot help with that request.");
+                            Some(crate::run_error_handlers::RunErrorHandlerResult {
+                                final_output: json!("safe fallback"),
+                                include_in_history: false,
+                            })
+                        }
+                        .boxed()
+                    })),
+                    ..Default::default()
+                },
+                ..RunConfig::default()
+            });
+
+        let result = runner
+            .run(&agent, "hello")
+            .await
+            .expect("refusal handler should resolve final output");
+
+        assert_eq!(result.final_output.as_deref(), Some("safe fallback"));
+        assert!(result.new_items.iter().any(|item| matches!(
+            item,
+            RunItem::MessageOutput {
+                content: OutputItem::Refusal { .. }
+            }
+        )));
+        assert!(!result.new_items.iter().any(|item| matches!(
+            item,
+            RunItem::MessageOutput {
+                content: OutputItem::Text { text }
+            } if text == "safe fallback"
+        )));
     }
 
     #[tokio::test]
@@ -5477,6 +5627,7 @@ mod tests {
                             }
                             .boxed()
                         })),
+                        ..Default::default()
                     },
                     ..RunConfig::default()
                 })

@@ -36,6 +36,12 @@ pub struct ModelBehaviorError {
 }
 
 #[derive(Clone, Debug, Error)]
+#[error("Model refused to produce output: {refusal}")]
+pub struct ModelRefusalError {
+    pub refusal: String,
+}
+
+#[derive(Clone, Debug, Error)]
 #[error("{message}")]
 pub struct UserError {
     pub message: String,

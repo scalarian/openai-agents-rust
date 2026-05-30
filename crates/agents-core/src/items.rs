@@ -52,6 +52,9 @@ pub enum OutputItem {
     Text {
         text: String,
     },
+    Refusal {
+        refusal: String,
+    },
     Json {
         value: Value,
     },
@@ -73,7 +76,8 @@ impl OutputItem {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text { text } => Some(text),
-            Self::Json { .. }
+            Self::Refusal { .. }
+            | Self::Json { .. }
             | Self::ToolCall { .. }
             | Self::Handoff { .. }
             | Self::Reasoning { .. } => None,
@@ -224,6 +228,17 @@ impl ItemHelpers {
         item.as_text()
     }
 
+    pub fn extract_refusal(item: &OutputItem) -> Option<&str> {
+        match item {
+            OutputItem::Refusal { refusal } => Some(refusal),
+            OutputItem::Text { .. }
+            | OutputItem::Json { .. }
+            | OutputItem::ToolCall { .. }
+            | OutputItem::Handoff { .. }
+            | OutputItem::Reasoning { .. } => None,
+        }
+    }
+
     pub fn is_tool_call(item: &RunItem) -> bool {
         matches!(item, RunItem::ToolCall { .. })
     }
@@ -234,6 +249,12 @@ impl RunItem {
         match self {
             Self::MessageOutput { content } => match content {
                 OutputItem::Text { text } => Some(InputItem::Text { text: text.clone() }),
+                OutputItem::Refusal { refusal } => Some(InputItem::Json {
+                    value: json!({
+                        "type": "refusal",
+                        "refusal": refusal,
+                    }),
+                }),
                 OutputItem::Json { value } => Some(InputItem::Json {
                     value: value.clone(),
                 }),

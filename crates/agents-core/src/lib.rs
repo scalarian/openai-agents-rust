@@ -93,7 +93,7 @@ pub use editor::{ApplyPatchEditor, ApplyPatchOperation, ApplyPatchResult, Editor
 pub use errors::AgentsError as AgentsException;
 pub use errors::{AgentsError, Result};
 pub use exceptions::{
-    InputGuardrailTripwireTriggered, MaxTurnsExceeded, ModelBehaviorError,
+    InputGuardrailTripwireTriggered, MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError,
     OutputGuardrailTripwireTriggered, RunErrorDetails, ToolInputGuardrailTripwireTriggered,
     ToolOutputGuardrailTripwireTriggered, ToolTimeoutError, UserError,
 };
@@ -163,7 +163,8 @@ pub use run_config::{
 };
 pub use run_context::{AgentHookContext, ApprovalRecord, RunContext, RunContextWrapper};
 pub use run_error_handlers::{
-    RunErrorData, RunErrorHandler, RunErrorHandlerInput, RunErrorHandlerResult, RunErrorHandlers,
+    ModelRefusalHandler, ModelRefusalHandlerInput, RunErrorData, RunErrorHandler,
+    RunErrorHandlerInput, RunErrorHandlerResult, RunErrorHandlers,
 };
 pub use run_state::{
     CURRENT_RUN_STATE_SCHEMA_VERSION, RunInterruption, RunInterruptionKind, RunState,

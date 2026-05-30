@@ -65,6 +65,7 @@ fn stream_event_text(event: &StreamEvent) -> Option<String> {
                 agents_core::OutputItem::Text { text } => Some(text.clone()),
                 agents_core::OutputItem::Json { value } => serde_json::to_string(value).ok(),
                 agents_core::OutputItem::Reasoning { .. }
+                | agents_core::OutputItem::Refusal { .. }
                 | agents_core::OutputItem::ToolCall { .. }
                 | agents_core::OutputItem::Handoff { .. } => None,
             },
@@ -72,6 +73,7 @@ fn stream_event_text(event: &StreamEvent) -> Option<String> {
                 agents_core::OutputItem::Text { text } => Some(text.clone()),
                 agents_core::OutputItem::Json { value } => serde_json::to_string(value).ok(),
                 agents_core::OutputItem::Reasoning { .. }
+                | agents_core::OutputItem::Refusal { .. }
                 | agents_core::OutputItem::ToolCall { .. }
                 | agents_core::OutputItem::Handoff { .. } => None,
             },

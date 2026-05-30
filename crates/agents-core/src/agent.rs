@@ -141,7 +141,9 @@ fn output_item_text(item: &OutputItem) -> Option<String> {
         OutputItem::Text { text } => Some(text.clone()),
         OutputItem::Json { value } => serde_json::to_string(value).ok(),
         OutputItem::Reasoning { text } => Some(text.clone()),
-        OutputItem::ToolCall { .. } | OutputItem::Handoff { .. } => None,
+        OutputItem::Refusal { .. } | OutputItem::ToolCall { .. } | OutputItem::Handoff { .. } => {
+            None
+        }
     }
 }
 

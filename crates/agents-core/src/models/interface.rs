@@ -69,6 +69,12 @@ impl ModelResponse {
             .iter()
             .map(|item| match item {
                 OutputItem::Text { text } => InputItem::Text { text: text.clone() },
+                OutputItem::Refusal { refusal } => InputItem::Json {
+                    value: serde_json::json!({
+                        "type": "refusal",
+                        "refusal": refusal,
+                    }),
+                },
                 OutputItem::Json { value } => InputItem::Json {
                     value: value.clone(),
                 },

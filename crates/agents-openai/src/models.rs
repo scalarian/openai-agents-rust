@@ -821,6 +821,16 @@ fn openai_response_json_item(value: &Value) -> Value {
                 }
             ],
         }),
+        Some("refusal") => json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "refusal",
+                    "refusal": value.get("refusal").and_then(Value::as_str).unwrap_or_default(),
+                }
+            ],
+        }),
         Some("handoff_call") => json!({
             "type": "message",
             "role": "assistant",
@@ -892,6 +902,10 @@ fn openai_chat_json_messages(value: &Value, strict_feature_validation: bool) -> 
         Some("reasoning") => Ok(vec![json!({
             "role": "assistant",
             "content": value.get("text").and_then(Value::as_str).unwrap_or("reasoning"),
+        })]),
+        Some("refusal") => Ok(vec![json!({
+            "role": "assistant",
+            "refusal": value.get("refusal").and_then(Value::as_str).unwrap_or_default(),
         })]),
         Some("handoff_call") => Ok(vec![json!({
             "role": "assistant",
@@ -986,6 +1000,11 @@ fn parse_responses_response(
                                     text: text.to_owned(),
                                 });
                             }
+                            if let Some(refusal) = parse_refusal_content_item(content_item) {
+                                output.push(OutputItem::Refusal {
+                                    refusal: refusal.to_owned(),
+                                });
+                            }
                         }
                     }
                     if output.len() == before {
@@ -1076,6 +1095,9 @@ fn parse_chat_completions_response(
     {
         if let Some(content) = parse_chat_message_content(message.get("content")) {
             output.push(OutputItem::Text { text: content });
+        }
+        if let Some(refusal) = parse_chat_message_refusal(message) {
+            output.push(OutputItem::Refusal { refusal });
         }
         if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
             for tool_call in tool_calls {
@@ -1199,6 +1221,30 @@ fn parse_chat_message_content(content: Option<&Value>) -> Option<String> {
         }
         Some(Value::Null) | None => None,
         Some(other) => Some(other.to_string()),
+    }
+}
+
+fn parse_chat_message_refusal(message: &Value) -> Option<String> {
+    if let Some(refusal) = message.get("refusal").and_then(Value::as_str) {
+        if !refusal.is_empty() {
+            return Some(refusal.to_owned());
+        }
+    }
+
+    let refusal = message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(parse_refusal_content_item)
+        .collect::<String>();
+    (!refusal.is_empty()).then_some(refusal)
+}
+
+fn parse_refusal_content_item(content_item: &Value) -> Option<&str> {
+    match content_item.get("type").and_then(Value::as_str) {
+        Some("refusal") => content_item.get("refusal").and_then(Value::as_str),
+        _ => None,
     }
 }
 
@@ -1846,6 +1892,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_responses_refusal_content() {
+        let parsed = parse_responses_response(
+            "gpt-5",
+            &json!({
+                "output": [{
+                    "type": "message",
+                    "content": [{
+                        "type": "refusal",
+                        "refusal": "I cannot help with that."
+                    }]
+                }]
+            }),
+            None,
+        );
+
+        assert!(matches!(
+            &parsed.output[0],
+            OutputItem::Refusal { refusal } if refusal == "I cannot help with that."
+        ));
+    }
+
+    #[test]
     fn parses_responses_reasoning_with_identity_as_raw_json() {
         let parsed = parse_responses_response(
             "gpt-5",
@@ -1901,6 +1969,29 @@ mod tests {
         assert_eq!(parsed.request_id.as_deref(), Some("req_chat_123"));
         assert!(matches!(parsed.output[0], OutputItem::Text { .. }));
         assert!(matches!(parsed.output[1], OutputItem::ToolCall { .. }));
+    }
+
+    #[test]
+    fn parses_chat_completions_refusal() {
+        let parsed = parse_chat_completions_response(
+            "gpt-4.1",
+            &json!({
+                "choices": [{
+                    "message": {
+                        "content": null,
+                        "refusal": "I cannot help with that."
+                    }
+                }]
+            }),
+            None,
+            false,
+        )
+        .expect("chat completions response should parse");
+
+        assert!(matches!(
+            &parsed.output[0],
+            OutputItem::Refusal { refusal } if refusal == "I cannot help with that."
+        ));
     }
 
     #[test]

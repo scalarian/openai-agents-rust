@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::exceptions::{
-    InputGuardrailTripwireTriggered, MaxTurnsExceeded, ModelBehaviorError,
+    InputGuardrailTripwireTriggered, MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError,
     OutputGuardrailTripwireTriggered, ToolInputGuardrailTripwireTriggered,
     ToolOutputGuardrailTripwireTriggered, ToolTimeoutError, UserError,
 };
@@ -19,6 +19,8 @@ pub enum AgentsError {
     MaxTurnsExceeded(#[from] MaxTurnsExceeded),
     #[error(transparent)]
     ModelBehavior(#[from] ModelBehaviorError),
+    #[error(transparent)]
+    ModelRefusal(#[from] ModelRefusalError),
     #[error(transparent)]
     User(#[from] UserError),
     #[error(transparent)]
