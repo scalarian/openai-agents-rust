@@ -265,7 +265,7 @@ async fn facade_structured_output_run_exhausts_max_turns_with_runtime_schema_plu
     let runner = Runner::new()
         .with_model_provider(provider)
         .with_config(RunConfig {
-            max_turns: 2,
+            max_turns: Some(2),
             ..RunConfig::default()
         });
 
