@@ -1234,6 +1234,13 @@ fn parse_responses_response(
                                 output.push(OutputItem::Text {
                                     text: text.to_owned(),
                                 });
+                            } else if content_item.get("type").and_then(Value::as_str)
+                                == Some("output_text")
+                                && content_item.get("text") == Some(&Value::Null)
+                            {
+                                output.push(OutputItem::Text {
+                                    text: String::new(),
+                                });
                             }
                             if let Some(refusal) = parse_refusal_content_item(content_item) {
                                 output.push(OutputItem::Refusal {
@@ -1465,12 +1472,17 @@ fn parse_chat_message_content(content: Option<&Value>) -> Option<String> {
     match content {
         Some(Value::String(text)) => Some(text.clone()),
         Some(Value::Array(items)) => {
-            let text = items
-                .iter()
-                .filter_map(|item| item.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("");
-            if text.is_empty() { None } else { Some(text) }
+            let mut saw_text_part = false;
+            let mut text = String::new();
+            for item in items {
+                if let Some(value) = item.get("text") {
+                    saw_text_part = true;
+                    if let Some(part) = value.as_str() {
+                        text.push_str(part);
+                    }
+                }
+            }
+            saw_text_part.then_some(text)
         }
         Some(Value::Null) | None => None,
         Some(other) => Some(other.to_string()),
@@ -2736,6 +2748,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_responses_null_output_text_as_empty_text() {
+        let parsed = parse_responses_response(
+            "gpt-5",
+            &json!({
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": null}]
+                }]
+            }),
+            None,
+        );
+
+        assert!(matches!(
+            &parsed.output[0],
+            OutputItem::Text { text } if text.is_empty()
+        ));
+    }
+
+    #[test]
     fn parses_responses_refusal_content() {
         let parsed = parse_responses_response(
             "gpt-5",
@@ -2835,6 +2866,28 @@ mod tests {
         assert!(matches!(
             &parsed.output[0],
             OutputItem::Refusal { refusal } if refusal == "I cannot help with that."
+        ));
+    }
+
+    #[test]
+    fn parses_chat_content_array_null_text_as_empty_text() {
+        let parsed = parse_chat_completions_response(
+            "gpt-4.1",
+            &json!({
+                "choices": [{
+                    "message": {
+                        "content": [{"type": "text", "text": null}]
+                    }
+                }]
+            }),
+            None,
+            false,
+        )
+        .expect("chat completions response should parse");
+
+        assert!(matches!(
+            &parsed.output[0],
+            OutputItem::Text { text } if text.is_empty()
         ));
     }
 
