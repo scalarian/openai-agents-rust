@@ -554,6 +554,51 @@ mod tests {
     }
 
     #[test]
+    fn drops_orphan_generated_custom_tool_call_items() {
+        let prepared = prepare_model_input_items(
+            &[InputItem::from("hello")],
+            &[
+                RunItem::CustomToolCall {
+                    tool_name: "orphan_editor".to_owned(),
+                    input: "orphan".to_owned(),
+                    call_id: Some("orphan-call".to_owned()),
+                },
+                RunItem::CustomToolCall {
+                    tool_name: "raw_editor".to_owned(),
+                    input: "hello".to_owned(),
+                    call_id: Some("paired-call".to_owned()),
+                },
+                RunItem::CustomToolCallOutput {
+                    output: "HELLO".to_owned(),
+                    call_id: Some("paired-call".to_owned()),
+                    tool_name: Some("raw_editor".to_owned()),
+                },
+            ],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert!(!prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                    && value.get("call_id").and_then(Value::as_str) == Some("orphan-call")
+        )));
+        assert!(prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                    && value.get("call_id").and_then(Value::as_str) == Some("paired-call")
+        )));
+        assert!(prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str)
+                    == Some("custom_tool_call_output")
+                    && value.get("call_id").and_then(Value::as_str) == Some("paired-call")
+        )));
+    }
+
+    #[test]
     fn keeps_lone_reasoning_when_no_generated_tool_call_is_dropped() {
         let prepared = prepare_model_input_items(
             &[InputItem::from("hello")],
