@@ -508,7 +508,7 @@ impl Agent {
     }
 
     pub fn find_function_tool(&self, name: &str, namespace: Option<&str>) -> Option<&FunctionTool> {
-        self.function_tools.iter().find(|tool| {
+        self.function_tools.iter().rev().find(|tool| {
             tool.definition.name == name && tool.definition.namespace.as_deref() == namespace
         })
     }
@@ -786,9 +786,9 @@ impl Agent {
 
 #[derive(Default)]
 struct RuntimeToolDuplicateState {
-    saw_visible_top_level: bool,
+    saw_visible_top_level_function: bool,
     saw_deferred_top_level: bool,
-    saw_namespaced_or_static: bool,
+    saw_other: bool,
 }
 
 fn validate_runtime_tool_duplicates<'a, I>(definitions: I, agent_name: &str) -> Result<()>
@@ -808,28 +808,29 @@ where
         .unwrap_or_else(|| definition.name.clone());
         let state = seen.entry(qualified_name.clone()).or_default();
 
-        if definition.namespace.is_none() {
-            if definition.defer_loading {
-                if state.saw_deferred_top_level || state.saw_namespaced_or_static {
-                    return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
-                }
-                state.saw_deferred_top_level = true;
-            } else {
-                if state.saw_visible_top_level || state.saw_namespaced_or_static {
-                    return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
-                }
-                state.saw_visible_top_level = true;
+        if definition.namespace.is_none()
+            && !definition.defer_loading
+            && definition.input_json_schema.is_some()
+        {
+            if state.saw_other {
+                return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
             }
+            state.saw_visible_top_level_function = true;
             continue;
         }
 
-        if state.saw_visible_top_level
-            || state.saw_deferred_top_level
-            || state.saw_namespaced_or_static
-        {
+        if definition.namespace.is_none() && definition.defer_loading {
+            if state.saw_deferred_top_level || state.saw_other {
+                return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
+            }
+            state.saw_deferred_top_level = true;
+            continue;
+        }
+
+        if state.saw_visible_top_level_function || state.saw_deferred_top_level || state.saw_other {
             return Err(duplicate_runtime_tool_error(&qualified_name, agent_name));
         }
-        state.saw_namespaced_or_static = true;
+        state.saw_other = true;
     }
     Ok(())
 }

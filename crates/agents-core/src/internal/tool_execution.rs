@@ -200,6 +200,7 @@ async fn build_tool_execution_plans(
     for (order, tool_call) in tool_calls.into_iter().enumerate() {
         let Some(function_tool) = runtime_tools
             .iter()
+            .rev()
             .find(|tool| tool_matches_call(tool, &tool_call))
         else {
             if run_config.tool_not_found_behavior == ToolNotFoundBehavior::ReturnErrorToModel {
@@ -1262,6 +1263,7 @@ pub(crate) fn apply_tool_origins_to_run_items(
         };
         *tool_origin = runtime_tools
             .iter()
+            .rev()
             .find(|tool| tool_matches_call(tool, &tool_call))
             .and_then(get_function_tool_origin);
     }
@@ -1753,6 +1755,62 @@ mod tests {
         .await
         .expect("synthetic namespace should route to deferred tool");
         assert_tool_text_outputs(&deferred_outcome.new_items, &["deferred"]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_visible_top_level_function_uses_last_tool() {
+        let first_invocations = Arc::new(AtomicUsize::new(0));
+        let second_invocations = Arc::new(AtomicUsize::new(0));
+        let first_invocations_for_tool = first_invocations.clone();
+        let second_invocations_for_tool = second_invocations.clone();
+        let first_tool = function_tool(
+            "lookup_account",
+            "First lookup",
+            move |_ctx, _args: serde_json::Value| {
+                let first_invocations = first_invocations_for_tool.clone();
+                async move {
+                    first_invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>("first")
+                }
+            },
+        )
+        .expect("first function tool should build");
+        let second_tool = function_tool(
+            "lookup_account",
+            "Second lookup",
+            move |_ctx, _args: serde_json::Value| {
+                let second_invocations = second_invocations_for_tool.clone();
+                async move {
+                    second_invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>("second")
+                }
+            },
+        )
+        .expect("second function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(first_tool)
+            .function_tool(second_tool)
+            .build();
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-lookup".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: None,
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("duplicate visible top-level tools should keep last-wins dispatch");
+
+        assert_tool_text_outputs(&outcome.new_items, &["second"]);
+        assert_eq!(first_invocations.load(Ordering::SeqCst), 0);
+        assert_eq!(second_invocations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
