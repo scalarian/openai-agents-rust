@@ -755,6 +755,9 @@ impl Runner {
                 let handoff_transition = apply_handoff_transition(
                     &self.config,
                     &handoff,
+                    &current_agent,
+                    &target_agent,
+                    conversation_tracker.is_active(),
                     &current_input_history,
                     &normalized_generated_items,
                     step_items,
@@ -1724,6 +1727,9 @@ fn resolve_handoff(
 async fn apply_handoff_transition(
     run_config: &RunConfig,
     handoff: &Handoff,
+    from_agent: &Agent,
+    to_agent: &Agent,
+    server_manages_conversation: bool,
     input_history: &[InputItem],
     pre_handoff_items: &[RunItem],
     new_step_items: Vec<RunItem>,
@@ -1732,9 +1738,33 @@ async fn apply_handoff_transition(
         .input_filter
         .clone()
         .or_else(|| run_config.handoff_input_filter.clone());
-    let should_nest_history = handoff
+    let mut should_nest_history = handoff
         .nest_handoff_history
         .unwrap_or(run_config.nest_handoff_history);
+
+    if server_manages_conversation {
+        if input_filter.is_some() {
+            return Err(UserError {
+                message: "Server-managed conversations do not support handoff input filters. \
+                          Remove Handoff.input_filter or RunConfig.handoff_input_filter, or \
+                          disable conversation_id, previous_response_id, and \
+                          auto_previous_response_id."
+                    .to_owned(),
+            }
+            .into());
+        }
+
+        if should_nest_history {
+            log::warn!(
+                target: crate::LOGGER_TARGET,
+                "Server-managed conversations do not support nest_handoff_history for handoff {} \
+                 -> {}. Disabling nested handoff history and continuing with delta-only input.",
+                from_agent.name,
+                to_agent.name
+            );
+            should_nest_history = false;
+        }
+    }
 
     if let Some(input_filter) = input_filter {
         let filtered = input_filter(HandoffInputData {
@@ -4705,6 +4735,74 @@ mod tests {
                 .map(|item| matches!(item, InputItem::Json { .. })),
             Some(true)
         );
+    }
+
+    #[tokio::test]
+    async fn server_managed_handoff_history_uses_delta_only_input() {
+        let model = Arc::new(HandoffCaptureModel::default());
+        let provider = Arc::new(HandoffCaptureProvider {
+            model: model.clone(),
+        });
+        let specialist = Agent::builder("specialist").build();
+        let agent = Agent::builder("assistant")
+            .handoff(Handoff::to_agent(specialist).with_nest_handoff_history(true))
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                conversation_id: Some("conv-handoff".to_owned()),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("server-managed handoff should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("specialist:done"));
+        let second_turn_input = model
+            .second_turn_input
+            .lock()
+            .expect("handoff second turn input lock")
+            .clone();
+        assert!(!second_turn_input.is_empty());
+        assert!(second_turn_input.iter().all(|item| {
+            match item {
+                InputItem::Json { value } => !value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("<CONVERSATION HISTORY>")),
+                InputItem::Text { text } => !text.contains("<CONVERSATION HISTORY>"),
+            }
+        }));
+    }
+
+    #[tokio::test]
+    async fn server_managed_handoff_input_filters_are_rejected() {
+        let model = Arc::new(HandoffCaptureModel::default());
+        let provider = Arc::new(HandoffCaptureProvider {
+            model: model.clone(),
+        });
+        let specialist = Agent::builder("specialist").build();
+        let handoff = Handoff::to_agent(specialist)
+            .with_input_filter(Arc::new(|data| async move { data }.boxed()));
+        let agent = Agent::builder("assistant").handoff(handoff).build();
+
+        let error = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                previous_response_id: Some("resp-handoff".to_owned()),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect_err("server-managed handoff filters should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Server-managed conversations do not support handoff input filters")
+        );
+        assert_eq!(*model.calls.lock().expect("handoff calls lock"), 1);
     }
 
     #[tokio::test]
