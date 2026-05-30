@@ -10,6 +10,7 @@ From the repo root:
 cargo run -p openai-agents-rs --example agents_as_tools
 cargo run -p openai-agents-rs --example basic_run
 cargo run -p openai-agents-rs --example function_tools
+cargo run -p openai-agents-rs --example handoffs
 cargo run -p openai-agents-rs --example input_guardrail
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example sandbox_workspace
@@ -26,6 +27,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `agents_as_tools` | specialist agents exposed as callable tools | [docs/agents.md](../docs/agents.md) |
 | `basic_run` | the smallest end-to-end facade call | [docs/quickstart.md](../docs/quickstart.md) |
 | `function_tools` | typed local function tools with structured arguments | [docs/tools.md](../docs/tools.md) |
+| `handoffs` | control transfer between agents | [docs/handoffs.md](../docs/handoffs.md) |
 | `input_guardrail` | tripwire handling before model execution | [docs/guardrails.md](../docs/guardrails.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `sandbox_workspace` | local sandbox manifest staging and shell confinement | [docs/sandbox_agents.md](../docs/sandbox_agents.md) |
