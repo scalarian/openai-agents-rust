@@ -56,6 +56,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | realtime session | long-lived realtime interaction | [realtime_session.rs](../crates/openai-agents/examples/realtime_session.rs) |
 | remote image | remote image input item by URL | [remote_image.rs](../crates/openai-agents/examples/remote_image.rs) |
 | remote pdf | remote PDF input item by URL | [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs) |
+| redis session | Redis-backed extension session with graceful availability check | [redis_session.rs](../crates/openai-agents/examples/redis_session.rs) |
 | retry | runner-managed model retry settings | [retry.rs](../crates/openai-agents/examples/retry.rs) |
 | routing | streamed triage handoff to a specialist agent | [routing.rs](../crates/openai-agents/examples/routing.rs) |
 | web search | hosted web search tool configuration | [web_search.rs](../crates/openai-agents/examples/web_search.rs) |
