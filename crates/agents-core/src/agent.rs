@@ -429,12 +429,52 @@ impl Agent {
         &self,
         run_context: &RunContextWrapper<RunContext>,
     ) -> Result<Vec<crate::tool::ToolDefinition>> {
-        Ok(self
-            .get_all_function_tools(run_context)
-            .await?
-            .into_iter()
+        let function_tool_keys = self
+            .function_tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.definition.name.clone(),
+                    tool.definition.namespace.clone(),
+                )
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let mut definitions = self
+            .tools
+            .iter()
+            .filter(|tool| {
+                !function_tool_keys.contains(&(
+                    tool.definition.name.clone(),
+                    tool.definition.namespace.clone(),
+                ))
+            })
             .map(|tool| tool.definition.clone())
-            .collect())
+            .collect::<Vec<_>>();
+
+        definitions.extend(
+            self.get_all_function_tools(run_context)
+                .await?
+                .into_iter()
+                .map(|tool| tool.definition.clone()),
+        );
+
+        let mut seen = std::collections::HashSet::new();
+        for definition in &definitions {
+            let key = (definition.name.as_str(), definition.namespace.as_deref());
+            if !seen.insert(key) {
+                return Err(AgentsError::message(format!(
+                    "duplicate runtime tool name `{}` for agent `{}`",
+                    crate::_tool_identity::tool_qualified_name(
+                        &definition.name,
+                        definition.namespace.as_deref()
+                    )
+                    .unwrap_or_else(|| definition.name.clone()),
+                    self.name
+                )));
+            }
+        }
+
+        Ok(definitions)
     }
 
     pub fn find_function_tool(&self, name: &str, namespace: Option<&str>) -> Option<&FunctionTool> {
