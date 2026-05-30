@@ -71,6 +71,8 @@ For image input content, use `{"type":"input_image","detail":"auto","image_url":
 ## Forcing Tool Use
 
 Use `ModelSettings { tool_choice: Some(...) }` when the model should be forced to use a tool.
+Valid choices include `auto`, `required`, `none`, or a specific callable tool name.
+When using OpenAI Responses tool search, named choices cannot target a bare namespace name, a deferred-only function tool, or the hosted `tool_search_tool()` itself. Prefer `auto` or `required` for that flow; see [Hosted Tool Search](tools.md#hosted-tool-search).
 
 ```rust,no_run
 use openai_agents::{Agent, AgentsError, ModelSettings, function_tool};
