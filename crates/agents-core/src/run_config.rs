@@ -75,6 +75,24 @@ pub type SessionInputCallback = Arc<
         + Sync,
 >;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolExecutionConfig {
+    pub max_function_tool_concurrency: Option<usize>,
+}
+
+impl ToolExecutionConfig {
+    pub fn validate(&self) -> crate::errors::Result<()> {
+        if matches!(self.max_function_tool_concurrency, Some(0)) {
+            return Err(crate::exceptions::UserError {
+                message: "tool_execution.max_function_tool_concurrency must be at least 1"
+                    .to_owned(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RunConfig {
     pub model: Option<String>,
@@ -93,6 +111,7 @@ pub struct RunConfig {
     pub tracing: Option<TracingConfig>,
     pub model_settings: Option<ModelSettings>,
     pub sandbox: Option<SandboxRunConfig>,
+    pub tool_execution: Option<ToolExecutionConfig>,
     pub tool_not_found_behavior: ToolNotFoundBehavior,
     #[serde(skip, default)]
     pub sandbox_resume_state: Option<crate::sandbox::SandboxRunState>,
@@ -141,6 +160,7 @@ impl std::fmt::Debug for RunConfig {
             .field("tracing", &self.tracing)
             .field("model_settings", &self.model_settings)
             .field("sandbox", &self.sandbox)
+            .field("tool_execution", &self.tool_execution)
             .field("tool_not_found_behavior", &self.tool_not_found_behavior)
             .field(
                 "sandbox_resume_state",
@@ -213,6 +233,7 @@ impl Default for RunConfig {
             tracing: None,
             model_settings: None,
             sandbox: None,
+            tool_execution: None,
             tool_not_found_behavior: ToolNotFoundBehavior::RaiseError,
             sandbox_resume_state: None,
             session_settings: None,
