@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use agents_core::{
     Agent, AgentsError, InputItem, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
@@ -150,6 +153,72 @@ impl ModelProvider for ConversationApprovalProvider {
     }
 }
 
+#[derive(Clone, Default)]
+struct RejectionResumeModel {
+    calls: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl Model for RejectionResumeModel {
+    async fn generate(&self, request: ModelRequest) -> agents_core::Result<ModelResponse> {
+        let mut calls = self.calls.lock().expect("rejection resume model lock");
+        *calls += 1;
+
+        if *calls == 1 {
+            return Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::ToolCall {
+                    call_id: "call-1".to_owned(),
+                    tool_name: "search".to_owned(),
+                    arguments: json!({ "query": "rust" }),
+                    namespace: None,
+                }],
+                usage: Usage::default(),
+                response_id: Some("resp-reject-1".to_owned()),
+                request_id: Some("req-reject-1".to_owned()),
+            });
+        }
+
+        let tool_output = request
+            .input
+            .iter()
+            .find_map(|item| match item {
+                InputItem::Json { value }
+                    if value.get("type").and_then(serde_json::Value::as_str)
+                        == Some("tool_call_output") =>
+                {
+                    value
+                        .get("output")
+                        .and_then(|output| output.get("text"))
+                        .and_then(serde_json::Value::as_str)
+                }
+                InputItem::Text { .. } | InputItem::Json { .. } => None,
+            })
+            .expect("resume should replay a tool output");
+
+        Ok(ModelResponse {
+            model: request.model,
+            output: vec![OutputItem::Text {
+                text: format!("final:{tool_output}"),
+            }],
+            usage: Usage::default(),
+            response_id: Some("resp-reject-2".to_owned()),
+            request_id: Some("req-reject-2".to_owned()),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct RejectionResumeProvider {
+    model: Arc<RejectionResumeModel>,
+}
+
+impl ModelProvider for RejectionResumeProvider {
+    fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+        self.model.clone()
+    }
+}
+
 #[tokio::test]
 async fn runner_interrupts_and_resumes_tool_approval() {
     let provider = Arc::new(ApprovalProvider {
@@ -212,6 +281,62 @@ async fn runner_interrupts_and_resumes_tool_approval() {
             } if tool_name == "search" && call_id.as_deref() == Some("call-1")
         )
     }));
+}
+
+#[tokio::test]
+async fn rejected_resume_does_not_recheck_current_approval_flag() {
+    let provider = Arc::new(RejectionResumeProvider {
+        model: Arc::new(RejectionResumeModel::default()),
+    });
+    let executions = Arc::new(AtomicUsize::new(0));
+    let build_tool = |needs_approval| {
+        let executions = executions.clone();
+        function_tool(
+            "search",
+            "Search documents",
+            move |_ctx, args: SearchArgs| {
+                let executions = executions.clone();
+                async move {
+                    executions.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>(format!("result:{}", args.query))
+                }
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(needs_approval)
+    };
+    let initial_agent = Agent::builder("assistant")
+        .function_tool(build_tool(true))
+        .build();
+
+    let initial = Runner::new()
+        .with_model_provider(provider.clone())
+        .run(&initial_agent, "hello")
+        .await
+        .expect("initial run should interrupt");
+    assert_eq!(initial.interruptions.len(), 1);
+
+    let mut state = initial
+        .durable_state()
+        .cloned()
+        .expect("state should exist");
+    state.reject_for_tool(
+        "call-1",
+        Some("search".to_owned()),
+        Some("denied".to_owned()),
+    );
+
+    let resumed_agent = Agent::builder("assistant")
+        .function_tool(build_tool(false))
+        .build();
+    let resumed = Runner::new()
+        .with_model_provider(provider)
+        .resume_with_agent(&state, &resumed_agent)
+        .await
+        .expect("rejected approval should resume as a tool-output rejection");
+
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    assert_eq!(resumed.final_output.as_deref(), Some("final:denied"));
 }
 
 #[tokio::test]

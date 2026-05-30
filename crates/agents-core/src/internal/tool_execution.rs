@@ -392,11 +392,9 @@ async fn execute_single_function_tool(
     }
     provider.start_span(&mut span, true);
 
-    if function_tool.needs_approval {
-        match approved_execution {
-            Some((interruption, approval))
-                if approval_matches_tool_call(interruption, approval, &tool_call) => {}
-            Some((_, approval)) if !approval.approved => {
+    let approval_resolved = if let Some((interruption, approval)) = approved_execution {
+        if approval_decision_matches_tool_call(interruption, approval, &tool_call) {
+            if !approval.approved {
                 append_approval_error_output(
                     &mut new_items,
                     tool_call.name.clone(),
@@ -432,40 +430,46 @@ async fn execute_single_function_tool(
                     interruptions,
                 });
             }
-            _ => {
-                let approval_id = Uuid::new_v4().to_string();
-                provider.finish_span(&mut span, true);
-                if let Some(recorder) = stream_recorder {
-                    recorder
-                        .push_lifecycle(
-                            "tool_approval_required",
-                            Some(serde_json::json!({
-                                "approval_id": approval_id,
-                                "tool_name": tool_call.name.clone(),
-                                "call_id": tool_call.id.clone(),
-                                "namespace": tool_call.namespace.clone(),
-                            })),
-                        )
-                        .await;
-                }
-                interruptions.push(RunInterruption {
-                    kind: Some(RunInterruptionKind::ToolApproval),
-                    approval_id: Some(approval_id),
-                    call_id: Some(tool_call.id.clone()),
-                    tool_name: Some(tool_call.name.clone()),
-                    namespace: tool_call.namespace.clone(),
-                    tool_origin: get_function_tool_origin(&function_tool),
-                    reason: Some("tool approval required".to_owned()),
-                });
-                return Ok(SingleToolExecutionOutcome {
-                    new_items,
-                    tool_results,
-                    input_guardrail_results,
-                    output_guardrail_results,
-                    interruptions,
-                });
-            }
+            true
+        } else {
+            false
         }
+    } else {
+        false
+    };
+
+    if function_tool.needs_approval && !approval_resolved {
+        let approval_id = Uuid::new_v4().to_string();
+        provider.finish_span(&mut span, true);
+        if let Some(recorder) = stream_recorder {
+            recorder
+                .push_lifecycle(
+                    "tool_approval_required",
+                    Some(serde_json::json!({
+                        "approval_id": approval_id,
+                        "tool_name": tool_call.name.clone(),
+                        "call_id": tool_call.id.clone(),
+                        "namespace": tool_call.namespace.clone(),
+                    })),
+                )
+                .await;
+        }
+        interruptions.push(RunInterruption {
+            kind: Some(RunInterruptionKind::ToolApproval),
+            approval_id: Some(approval_id),
+            call_id: Some(tool_call.id.clone()),
+            tool_name: Some(tool_call.name.clone()),
+            namespace: tool_call.namespace.clone(),
+            tool_origin: get_function_tool_origin(&function_tool),
+            reason: Some("tool approval required".to_owned()),
+        });
+        return Ok(SingleToolExecutionOutcome {
+            new_items,
+            tool_results,
+            input_guardrail_results,
+            output_guardrail_results,
+            interruptions,
+        });
     }
 
     let mut invocation_rejected = None;
@@ -665,13 +669,12 @@ async fn execute_single_function_tool(
     })
 }
 
-fn approval_matches_tool_call(
+fn approval_decision_matches_tool_call(
     interruption: &RunInterruption,
     approval: &ApprovalRecord,
     tool_call: &ToolCall,
 ) -> bool {
-    approval.approved
-        && approval.approval_id == interruption.approval_id
+    approval.approval_id == interruption.approval_id
         && approval.call_id.as_deref() == Some(tool_call.id.as_str())
         && approval.tool_name.as_deref() == Some(tool_call.name.as_str())
         && approval.namespace == tool_call.namespace
