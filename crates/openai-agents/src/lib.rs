@@ -89,8 +89,8 @@ pub use agents_openai::{
     OpenAIResponsesTransport, OpenAIResponsesWSModel, OpenAIResponsesWebSocketOptions,
     OpenAIResponsesWsModel, Part, ReasoningContentReplayContext, ReasoningContentSource,
     ResolvedOpenAIAgentRegistrationConfig, ResponsesWebSocketSession, SequenceNumber,
-    StreamingState, ToolSearchTool, WebSearchTool, WebSearchToolOptions, code_interpreter_tool,
-    default_openai_api, default_openai_base_url, default_openai_key,
+    StreamingState, ToolSearchTool, ToolSearchToolOptions, WebSearchTool, WebSearchToolOptions,
+    code_interpreter_tool, default_openai_api, default_openai_base_url, default_openai_key,
     default_openai_websocket_base_url, default_should_replay_reasoning_content,
     default_should_trigger_compaction, fake_id, file_search_tool, file_search_tool_with_options,
     file_search_tool_with_vector_store_ids, get_default_openai_agent_registration,
@@ -105,8 +105,8 @@ pub use agents_openai::{
     set_openai_base_url, set_tracing_export_api_key, set_use_responses_by_default,
     set_use_responses_websocket_by_default, should_disable_provider_managed_retries,
     should_disable_websocket_pre_event_retries, start_openai_conversations_session,
-    tool_search_tool, tracing_export_api_key, web_search_tool, web_search_tool_with_options,
-    websocket_pre_event_retries_disabled,
+    tool_search_tool, tool_search_tool_with_options, tracing_export_api_key, web_search_tool,
+    web_search_tool_with_options, websocket_pre_event_retries_disabled,
 };
 
 pub mod realtime {

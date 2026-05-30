@@ -1569,6 +1569,55 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_includes_tool_search_options() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let tool_search =
+            crate::tools::tool_search_tool_with_options(crate::tools::ToolSearchToolOptions {
+                description: Some("Search deferred tools on the server.".to_owned()),
+                execution: Some("server".to_owned()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                })),
+            });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![tool_search.definition],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "tool_search",
+                "description": "Search deferred tools on the server.",
+                "execution": "server",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                }
+            })
+        );
+    }
+
+    #[test]
     fn responses_payload_rejects_reserved_extra_body_fields() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",

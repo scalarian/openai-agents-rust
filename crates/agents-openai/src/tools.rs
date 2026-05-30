@@ -98,6 +98,29 @@ impl WebSearchToolOptions {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolSearchToolOptions {
+    pub description: Option<String>,
+    pub execution: Option<String>,
+    pub parameters: Option<Value>,
+}
+
+impl ToolSearchToolOptions {
+    fn into_hosted_tool_options(self) -> BTreeMap<String, Value> {
+        let mut options = BTreeMap::new();
+        if let Some(description) = self.description {
+            options.insert("description".to_owned(), Value::String(description));
+        }
+        if let Some(execution) = self.execution {
+            options.insert("execution".to_owned(), Value::String(execution));
+        }
+        if let Some(parameters) = self.parameters {
+            options.insert("parameters".to_owned(), parameters);
+        }
+        options
+    }
+}
+
 pub fn web_search_tool() -> StaticTool {
     web_search_tool_with_options(WebSearchToolOptions::default())
 }
@@ -140,10 +163,15 @@ pub fn code_interpreter_tool() -> StaticTool {
 }
 
 pub fn tool_search_tool() -> StaticTool {
+    tool_search_tool_with_options(ToolSearchToolOptions::default())
+}
+
+pub fn tool_search_tool_with_options(options: ToolSearchToolOptions) -> StaticTool {
     StaticTool::new(
         "tool_search",
         "Search tools available to the OpenAI runtime.",
     )
+    .with_hosted_tool_options(options.into_hosted_tool_options())
 }
 
 pub fn image_generation_tool() -> StaticTool {

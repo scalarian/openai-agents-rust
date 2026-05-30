@@ -67,9 +67,10 @@ pub use reasoning_content_replay::{
 };
 pub use tools::{
     CodeInterpreterTool, FileSearchTool, FileSearchToolOptions, ImageGenerationTool,
-    ToolSearchTool, WebSearchTool, WebSearchToolOptions, code_interpreter_tool, file_search_tool,
-    file_search_tool_with_options, file_search_tool_with_vector_store_ids, image_generation_tool,
-    tool_search_tool, web_search_tool, web_search_tool_with_options,
+    ToolSearchTool, ToolSearchToolOptions, WebSearchTool, WebSearchToolOptions,
+    code_interpreter_tool, file_search_tool, file_search_tool_with_options,
+    file_search_tool_with_vector_store_ids, image_generation_tool, tool_search_tool,
+    tool_search_tool_with_options, web_search_tool, web_search_tool_with_options,
 };
 pub use websocket::{
     OpenAIResponsesWebSocketOptions, ResponsesWebSocketSession, responses_websocket_session,
