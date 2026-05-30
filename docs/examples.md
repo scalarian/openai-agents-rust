@@ -85,6 +85,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | mcp get all MCP tools example | upstream-named MCP tool-prefetch entry point | [mcp_get_all_mcp_tools_example.rs](../crates/openai-agents/examples/mcp_get_all_mcp_tools_example.rs) |
 | mcp get all tools | prefetch MCP function tools for reuse and filtering | [mcp_get_all_tools.rs](../crates/openai-agents/examples/mcp_get_all_tools.rs) |
 | mcp git example | upstream-named MCP git entry point | [mcp_git_example.rs](../crates/openai-agents/examples/mcp_git_example.rs) |
+| mcp git | local Git MCP server tool discovery and tool calls | [mcp_git.rs](../crates/openai-agents/examples/mcp_git.rs) |
 | mcp manager example | upstream-named MCP manager entry point | [mcp_manager_example.rs](../crates/openai-agents/examples/mcp_manager_example.rs) |
 | mcp prompt server | MCP prompt discovery and prompt-driven agent instructions | [mcp_prompt_server.rs](../crates/openai-agents/examples/mcp_prompt_server.rs) |
 | mcp SSE example | upstream-named MCP SSE transport entry point | [mcp_sse_example.rs](../crates/openai-agents/examples/mcp_sse_example.rs) |
