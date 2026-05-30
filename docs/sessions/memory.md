@@ -24,5 +24,8 @@ Use `SessionSettings` when you need bounds such as history limits. That is the r
 ## Read Next
 
 - [openai.md](openai.md)
+- [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [encrypted_session.md](encrypted_session.md)
+- [sqlalchemy_session.md](sqlalchemy_session.md)
 - [../quickstart.md](../quickstart.md)
 - [../results.md](../results.md)

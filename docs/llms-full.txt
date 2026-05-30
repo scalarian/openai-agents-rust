@@ -2059,6 +2059,9 @@ Use this section when you want state to survive across turns, runs, or process b
 
 - [memory.md](memory.md): in-memory and SQLite-backed session basics
 - [openai.md](openai.md): OpenAI conversation-aware sessions and compaction
+- [advanced_sqlite_session.md](advanced_sqlite_session.md): extension SQLite sessions with custom database URLs and table names
+- [encrypted_session.md](encrypted_session.md): encryption wrapper for persisted session items
+- [sqlalchemy_session.md](sqlalchemy_session.md): Rust database-session equivalent for upstream SQLAlchemy examples
 
 The runnable [compaction_session.rs](../../crates/openai-agents/examples/compaction_session.rs) and [compaction_session_stateless.rs](../../crates/openai-agents/examples/compaction_session_stateless.rs) examples show automatic, manual, and `store=false` OpenAI Responses compaction.
 
@@ -2079,7 +2082,130 @@ Do not use sessions as a grab bag for arbitrary application state. Put applicati
 
 - [memory.md](memory.md)
 - [openai.md](openai.md)
+- [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [encrypted_session.md](encrypted_session.md)
+- [sqlalchemy_session.md](sqlalchemy_session.md)
 - [../results.md](../results.md)
+
+
+## sessions/advanced_sqlite_session.md
+
+# Advanced SQLite Sessions
+
+`AdvancedSQLiteSession` is an extension session for SQLite-backed local conversation state with configurable database URLs and table names.
+
+Use it when the built-in `SQLiteSession` behavior is right, but your application needs explicit table names or wants the extension wrapper used by the upstream-named examples.
+
+## Quick Start
+
+The runnable version lives in [advanced_sqlite_session.rs](../../crates/openai-agents/examples/advanced_sqlite_session.rs).
+
+```rust,no_run
+use openai_agents::extensions::AdvancedSQLiteSession;
+use openai_agents::{Agent, AgentsError, Runner, SessionSettings};
+
+#[tokio::main]
+async fn main() -> Result<(), AgentsError> {
+    let agent = Agent::builder("Assistant")
+        .instructions("Reply very concisely.")
+        .build();
+
+    let session = AdvancedSQLiteSession::open_with_options(
+        "conversation_123",
+        "sqlite::memory:",
+        "agent_sessions",
+        "agent_messages",
+        Some(SessionSettings::default()),
+    )
+    .await?;
+
+    let result = Runner::default()
+        .run_with_session(&agent, "What city is the Golden Gate Bridge in?", &session)
+        .await?;
+    println!("{}", result.final_output_text().unwrap_or_default());
+    Ok(())
+}
+```
+
+## Configuration
+
+| Option | Purpose |
+| --- | --- |
+| `session_id` | Stable conversation identifier. |
+| `database_url` | SQLx-style SQLite URL such as `sqlite::memory:` or a file-backed SQLite URL. |
+| `sessions_table` | Table for session metadata. |
+| `messages_table` | Table for persisted input and output items. |
+| `SessionSettings` | Optional bounds such as latest-item replay limits. |
+
+`AdvancedSQLiteSession` implements the shared `Session` trait, so it works with `Runner::run_with_session`, `Runner::resume_with_agent_and_session`, `get_items`, `get_items_with_limit`, `pop_item`, and `clear_session`.
+
+## What It Does Not Do
+
+The Rust extension is intentionally narrower than the Python `AdvancedSQLiteSession`. It does not currently expose conversation branching or usage analytics tables. Track token usage from `RunResult::usage` and store application analytics in your own tables when you need that data.
+
+## Read Next
+
+- [README.md](README.md)
+- [memory.md](memory.md)
+- [encrypted_session.md](encrypted_session.md)
+- [sqlalchemy_session.md](sqlalchemy_session.md)
+
+
+## sessions/encrypted_session.md
+
+# Encrypted Sessions
+
+`EncryptedSession` wraps any session implementation and stores encrypted envelopes in the underlying session. Reads decrypt valid envelopes back into normal input items before replay.
+
+Use it when session data is persisted locally but should not be stored as plaintext.
+
+## Quick Start
+
+The runnable version lives in [encrypted_session.rs](../../crates/openai-agents/examples/encrypted_session.rs).
+
+```rust,no_run
+use openai_agents::extensions::EncryptedSession;
+use openai_agents::{Agent, AgentsError, Runner, SQLiteSession};
+
+#[tokio::main]
+async fn main() -> Result<(), AgentsError> {
+    let agent = Agent::builder("Assistant").build();
+    let underlying = SQLiteSession::open_in_memory("conversation_123").await?;
+    let session = EncryptedSession::new(underlying, "my-secret-encryption-key")
+        .with_ttl_seconds(3600);
+
+    let result = Runner::default()
+        .run_with_session(&agent, "Hello", &session)
+        .await?;
+    println!("{}", result.final_output_text().unwrap_or_default());
+    Ok(())
+}
+```
+
+## Behavior
+
+- The wrapper implements the same `Session` trait as the underlying session.
+- Stored items become `EncryptedEnvelope` JSON items in the inner session.
+- `get_items` and `get_items_with_limit` return decrypted items.
+- Expired items are skipped when `with_ttl_seconds` is configured.
+- The encryption key can be any application-provided secret string.
+
+## Underlying Sessions
+
+`EncryptedSession<S>` is generic over the wrapped session. Common pairings are:
+
+- `EncryptedSession<SQLiteSession>` for local SQLite persistence.
+- `EncryptedSession<AdvancedSQLiteSession>` when you also need custom SQLite table names.
+- `EncryptedSession<DatabaseSession>` when you want the database-session extension surface.
+
+Content-based queries on the underlying session see encrypted envelopes, not plaintext messages. Decrypt through the wrapper when you need model-visible item history.
+
+## Read Next
+
+- [README.md](README.md)
+- [memory.md](memory.md)
+- [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [sqlalchemy_session.md](sqlalchemy_session.md)
 
 
 ## sessions/memory.md
@@ -2110,6 +2236,9 @@ Use `SessionSettings` when you need bounds such as history limits. That is the r
 ## Read Next
 
 - [openai.md](openai.md)
+- [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [encrypted_session.md](encrypted_session.md)
+- [sqlalchemy_session.md](sqlalchemy_session.md)
 - [../quickstart.md](../quickstart.md)
 - [../results.md](../results.md)
 
@@ -2151,6 +2280,59 @@ Compaction exists to keep long-lived conversations usable. Treat it as part of t
 - [../models/openai.md](../models/openai.md)
 - [../results.md](../results.md)
 - [../usage.md](../usage.md)
+
+
+## sessions/sqlalchemy_session.md
+
+# Database Sessions
+
+The Rust extension equivalent of the upstream SQLAlchemy example is `DatabaseSession`. It exposes a database-URL-backed session interface over the shared `Session` trait.
+
+The upstream-named [sqlalchemy_session_example.rs](../../crates/openai-agents/examples/sqlalchemy_session_example.rs) includes the Rust [database_session.rs](../../crates/openai-agents/examples/database_session.rs) example so users coming from Python can find the same workflow.
+
+## Quick Start
+
+```rust,no_run
+use openai_agents::extensions::DatabaseSession;
+use openai_agents::{Agent, AgentsError, Runner};
+
+#[tokio::main]
+async fn main() -> Result<(), AgentsError> {
+    let agent = Agent::builder("Assistant").build();
+    let session = DatabaseSession::open("conversation_123", "sqlite::memory:").await?;
+
+    let result = Runner::default()
+        .run_with_session(&agent, "Hello", &session)
+        .await?;
+    println!("{}", result.final_output_text().unwrap_or_default());
+    Ok(())
+}
+```
+
+## When To Use It
+
+Use `DatabaseSession` when you want the extension session abstraction and a database URL instead of constructing the core SQLite session directly. It is useful for parity with upstream database-session examples and for code that wants to keep session construction behind a URL-based factory.
+
+For direct SQLite control, use `SQLiteSession` or `AdvancedSQLiteSession`.
+
+## API Shape
+
+`DatabaseSession` implements the shared `Session` trait:
+
+- `get_items`
+- `get_items_with_limit`
+- `add_items`
+- `pop_item`
+- `clear_session`
+
+The current Rust implementation uses the SQLite-backed storage path. It does not expose Python SQLAlchemy engines or driver-specific pooling.
+
+## Read Next
+
+- [README.md](README.md)
+- [memory.md](memory.md)
+- [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [encrypted_session.md](encrypted_session.md)
 
 
 ## streaming.md

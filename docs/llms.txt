@@ -70,10 +70,16 @@ Compact export of the markdown docs tree.
   Sandbox agents give an agent a prepared workspace with filesystem tools, optional shell access, patching, and resumable local state. Use them when the task is grounded in files instead of only chat history.
 - sessions/README.md: Sessions
   Use this section when you want state to survive across turns, runs, or process boundaries.
+- sessions/advanced_sqlite_session.md: Advanced SQLite Sessions
+  `AdvancedSQLiteSession` is an extension session for SQLite-backed local conversation state with configurable database URLs and table names.
+- sessions/encrypted_session.md: Encrypted Sessions
+  `EncryptedSession` wraps any session implementation and stores encrypted envelopes in the underlying session. Reads decrypt valid envelopes back into normal input items before replay.
 - sessions/memory.md: Memory And SQLite Sessions
   Use this page when you need a local session backend without OpenAI-specific conversation semantics.
 - sessions/openai.md: OpenAI Sessions
   Use this page when you want sessions that preserve OpenAI conversation behavior rather than only storing local item history.
+- sessions/sqlalchemy_session.md: Database Sessions
+  The Rust extension equivalent of the upstream SQLAlchemy example is `DatabaseSession`. It exposes a database-URL-backed session interface over the shared `Session` trait.
 - streaming.md: Streaming
   Use this page when you need visibility into the run before the final output is ready.
 - tools.md: Tools
