@@ -62,6 +62,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | OpenAI session example | upstream-named OpenAI session entry point | [openai_session_example.rs](../crates/openai-agents/examples/openai_session_example.rs) |
 | OpenAI session HITL example | upstream-named OpenAI session HITL entry point | [openai_session_hitl_example.rs](../crates/openai-agents/examples/openai_session_hitl_example.rs) |
 | openai session | OpenAI conversation-aware session continuation metadata | [openai_session.rs](../crates/openai-agents/examples/openai_session.rs) |
+| output guardrails | upstream-named output guardrail entry point | [output_guardrails.rs](../crates/openai-agents/examples/output_guardrails.rs) |
 | output guardrail | final output tripwire handling | [output_guardrail.rs](../crates/openai-agents/examples/output_guardrail.rs) |
 | parallelization | run multiple agent calls concurrently and pick the best result | [parallelization.rs](../crates/openai-agents/examples/parallelization.rs) |
 | previous response id | continue a Responses API conversation by id | [previous_response_id.rs](../crates/openai-agents/examples/previous_response_id.rs) |
