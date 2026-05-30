@@ -1,6 +1,11 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use agents_core::{
-    AgentsError, InputItem, Model, ModelRequest, ModelResponse, OutputItem, Result, ToolDefinition,
-    Usage, UserError,
+    AgentsError, InputItem, LOGGER_TARGET, Model, ModelRequest, ModelResponse, OutputItem, Result,
+    ToolDefinition, Usage, UserError,
 };
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
@@ -188,6 +193,7 @@ pub struct OpenAIChatCompletionsModel {
     model: String,
     options: OpenAIClientOptions,
     strict_feature_validation: bool,
+    has_warned_unsupported_conversation_state: Arc<AtomicBool>,
 }
 
 impl OpenAIChatCompletionsModel {
@@ -196,6 +202,7 @@ impl OpenAIChatCompletionsModel {
             model: model.into(),
             options,
             strict_feature_validation: false,
+            has_warned_unsupported_conversation_state: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -205,6 +212,7 @@ impl OpenAIChatCompletionsModel {
     }
 
     pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
+        self.handle_unsupported_server_managed_conversation_state(request)?;
         let mut payload = serde_json::Map::new();
         payload.insert("model".to_owned(), Value::String(self.model.clone()));
         let mut messages = Vec::new();
@@ -231,6 +239,46 @@ impl OpenAIChatCompletionsModel {
         }
         apply_chat_model_settings(&mut payload, &request.settings, has_tools)?;
         Ok(Value::Object(payload))
+    }
+
+    fn handle_unsupported_server_managed_conversation_state(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<()> {
+        let mut unsupported = Vec::new();
+        if request.previous_response_id.is_some() {
+            unsupported.push("previous_response_id");
+        }
+        if request.conversation_id.is_some() {
+            unsupported.push("conversation_id");
+        }
+        if unsupported.is_empty() {
+            return Ok(());
+        }
+
+        let message = format!(
+            "OpenAIChatCompletionsModel does not support server-managed conversation state ({}). \
+Chat Completions requires callers to pass the full conversation history; use a Responses API model \
+for previous_response_id or a conversation-capable model for conversation_id.",
+            unsupported.join(", ")
+        );
+
+        if self.strict_feature_validation {
+            return Err(UserError { message }.into());
+        }
+
+        if !self
+            .has_warned_unsupported_conversation_state
+            .swap(true, Ordering::Relaxed)
+        {
+            log::warn!(
+                target: LOGGER_TARGET,
+                "{} Ignoring unsupported server-managed conversation state; enable strict feature validation to raise an error instead.",
+                message
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -1194,6 +1242,58 @@ mod tests {
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_ignores_server_managed_state_by_default() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: Some("resp_123".to_owned()),
+                conversation_id: Some("conv_123".to_owned()),
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("default chat payload should ignore server-managed state");
+
+        assert!(payload.get("previous_response_id").is_none());
+        assert!(payload.get("conversation_id").is_none());
+        assert_eq!(payload["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn strict_chat_payload_rejects_server_managed_state() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        )
+        .with_strict_feature_validation(true);
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: Some("resp_123".to_owned()),
+                conversation_id: Some("conv_123".to_owned()),
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("strict chat payload should reject server-managed state");
+
+        let message = error.to_string();
+        assert!(message.contains("server-managed conversation state"));
+        assert!(message.contains("previous_response_id"));
+        assert!(message.contains("conversation_id"));
     }
 
     #[test]
