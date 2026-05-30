@@ -39,6 +39,10 @@ This is usually the right choice for:
 
 Use normal Rust concurrency when several independent agent calls can run at once. For example, run translation attempts with `tokio::try_join!`, collect the candidate outputs, then pass them to a picker agent. See [parallelization.rs](../crates/openai-agents/examples/parallelization.rs).
 
+## LLM As A Judge
+
+Use an evaluator agent when a generation step needs a quality gate or iterative feedback. Model the evaluator's response as structured output, parse it into an application type, and feed feedback back into the next generator run. See [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs).
+
 ## Handoffs
 
 Use a handoff when control should actually move to another agent instead of appearing as a tool call in the parent run.

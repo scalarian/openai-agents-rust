@@ -16,6 +16,7 @@ cargo run -p openai-agents-rs --example function_tools
 cargo run -p openai-agents-rs --example handoffs
 cargo run -p openai-agents-rs --example input_guardrail
 cargo run -p openai-agents-rs --example lifecycle_hooks
+cargo run -p openai-agents-rs --example llm_as_a_judge
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example output_guardrail
 cargo run -p openai-agents-rs --example parallelization
@@ -44,6 +45,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `handoffs` | control transfer between agents | [docs/handoffs.md](../docs/handoffs.md) |
 | `input_guardrail` | tripwire handling before model execution | [docs/guardrails.md](../docs/guardrails.md) |
 | `lifecycle_hooks` | run and agent lifecycle callbacks | [docs/running_agents.md](../docs/running_agents.md) |
+| `llm_as_a_judge` | iterative generator and evaluator agent loop | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `output_guardrail` | tripwire handling for final model output | [docs/guardrails.md](../docs/guardrails.md) |
 | `parallelization` | concurrent agent calls followed by a picker agent | [docs/multi_agent.md](../docs/multi_agent.md) |
