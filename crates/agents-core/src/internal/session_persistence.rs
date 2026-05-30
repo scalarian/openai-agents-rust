@@ -6,7 +6,7 @@ use crate::run_config::ReasoningItemIdPolicy;
 use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 const EMPTY_JSON_OBJECT_SIDECAR_PREFIX: &str = "__agents_internal_empty_object_identity_";
@@ -33,82 +33,134 @@ pub(crate) async fn prepare_input_with_session(
     let history = session
         .get_items_with_limit(resolve_session_limit(None, Some(&resolved_settings)))
         .await?;
+    let preserve_openai_conversation_items = session.preserves_openai_conversation_item_identity();
     let original_input = input.to_vec();
-    let (mut prepared, mut session_input_items) = if let Some(callback) =
-        &config.session_input_callback
-    {
-        let mut history_for_callback = history.clone();
-        let mut new_items_for_callback = original_input.clone();
-        let mut generated_empty_json_sidecars = HashMap::new();
-        seed_empty_json_object_identity(
-            &mut history_for_callback,
-            &mut generated_empty_json_sidecars,
-        );
-        seed_empty_json_object_identity(
-            &mut new_items_for_callback,
-            &mut generated_empty_json_sidecars,
-        );
-        let mut history_refs =
-            build_reference_map(&history_for_callback, &generated_empty_json_sidecars);
-        let mut new_refs =
-            build_reference_map(&new_items_for_callback, &generated_empty_json_sidecars);
-        let mut history_counts =
-            build_frequency_map(&history_for_callback, &generated_empty_json_sidecars);
-        let mut new_counts =
-            build_frequency_map(&new_items_for_callback, &generated_empty_json_sidecars);
-        let combined = callback(history_for_callback, new_items_for_callback).await?;
-        let mut session_input_items = Vec::new();
+    let (mut prepared, mut session_input_items) =
+        if let Some(callback) = &config.session_input_callback {
+            let mut history_for_callback = history.clone();
+            let mut new_items_for_callback = original_input.clone();
+            let mut generated_empty_json_sidecars = HashMap::new();
+            seed_empty_json_object_identity(
+                &mut history_for_callback,
+                &mut generated_empty_json_sidecars,
+            );
+            seed_empty_json_object_identity(
+                &mut new_items_for_callback,
+                &mut generated_empty_json_sidecars,
+            );
+            let mut history_refs = build_reference_map(
+                &history_for_callback,
+                &generated_empty_json_sidecars,
+                preserve_openai_conversation_items,
+            );
+            let mut new_refs = build_reference_map(
+                &new_items_for_callback,
+                &generated_empty_json_sidecars,
+                false,
+            );
+            let mut history_counts = build_frequency_map(
+                &history_for_callback,
+                &generated_empty_json_sidecars,
+                preserve_openai_conversation_items,
+            );
+            let mut new_counts = build_frequency_map(
+                &new_items_for_callback,
+                &generated_empty_json_sidecars,
+                false,
+            );
+            let combined = callback(history_for_callback, new_items_for_callback).await?;
+            let mut session_input_items = Vec::new();
+            let mut history_indexes = HashSet::new();
 
-        for item in &combined {
-            let key = session_item_key(item, &generated_empty_json_sidecars);
-            let normalized_item =
-                strip_empty_json_object_identity(item.clone(), &generated_empty_json_sidecars);
-            if consume_reference(&mut new_refs, item, &generated_empty_json_sidecars) {
-                decrement_count(&mut new_counts, &key);
-                session_input_items.push(normalized_item.clone());
-                continue;
-            }
-            if consume_reference(&mut history_refs, item, &generated_empty_json_sidecars) {
-                decrement_count(&mut history_counts, &key);
-                continue;
-            }
-            if prefers_new_frequency_match(item) {
-                if new_counts.get(&key).copied().unwrap_or_default() > 0 {
-                    decrement_count(&mut new_counts, &key);
+            for (index, item) in combined.iter().enumerate() {
+                let history_key = session_item_key_for_matching(
+                    item,
+                    &generated_empty_json_sidecars,
+                    preserve_openai_conversation_items,
+                );
+                let new_key = session_item_key(item, &generated_empty_json_sidecars);
+                let normalized_item =
+                    strip_empty_json_object_identity(item.clone(), &generated_empty_json_sidecars);
+                if consume_reference(&mut new_refs, item, &generated_empty_json_sidecars, false) {
+                    decrement_count(&mut new_counts, &new_key);
                     session_input_items.push(normalized_item.clone());
                     continue;
                 }
-                if history_counts.get(&key).copied().unwrap_or_default() > 0 {
-                    decrement_count(&mut history_counts, &key);
+                if consume_reference(
+                    &mut history_refs,
+                    item,
+                    &generated_empty_json_sidecars,
+                    preserve_openai_conversation_items,
+                ) {
+                    decrement_count(&mut history_counts, &history_key);
+                    history_indexes.insert(index);
                     continue;
                 }
+                if prefers_new_frequency_match(item) {
+                    if new_counts.get(&new_key).copied().unwrap_or_default() > 0 {
+                        decrement_count(&mut new_counts, &new_key);
+                        session_input_items.push(normalized_item.clone());
+                        continue;
+                    }
+                    if history_counts
+                        .get(&history_key)
+                        .copied()
+                        .unwrap_or_default()
+                        > 0
+                    {
+                        decrement_count(&mut history_counts, &history_key);
+                        history_indexes.insert(index);
+                        continue;
+                    }
+                } else {
+                    if history_counts
+                        .get(&history_key)
+                        .copied()
+                        .unwrap_or_default()
+                        > 0
+                    {
+                        decrement_count(&mut history_counts, &history_key);
+                        history_indexes.insert(index);
+                        continue;
+                    }
+                    if new_counts.get(&new_key).copied().unwrap_or_default() > 0 {
+                        decrement_count(&mut new_counts, &new_key);
+                        session_input_items.push(normalized_item.clone());
+                        continue;
+                    }
+                }
+
+                session_input_items.push(normalized_item);
+            }
+
+            (
+                combined
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let item =
+                            strip_empty_json_object_identity(item, &generated_empty_json_sidecars);
+                        if preserve_openai_conversation_items && history_indexes.contains(&index) {
+                            sanitize_openai_conversation_history_item_for_model_input(item)
+                        } else {
+                            item
+                        }
+                    })
+                    .collect(),
+                session_input_items,
+            )
+        } else {
+            let mut prepared = if preserve_openai_conversation_items {
+                history
+                    .into_iter()
+                    .map(sanitize_openai_conversation_history_item_for_model_input)
+                    .collect()
             } else {
-                if history_counts.get(&key).copied().unwrap_or_default() > 0 {
-                    decrement_count(&mut history_counts, &key);
-                    continue;
-                }
-                if new_counts.get(&key).copied().unwrap_or_default() > 0 {
-                    decrement_count(&mut new_counts, &key);
-                    session_input_items.push(normalized_item.clone());
-                    continue;
-                }
-            }
-
-            session_input_items.push(normalized_item);
-        }
-
-        (
-            combined
-                .into_iter()
-                .map(|item| strip_empty_json_object_identity(item, &generated_empty_json_sidecars))
-                .collect(),
-            session_input_items,
-        )
-    } else {
-        let mut prepared = history;
-        prepared.extend(original_input.clone());
-        (prepared, original_input.clone())
-    };
+                history
+            };
+            prepared.extend(original_input.clone());
+            (prepared, original_input.clone())
+        };
     if prepared.is_empty() && config.session_input_callback.is_none() {
         prepared = original_input.clone();
         session_input_items = original_input.clone();
@@ -175,6 +227,26 @@ fn sanitize_openai_conversation_item(item: InputItem) -> InputItem {
         object.remove("id");
     }
     object.remove("provider_data");
+
+    InputItem::Json {
+        value: serde_json::Value::Object(object),
+    }
+}
+
+fn sanitize_openai_conversation_history_item_for_model_input(item: InputItem) -> InputItem {
+    let InputItem::Json {
+        value: serde_json::Value::Object(mut object),
+    } = item
+    else {
+        return item;
+    };
+
+    if object.get("type").and_then(serde_json::Value::as_str) == Some("message")
+        && object.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+    {
+        object.remove("id");
+        object.remove("provider_data");
+    }
 
     InputItem::Json {
         value: serde_json::Value::Object(object),
@@ -253,15 +325,24 @@ pub(crate) fn validate_session_conversation_settings(
 fn build_reference_map(
     items: &[InputItem],
     generated_empty_json_sidecars: &HashMap<String, Uuid>,
+    ignore_openai_assistant_history_ids: bool,
 ) -> HashMap<String, Vec<InputItemIdentity>> {
     let mut refs = HashMap::new();
     for item in items {
-        let Some(identity) = input_item_identity(item, generated_empty_json_sidecars) else {
+        let Some(identity) = input_item_identity_for_matching(
+            item,
+            generated_empty_json_sidecars,
+            ignore_openai_assistant_history_ids,
+        ) else {
             continue;
         };
-        refs.entry(session_item_key(item, generated_empty_json_sidecars))
-            .or_insert_with(Vec::new)
-            .push(identity);
+        refs.entry(session_item_key_for_matching(
+            item,
+            generated_empty_json_sidecars,
+            ignore_openai_assistant_history_ids,
+        ))
+        .or_insert_with(Vec::new)
+        .push(identity);
     }
     refs
 }
@@ -270,11 +351,20 @@ fn consume_reference(
     refs: &mut HashMap<String, Vec<InputItemIdentity>>,
     item: &InputItem,
     generated_empty_json_sidecars: &HashMap<String, Uuid>,
+    ignore_openai_assistant_history_ids: bool,
 ) -> bool {
-    let Some(identity) = input_item_identity(item, generated_empty_json_sidecars) else {
+    let Some(identity) = input_item_identity_for_matching(
+        item,
+        generated_empty_json_sidecars,
+        ignore_openai_assistant_history_ids,
+    ) else {
         return false;
     };
-    let key = session_item_key(item, generated_empty_json_sidecars);
+    let key = session_item_key_for_matching(
+        item,
+        generated_empty_json_sidecars,
+        ignore_openai_assistant_history_ids,
+    );
     let Some(identities) = refs.get_mut(&key) else {
         return false;
     };
@@ -294,10 +384,15 @@ fn consume_reference(
 fn build_frequency_map(
     items: &[InputItem],
     generated_empty_json_sidecars: &HashMap<String, Uuid>,
+    ignore_openai_assistant_history_ids: bool,
 ) -> HashMap<String, usize> {
     let mut counts = HashMap::new();
     for item in items {
-        let key = session_item_key(item, generated_empty_json_sidecars);
+        let key = session_item_key_for_matching(
+            item,
+            generated_empty_json_sidecars,
+            ignore_openai_assistant_history_ids,
+        );
         *counts.entry(key).or_insert(0) += 1;
     }
     counts
@@ -313,11 +408,36 @@ fn session_item_key(
     item: &InputItem,
     generated_empty_json_sidecars: &HashMap<String, Uuid>,
 ) -> String {
+    session_item_key_for_matching(item, generated_empty_json_sidecars, false)
+}
+
+fn session_item_key_for_matching(
+    item: &InputItem,
+    generated_empty_json_sidecars: &HashMap<String, Uuid>,
+    ignore_openai_assistant_history_ids: bool,
+) -> String {
+    let mut item = strip_empty_json_object_identity(item.clone(), generated_empty_json_sidecars);
+    if ignore_openai_assistant_history_ids {
+        item = sanitize_openai_conversation_history_item_for_model_input(item);
+    }
     serde_json::to_string(&strip_empty_json_object_identity(
-        item.clone(),
+        item,
         generated_empty_json_sidecars,
     ))
     .expect("input items should serialize")
+}
+
+fn input_item_identity_for_matching(
+    item: &InputItem,
+    generated_empty_json_sidecars: &HashMap<String, Uuid>,
+    ignore_openai_assistant_history_ids: bool,
+) -> Option<InputItemIdentity> {
+    if !ignore_openai_assistant_history_ids {
+        return input_item_identity(item, generated_empty_json_sidecars);
+    }
+
+    let item = sanitize_openai_conversation_history_item_for_model_input(item.clone());
+    input_item_identity(&item, generated_empty_json_sidecars)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -549,6 +669,187 @@ mod tests {
         assert_eq!(original_input[0].as_text(), Some("new"));
         assert_eq!(session_input_items.len(), 1);
         assert_eq!(session_input_items[0].as_text(), Some("new"));
+    }
+
+    #[tokio::test]
+    async fn prepare_input_with_openai_conversation_strips_assistant_history_ids() {
+        let session = OpenAIConversationLikeSession::new();
+        session
+            .add_items(vec![
+                InputItem::Json {
+                    value: json!({
+                        "id": "conv_item_user",
+                        "type": "message",
+                        "role": "user",
+                        "content": "user history",
+                        "provider_data": {"server": "metadata"}
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "id": "conv_item_assistant",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "assistant history",
+                        "provider_data": {"server": "metadata"}
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "id": "conv_item_call",
+                        "type": "function_call",
+                        "call_id": "call_history",
+                        "name": "lookup",
+                        "arguments": "{}"
+                    }),
+                },
+            ])
+            .await
+            .expect("history should be added");
+
+        let (prepared, _original_input, session_input_items) =
+            prepare_input_with_session(&[InputItem::from("new")], &RunConfig::default(), &session)
+                .await
+                .expect("prepared input should build");
+
+        let InputItem::Json { value: user } = &prepared[0] else {
+            panic!("expected user history item");
+        };
+        let InputItem::Json { value: assistant } = &prepared[1] else {
+            panic!("expected assistant history item");
+        };
+        let InputItem::Json { value: call } = &prepared[2] else {
+            panic!("expected function call history item");
+        };
+        assert_eq!(
+            user.get("id").and_then(Value::as_str),
+            Some("conv_item_user")
+        );
+        assert!(user.get("provider_data").is_some());
+        assert_eq!(
+            assistant.get("role").and_then(Value::as_str),
+            Some("assistant")
+        );
+        assert!(assistant.get("id").is_none());
+        assert!(assistant.get("provider_data").is_none());
+        assert_eq!(
+            call.get("id").and_then(Value::as_str),
+            Some("conv_item_call")
+        );
+        assert_eq!(prepared[3].as_text(), Some("new"));
+        assert_eq!(session_input_items, vec![InputItem::from("new")]);
+    }
+
+    #[tokio::test]
+    async fn prepare_input_with_regular_session_preserves_assistant_history_ids() {
+        let session = MemorySession::new("session");
+        session
+            .add_items(vec![InputItem::Json {
+                value: json!({
+                    "id": "message_id",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "history"
+                }),
+            }])
+            .await
+            .expect("history should be added");
+
+        let (prepared, _original_input, _session_input_items) =
+            prepare_input_with_session(&[InputItem::from("new")], &RunConfig::default(), &session)
+                .await
+                .expect("prepared input should build");
+
+        let InputItem::Json { value } = &prepared[0] else {
+            panic!("expected assistant history item");
+        };
+        assert_eq!(value.get("id").and_then(Value::as_str), Some("message_id"));
+    }
+
+    #[tokio::test]
+    async fn openai_conversation_callback_matches_assistant_history_without_ids() {
+        let session = OpenAIConversationLikeSession::new();
+        session
+            .add_items(vec![InputItem::Json {
+                value: json!({
+                    "id": "conv_item_assistant",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "history",
+                    "provider_data": {"server": "metadata"}
+                }),
+            }])
+            .await
+            .expect("history should be added");
+        let config = RunConfig {
+            session_input_callback: Some(std::sync::Arc::new(|mut history, mut new_items| {
+                async move {
+                    let mut history_item = history.remove(0);
+                    if let InputItem::Json { value } = &mut history_item {
+                        value.as_object_mut().expect("history object").remove("id");
+                        value
+                            .as_object_mut()
+                            .expect("history object")
+                            .remove("provider_data");
+                    }
+                    let new_item = new_items.remove(0);
+                    Ok(vec![history_item, new_item])
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        };
+
+        let (prepared, _original_input, session_input_items) =
+            prepare_input_with_session(&[InputItem::from("new")], &config, &session)
+                .await
+                .expect("prepared input should build");
+
+        assert_eq!(prepared.len(), 2);
+        assert_eq!(session_input_items, vec![InputItem::from("new")]);
+    }
+
+    #[tokio::test]
+    async fn openai_conversation_callback_keeps_user_history_ids_distinct() {
+        let session = OpenAIConversationLikeSession::new();
+        session
+            .add_items(vec![InputItem::Json {
+                value: json!({
+                    "id": "conv_item_user",
+                    "type": "message",
+                    "role": "user",
+                    "content": "history",
+                    "provider_data": {"server": "metadata"}
+                }),
+            }])
+            .await
+            .expect("history should be added");
+        let config = RunConfig {
+            session_input_callback: Some(std::sync::Arc::new(|mut history, mut new_items| {
+                async move {
+                    let mut history_item = history.remove(0);
+                    if let InputItem::Json { value } = &mut history_item {
+                        value.as_object_mut().expect("history object").remove("id");
+                        value
+                            .as_object_mut()
+                            .expect("history object")
+                            .remove("provider_data");
+                    }
+                    let new_item = new_items.remove(0);
+                    Ok(vec![history_item, new_item])
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        };
+
+        let (_prepared, _original_input, session_input_items) =
+            prepare_input_with_session(&[InputItem::from("new")], &config, &session)
+                .await
+                .expect("prepared input should build");
+
+        assert_eq!(session_input_items.len(), 2);
+        assert_eq!(session_input_items[1], InputItem::from("new"));
     }
 
     #[tokio::test]
