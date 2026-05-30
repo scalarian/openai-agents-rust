@@ -8,6 +8,7 @@ From the repo root:
 
 ```bash
 cargo run -p openai-agents-rs --example agents_as_tools
+cargo run -p openai-agents-rs --example agents_as_tools_structured
 cargo run -p openai-agents-rs --example basic_run
 cargo run -p openai-agents-rs --example deterministic_flow
 cargo run -p openai-agents-rs --example dynamic_system_prompt
@@ -41,6 +42,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | Example | What it shows | Docs |
 | --- | --- | --- |
 | `agents_as_tools` | specialist agents exposed as callable tools | [docs/agents.md](../docs/agents.md) |
+| `agents_as_tools_structured` | structured input for agent-as-tool calls | [docs/agents.md](../docs/agents.md) |
 | `basic_run` | the smallest end-to-end facade call | [docs/quickstart.md](../docs/quickstart.md) |
 | `deterministic_flow` | multi-step agent workflow with an explicit gate | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `dynamic_system_prompt` | per-run agent instructions | [docs/agents.md](../docs/agents.md) |
