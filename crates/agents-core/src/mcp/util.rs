@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -65,16 +66,16 @@ impl MCPUtil {
         schema: Option<&Value>,
         args: &Value,
     ) -> Result<()> {
-        let Some(schema) = schema else {
-            return Ok(());
-        };
-
         let Value::Object(arguments) = args else {
             return Err(AgentsError::User(UserError {
                 message: format!(
                     "tool `{tool_name}` requires object arguments that match its input schema"
                 ),
             }));
+        };
+
+        let Some(schema) = schema else {
+            return Ok(());
         };
 
         let missing_required = schema
@@ -189,6 +190,7 @@ impl MCPUtil {
         let server_name = server.name().to_owned();
         let needs_approval = tool.requires_approval;
         let input_schema = tool.input_schema.clone();
+        let static_meta = tool.meta.clone();
         let function_tool = FunctionTool::new(
             definition,
             Arc::new(move |_tool_context, args| {
@@ -198,10 +200,11 @@ impl MCPUtil {
                 let run_context = run_context.clone();
                 let server_name = server_name.clone();
                 let input_schema = input_schema.clone();
+                let static_meta = static_meta.clone();
                 Box::pin(async move {
                     Self::validate_tool_arguments(&tool_name, input_schema.as_ref(), &args)?;
                     server.connect().await?;
-                    let meta = meta_resolver.and_then(|resolver| {
+                    let resolved_meta = meta_resolver.and_then(|resolver| {
                         resolver(MCPToolMetaContext {
                             run_context,
                             server_name,
@@ -209,6 +212,7 @@ impl MCPUtil {
                             arguments: Some(args.clone()),
                         })
                     });
+                    let meta = merge_mcp_meta(resolved_meta, static_meta);
                     let result = server.call_tool(&tool_name, args, meta).await;
                     server.cleanup().await?;
                     result
@@ -293,29 +297,57 @@ impl MCPUtil {
         meta_resolver: Option<MCPToolMetaResolver>,
     ) -> Result<Vec<FunctionTool>> {
         let mut tools = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = BTreeSet::new();
 
         for server in servers {
-            for tool in Self::get_function_tools_connected(
+            let server_tools = Self::get_function_tools_connected(
                 server.clone(),
                 filter,
                 run_context.clone(),
                 agent.clone(),
                 meta_resolver.clone(),
             )
-            .await?
-            {
-                if !seen.insert(tool.definition.name.clone()) {
-                    return Err(AgentsError::message(format!(
-                        "duplicate MCP tool name `{}` across servers",
-                        tool.definition.name
-                    )));
-                }
-                tools.push(tool);
+            .await?;
+            let server_tool_names = server_tools
+                .iter()
+                .map(|tool| tool.definition.name.clone())
+                .collect::<BTreeSet<_>>();
+            let duplicate_names = server_tool_names
+                .intersection(&seen)
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if !duplicate_names.is_empty() {
+                let quoted_names = duplicate_names
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let plural = if duplicate_names.len() == 1 {
+                    "name"
+                } else {
+                    "names"
+                };
+                return Err(AgentsError::message(format!(
+                    "duplicate MCP tool {plural} {quoted_names} across servers"
+                )));
             }
+            seen.extend(server_tool_names);
+            tools.extend(server_tools);
         }
 
         Ok(tools)
+    }
+}
+
+fn merge_mcp_meta(resolved_meta: Option<Value>, static_meta: Option<Value>) -> Option<Value> {
+    match (resolved_meta, static_meta) {
+        (None, None) => None,
+        (Some(meta), None) | (None, Some(meta)) => Some(meta),
+        (Some(Value::Object(mut resolved)), Some(Value::Object(static_meta))) => {
+            resolved.extend(static_meta);
+            Some(Value::Object(resolved))
+        }
+        (_, Some(static_meta)) => Some(static_meta),
     }
 }
 
@@ -346,7 +378,8 @@ fn strict_or_fallback_mcp_input_schema(tool_name: &str, schema: &Value) -> (Valu
 mod tests {
     use async_trait::async_trait;
     use serde_json::json;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
     use crate::internal::tool_execution::execute_local_function_tools;
@@ -359,6 +392,8 @@ mod tests {
     #[derive(Default)]
     struct FakeServerState {
         tool_calls: AtomicUsize,
+        mutate_meta: AtomicBool,
+        tool_metas: Mutex<Vec<Option<Value>>>,
     }
 
     struct FakeServer {
@@ -404,9 +439,55 @@ mod tests {
             &self,
             tool_name: &str,
             arguments: Value,
+            meta: Option<Value>,
+        ) -> Result<ToolOutput> {
+            let mut meta = meta;
+            if self.state.mutate_meta.load(Ordering::SeqCst)
+                && let Some(Value::Object(object)) = &mut meta
+                && let Some(Value::Object(nested)) = object.get_mut("nested")
+                && let Some(Value::Array(headers)) = nested.get_mut("headers")
+            {
+                headers.push(json!("mutated"));
+            }
+            self.state
+                .tool_metas
+                .lock()
+                .expect("tool metas mutex")
+                .push(meta);
+            self.state.tool_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput::from(format!("{tool_name}:{arguments}")))
+        }
+    }
+
+    struct ToolListServer {
+        name: String,
+        tools: Vec<MCPTool>,
+    }
+
+    #[async_trait]
+    impl MCPServer for ToolListServer {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        async fn connect(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn cleanup(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn list_tools(&self) -> Result<Vec<MCPTool>> {
+            Ok(self.tools.clone())
+        }
+
+        async fn call_tool(
+            &self,
+            tool_name: &str,
+            arguments: Value,
             _meta: Option<Value>,
         ) -> Result<ToolOutput> {
-            self.state.tool_calls.fetch_add(1, Ordering::SeqCst);
             Ok(ToolOutput::from(format!("{tool_name}:{arguments}")))
         }
     }
@@ -477,6 +558,139 @@ mod tests {
         assert_eq!(
             function_tool.definition.input_json_schema.as_ref(),
             Some(&schema)
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_function_tool_rejects_non_object_arguments_without_schema() {
+        let state = Arc::new(FakeServerState::default());
+        let server = Arc::new(FakeServer {
+            state: state.clone(),
+        }) as Arc<dyn MCPServer>;
+        let tool = MCPTool {
+            name: "lookup".to_owned(),
+            input_schema: None,
+            ..MCPTool::default()
+        };
+        let function_tool = MCPUtil::to_function_tool(
+            server,
+            &tool,
+            None,
+            RunContextWrapper::new(RunContext::default()),
+        )
+        .expect("tool conversion should succeed");
+
+        let error = function_tool
+            .invoke(
+                crate::tool_context::ToolContext::new(
+                    RunContextWrapper::new(RunContext::default()),
+                    "lookup",
+                    "call-non-object",
+                    "\"hello\"",
+                ),
+                json!("hello"),
+            )
+            .await
+            .expect_err("non-object MCP arguments should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires object arguments that match its input schema")
+        );
+        assert_eq!(state.tool_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn passes_static_mcp_meta_and_resolver_meta_without_reuse() {
+        let state = Arc::new(FakeServerState::default());
+        state.mutate_meta.store(true, Ordering::SeqCst);
+        let server = Arc::new(FakeServer {
+            state: state.clone(),
+        }) as Arc<dyn MCPServer>;
+        let tool = MCPTool {
+            name: "lookup".to_owned(),
+            input_schema: Some(json!({"type": "object", "properties": {}})),
+            meta: Some(json!({
+                "locale": "en",
+                "nested": {"headers": ["original"]},
+            })),
+            ..MCPTool::default()
+        };
+        let resolver: MCPToolMetaResolver = Arc::new(|_context| {
+            Some(json!({
+                "request_id": "req-123",
+                "locale": "ja",
+            }))
+        });
+        let function_tool = MCPUtil::to_function_tool(
+            server,
+            &tool,
+            Some(resolver),
+            RunContextWrapper::new(RunContext::default()),
+        )
+        .expect("tool conversion should succeed");
+
+        for call_id in ["call-1", "call-2"] {
+            function_tool
+                .invoke(
+                    crate::tool_context::ToolContext::new(
+                        RunContextWrapper::new(RunContext::default()),
+                        "lookup",
+                        call_id,
+                        "{}",
+                    ),
+                    json!({}),
+                )
+                .await
+                .expect("tool call should succeed");
+        }
+
+        let metas = state.tool_metas.lock().expect("tool metas mutex").clone();
+        assert_eq!(
+            metas,
+            vec![
+                Some(json!({
+                    "request_id": "req-123",
+                    "locale": "en",
+                    "nested": {"headers": ["original", "mutated"]},
+                })),
+                Some(json!({
+                    "request_id": "req-123",
+                    "locale": "en",
+                    "nested": {"headers": ["original", "mutated"]},
+                })),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_mcp_tool_error_lists_sorted_names() {
+        let servers = vec![
+            Arc::new(ToolListServer {
+                name: "one".to_owned(),
+                tools: vec![MCPTool::new("zeta"), MCPTool::new("alpha")],
+            }) as Arc<dyn MCPServer>,
+            Arc::new(ToolListServer {
+                name: "two".to_owned(),
+                tools: vec![MCPTool::new("alpha"), MCPTool::new("zeta")],
+            }) as Arc<dyn MCPServer>,
+        ];
+
+        let error = MCPUtil::get_all_function_tools_connected(
+            &servers,
+            None,
+            RunContextWrapper::new(RunContext::default()),
+            Agent::builder("assistant").build(),
+            None,
+        )
+        .await
+        .expect_err("duplicate tool names should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate MCP tool names `alpha`, `zeta` across servers")
         );
     }
 
