@@ -51,6 +51,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | file search | hosted file search with vector store options and included results | [file_search.rs](../crates/openai-agents/examples/file_search.rs) |
 | file HITL | file-backed session with approval interruption persistence | [file_hitl.rs](../crates/openai-agents/examples/file_hitl.rs) |
 | file HITL example | upstream-named file session HITL entry point | [file_hitl_example.rs](../crates/openai-agents/examples/file_hitl_example.rs) |
+| financial research agent | multi-agent financial research planner, analyst tools, report writer, and verifier | [financial_research_agent.rs](../crates/openai-agents/examples/financial_research_agent.rs) |
 | function tools | typed local tools with JSON-schema inputs | [function_tools.rs](../crates/openai-agents/examples/function_tools.rs) |
 | forcing tool use | required tool choice and stop-on-tool behavior | [forcing_tool_use.rs](../crates/openai-agents/examples/forcing_tool_use.rs) |
 | handoffs | control transfer between agents | [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) |
