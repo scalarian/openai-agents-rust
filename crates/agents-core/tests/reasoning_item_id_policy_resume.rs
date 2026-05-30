@@ -48,8 +48,13 @@ async fn reasoning_item_id_policy_omit_survives_resume() {
     });
     let agent = Agent::builder("assistant").build();
     let context = RunContextWrapper::new(RunContext::default());
-    let mut state = RunState::new(&context, vec![InputItem::from("start")], agent.clone(), 2)
-        .expect("run state should build");
+    let mut state = RunState::new(
+        &context,
+        vec![InputItem::from("start")],
+        agent.clone(),
+        Some(2),
+    )
+    .expect("run state should build");
     state.normalized_input = Some(vec![InputItem::from("normalized-start")]);
     state.reasoning_item_id_policy = ReasoningItemIdPolicy::Omit;
     state.push_generated_item(RunItem::Reasoning {

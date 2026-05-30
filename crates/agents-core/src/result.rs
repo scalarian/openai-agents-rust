@@ -116,7 +116,7 @@ impl RunResult {
 pub struct RunResultStreaming {
     pub current_agent: Option<Agent>,
     pub current_turn: usize,
-    pub max_turns: usize,
+    pub max_turns: Option<usize>,
     pub is_complete: bool,
     pub final_output: Option<Value>,
     pub normalized_input: Option<Vec<InputItem>>,
@@ -137,7 +137,7 @@ impl RunResultStreaming {
     pub fn from_run_result(
         result: RunResult,
         current_turn: usize,
-        max_turns: usize,
+        max_turns: Option<usize>,
         events: Vec<StreamEvent>,
     ) -> Self {
         let final_output = result
@@ -164,7 +164,10 @@ impl RunResultStreaming {
         }
     }
 
-    pub(crate) fn from_live(max_turns: usize, shared_state: Arc<LiveRunStreamState>) -> Self {
+    pub(crate) fn from_live(
+        max_turns: Option<usize>,
+        shared_state: Arc<LiveRunStreamState>,
+    ) -> Self {
         Self {
             current_agent: None,
             current_turn: 0,
@@ -337,7 +340,7 @@ mod tests {
             &context,
             vec![InputItem::from("hello")],
             Agent::builder("assistant").build(),
-            4,
+            Some(4),
         )
         .expect("state should build");
         let result = RunResult {

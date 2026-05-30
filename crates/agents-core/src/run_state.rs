@@ -17,7 +17,7 @@ use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult
 use crate::tracing::Trace;
 use crate::usage::Usage;
 
-pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.9";
+pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.10";
 
 /// Serializable snapshot of the runtime context carried across a run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -65,7 +65,7 @@ pub struct RunState {
     pub model_responses: Vec<ModelResponse>,
     pub generated_items: Vec<RunItem>,
     pub session_items: Vec<RunItem>,
-    pub max_turns: usize,
+    pub max_turns: Option<usize>,
     pub conversation_id: Option<String>,
     pub previous_response_id: Option<String>,
     pub auto_previous_response_id: bool,
@@ -93,7 +93,7 @@ impl Default for RunState {
             model_responses: Vec::new(),
             generated_items: Vec::new(),
             session_items: Vec::new(),
-            max_turns: 10,
+            max_turns: Some(10),
             conversation_id: None,
             previous_response_id: None,
             auto_previous_response_id: false,
@@ -116,7 +116,7 @@ impl RunState {
         context: &RunContextWrapper<TContext>,
         original_input: Vec<InputItem>,
         starting_agent: Agent,
-        max_turns: usize,
+        max_turns: Option<usize>,
     ) -> Result<Self>
     where
         TContext: Clone + Serialize,
@@ -161,12 +161,13 @@ impl RunState {
         self.current_agent.as_ref().map(|agent| agent.name.as_str())
     }
 
-    pub fn remaining_turns(&self) -> usize {
-        self.max_turns.saturating_sub(self.current_turn)
+    pub fn remaining_turns(&self) -> Option<usize> {
+        self.max_turns
+            .map(|max_turns| max_turns.saturating_sub(self.current_turn))
     }
 
     pub fn can_continue(&self) -> bool {
-        self.remaining_turns() > 0 && self.current_step.is_none()
+        !matches!(self.remaining_turns(), Some(0)) && self.current_step.is_none()
     }
 
     pub fn is_interrupted(&self) -> bool {
@@ -376,7 +377,7 @@ mod tests {
             &context,
             vec![InputItem::from("start")],
             Agent::builder("router").build(),
-            12,
+            Some(12),
         )
         .expect("run state should build");
 
@@ -385,7 +386,7 @@ mod tests {
             .expect("context should restore");
 
         assert_eq!(state.current_agent_name(), Some("router"));
-        assert_eq!(state.max_turns, 12);
+        assert_eq!(state.max_turns, Some(12));
         assert_eq!(restored.context.conversation_id.as_deref(), Some("conv-1"));
         assert_eq!(restored.tool_input, Some(json!({"query":"rust"})));
         assert_eq!(restored.agent_tool_state_scope.as_deref(), Some("scope-1"));
@@ -398,7 +399,7 @@ mod tests {
             &context,
             vec![InputItem::from("start")],
             Agent::builder("router").build(),
-            3,
+            Some(3),
         )
         .expect("run state should build");
 
@@ -448,7 +449,7 @@ mod tests {
             &context,
             vec![InputItem::from("done")],
             Agent::builder("router").build(),
-            3,
+            Some(3),
         )
         .expect("run state should build");
 
@@ -467,7 +468,7 @@ mod tests {
     #[test]
     fn records_guardrail_results() {
         let context = RunContextWrapper::new(RunContext::default());
-        let mut state = RunState::new(&context, vec![], Agent::builder("router").build(), 3)
+        let mut state = RunState::new(&context, vec![], Agent::builder("router").build(), Some(3))
             .expect("run state should build");
 
         state.record_input_guardrail_result(InputGuardrailResult {
@@ -499,7 +500,7 @@ mod tests {
             &context,
             vec![InputItem::from("start")],
             Agent::builder("router").build(),
-            3,
+            Some(3),
         )
         .expect("run state should build");
         state.mark_turn_started();

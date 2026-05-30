@@ -39,7 +39,7 @@ pub async fn run_demo_loop(agent: &Agent, stream: bool, max_turns: usize) -> Res
         if stream {
             let result = Runner::new()
                 .with_config(crate::run_config::RunConfig {
-                    max_turns,
+                    max_turns: Some(max_turns),
                     ..crate::run_config::RunConfig::default()
                 })
                 .run_items_streamed(&current_agent, input_items.clone())
@@ -54,7 +54,7 @@ pub async fn run_demo_loop(agent: &Agent, stream: bool, max_turns: usize) -> Res
         } else {
             let result = Runner::new()
                 .with_config(crate::run_config::RunConfig {
-                    max_turns,
+                    max_turns: Some(max_turns),
                     ..crate::run_config::RunConfig::default()
                 })
                 .run_items(&current_agent, input_items.clone())

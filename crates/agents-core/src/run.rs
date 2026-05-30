@@ -78,7 +78,7 @@ impl Runner {
         Self {
             model_provider: None,
             config: RunConfig {
-                max_turns: DEFAULT_MAX_TURNS,
+                max_turns: Some(DEFAULT_MAX_TURNS),
                 workflow_name: "Agent workflow".to_owned(),
                 ..RunConfig::default()
             },
@@ -105,7 +105,7 @@ impl Runner {
             runner.config = run_config;
         }
         if let Some(max_turns) = options.max_turns {
-            runner.config.max_turns = max_turns;
+            runner.config.max_turns = Some(max_turns);
         }
         if let Some(hooks) = options.hooks {
             runner.config.run_hooks = Some(hooks);
@@ -552,7 +552,17 @@ impl Runner {
             conversation_tracker.apply_session_state(session_state);
         }
 
-        for _turn in 0..self.config.max_turns {
+        let mut max_turns_exceeded = false;
+        loop {
+            if self
+                .config
+                .max_turns
+                .is_some_and(|max_turns| raw_responses.len() >= max_turns)
+            {
+                max_turns_exceeded = true;
+                break;
+            }
+
             if let Some(recorder) = &stream_recorder {
                 recorder
                     .push_lifecycle(
@@ -869,11 +879,19 @@ impl Runner {
             }
         }
 
-        if final_output_items.is_empty() && final_output.is_none() && interruptions.is_empty() {
+        if max_turns_exceeded
+            && final_output_items.is_empty()
+            && final_output.is_none()
+            && interruptions.is_empty()
+        {
+            let max_turns = self
+                .config
+                .max_turns
+                .expect("max_turns_exceeded should only be true for finite limits");
             let max_turns_error = MaxTurnsExceeded {
                 message: format!(
                     "run for agent `{}` exceeded max_turns ({}) before producing a final output",
-                    agent.name, self.config.max_turns
+                    agent.name, max_turns
                 ),
             };
 
@@ -1039,7 +1057,7 @@ impl Runner {
     }
 
     pub async fn resume(&self, state: &RunState) -> Result<RunResult> {
-        if state.remaining_turns() == 0 {
+        if state.remaining_turns() == Some(0) {
             return Err(MaxTurnsExceeded {
                 message: "cannot resume a run state that has exhausted max_turns".to_owned(),
             }
@@ -2455,6 +2473,55 @@ mod tests {
     }
 
     impl ModelProvider for LoopingToolProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone)]
+    struct FinalAfterToolTurnsModel {
+        calls: Arc<Mutex<usize>>,
+        final_turn: usize,
+    }
+
+    #[async_trait]
+    impl Model for FinalAfterToolTurnsModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            let mut calls = self.calls.lock().expect("final-after calls lock");
+            *calls += 1;
+            let turn = *calls;
+
+            let output = if turn >= self.final_turn {
+                vec![OutputItem::Text {
+                    text: format!("done after {turn}"),
+                }]
+            } else {
+                vec![OutputItem::ToolCall {
+                    call_id: format!("call-{turn}"),
+                    tool_name: "search".to_owned(),
+                    arguments: json!({"query":"rust"}),
+                    namespace: None,
+                }]
+            };
+
+            Ok(ModelResponse {
+                model: request.model,
+                output,
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                },
+                response_id: Some(format!("resp-{turn}")),
+                request_id: None,
+            })
+        }
+    }
+
+    struct FinalAfterToolTurnsProvider {
+        model: Arc<FinalAfterToolTurnsModel>,
+    }
+
+    impl ModelProvider for FinalAfterToolTurnsProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
         }
@@ -4334,7 +4401,7 @@ mod tests {
         let runner = Runner::new()
             .with_model_provider(provider)
             .with_config(RunConfig {
-                max_turns: 2,
+                max_turns: Some(2),
                 ..RunConfig::default()
             });
 
@@ -4384,8 +4451,13 @@ mod tests {
         });
         let agent = Agent::builder("assistant").build();
         let context = RunContextWrapper::new(RunContext::default());
-        let mut state = RunState::new(&context, vec![InputItem::from("start")], agent.clone(), 2)
-            .expect("run state should build");
+        let mut state = RunState::new(
+            &context,
+            vec![InputItem::from("start")],
+            agent.clone(),
+            Some(2),
+        )
+        .expect("run state should build");
         state.normalized_input = Some(vec![InputItem::from("normalized-start")]);
         state.reasoning_item_id_policy = ReasoningItemIdPolicy::Omit;
         state.push_generated_item(RunItem::Reasoning {
@@ -4564,7 +4636,10 @@ mod tests {
                 .as_deref(),
             Some("conv-options")
         );
-        assert_eq!(result.durable_state().map(|state| state.max_turns), Some(1));
+        assert_eq!(
+            result.durable_state().and_then(|state| state.max_turns),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -4728,8 +4803,13 @@ mod tests {
         });
         let agent = Agent::builder("assistant").build();
         let context = RunContextWrapper::new(RunContext::default());
-        let mut state = RunState::new(&context, vec![InputItem::from("hello")], agent.clone(), 3)
-            .expect("run state should build");
+        let mut state = RunState::new(
+            &context,
+            vec![InputItem::from("hello")],
+            agent.clone(),
+            Some(3),
+        )
+        .expect("run state should build");
         state.auto_previous_response_id = true;
         state.push_model_response(ModelResponse {
             model: None,
@@ -5330,7 +5410,7 @@ mod tests {
         let runner = Runner::new()
             .with_model_provider(provider)
             .with_config(RunConfig {
-                max_turns: 2,
+                max_turns: Some(2),
                 run_error_handlers: crate::run_error_handlers::RunErrorHandlers {
                     max_turns: Some(Arc::new(|input| {
                         async move {
@@ -5385,7 +5465,7 @@ mod tests {
                     model: Arc::new(LoopingToolModel::default()),
                 }))
                 .with_config(RunConfig {
-                    max_turns: 1,
+                    max_turns: Some(1),
                     run_error_handlers: crate::run_error_handlers::RunErrorHandlers {
                         max_turns: Some(Arc::new(move |_input| {
                             let final_output = final_output.clone();
@@ -5450,7 +5530,7 @@ mod tests {
         let runner = Runner::new()
             .with_model_provider(provider)
             .with_config(RunConfig {
-                max_turns: 2,
+                max_turns: Some(2),
                 ..RunConfig::default()
             });
 
@@ -5469,5 +5549,72 @@ mod tests {
             .await
             .expect_err("streamed run should exhaust max turns");
         assert!(error.to_string().contains("max_turns (2)"));
+    }
+
+    #[tokio::test]
+    async fn runner_allows_unlimited_max_turns() {
+        let search_tool =
+            function_tool(
+                "search",
+                "Search documents",
+                |_ctx, args: SearchArgs| async move {
+                    Ok::<_, AgentsError>(format!("loop:{}", args.query))
+                },
+            )
+            .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+        let model = Arc::new(FinalAfterToolTurnsModel {
+            calls: Arc::new(Mutex::new(0)),
+            final_turn: DEFAULT_MAX_TURNS + 2,
+        });
+        let runner = Runner::new()
+            .with_model_provider(Arc::new(FinalAfterToolTurnsProvider {
+                model: model.clone(),
+            }))
+            .with_config(RunConfig {
+                max_turns: None,
+                ..RunConfig::default()
+            });
+
+        let result = runner
+            .run(&agent, "hello")
+            .await
+            .expect("unlimited run should reach final output");
+
+        assert_eq!(result.final_output.as_deref(), Some("done after 12"));
+        assert_eq!(result.raw_responses.len(), DEFAULT_MAX_TURNS + 2);
+        assert_eq!(
+            result.durable_state().and_then(|state| state.max_turns),
+            None
+        );
+
+        let streamed_model = Arc::new(FinalAfterToolTurnsModel {
+            calls: Arc::new(Mutex::new(0)),
+            final_turn: DEFAULT_MAX_TURNS + 2,
+        });
+        let streamed_runner = Runner::new()
+            .with_model_provider(Arc::new(FinalAfterToolTurnsProvider {
+                model: streamed_model,
+            }))
+            .with_config(RunConfig {
+                max_turns: None,
+                ..RunConfig::default()
+            });
+        let streamed = streamed_runner
+            .run_streamed(&agent, "hello")
+            .await
+            .expect("unlimited streamed run should start");
+        assert_eq!(streamed.max_turns, None);
+        let streamed_result = streamed
+            .wait_for_completion()
+            .await
+            .expect("unlimited streamed run should reach final output");
+
+        assert_eq!(
+            streamed_result.final_output.as_deref(),
+            Some("done after 12")
+        );
     }
 }

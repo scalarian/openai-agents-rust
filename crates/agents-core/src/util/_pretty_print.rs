@@ -55,6 +55,10 @@ pub fn pretty_print_run_result_streaming(result: &RunResultStreaming) -> String 
         .as_ref()
         .map(value_to_string)
         .unwrap_or_else(|| "None".to_owned());
+    let max_turns = result
+        .max_turns
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unlimited".to_owned());
     format!(
         "RunResultStreaming:\n- Current agent: Agent(name=\"{}\", ...)\n- Current turn: {}\n- Max turns: {}\n- Is complete: {}\n- Final output ({}):\n{}\n- {} new item(s)\n- {} raw response(s)\n(See `RunResultStreaming` for more details)",
         result
@@ -63,7 +67,7 @@ pub fn pretty_print_run_result_streaming(result: &RunResultStreaming) -> String 
             .map(|agent| agent.name.as_str())
             .unwrap_or("unknown"),
         result.current_turn,
-        result.max_turns,
+        max_turns,
         result.is_complete,
         result
             .final_output

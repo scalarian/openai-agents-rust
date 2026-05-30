@@ -96,7 +96,7 @@ impl ToolExecutionConfig {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RunConfig {
     pub model: Option<String>,
-    pub max_turns: usize,
+    pub max_turns: Option<usize>,
     pub nest_handoff_history: bool,
     pub tracing_disabled: bool,
     pub trace_include_sensitive_data: bool,
@@ -218,7 +218,7 @@ impl Default for RunConfig {
     fn default() -> Self {
         Self {
             model: None,
-            max_turns: DEFAULT_MAX_TURNS,
+            max_turns: Some(DEFAULT_MAX_TURNS),
             nest_handoff_history: false,
             tracing_disabled: false,
             trace_include_sensitive_data: false,

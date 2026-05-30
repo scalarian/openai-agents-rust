@@ -522,7 +522,7 @@ impl Agent {
                     .or_else(|| tool_context.run_config.clone())
                     .unwrap_or_default();
                 if let Some(max_turns) = max_turns {
-                    nested_run_config.max_turns = max_turns;
+                    nested_run_config.max_turns = Some(max_turns);
                 }
                 if previous_response_id.is_some() {
                     nested_run_config.previous_response_id = previous_response_id.clone();
