@@ -110,6 +110,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | reasoning content GPT OSS stream | optional local GPT-OSS reasoning stream smoke example | [reasoning_content_gpt_oss_stream.rs](../crates/openai-agents/examples/reasoning_content_gpt_oss_stream.rs) |
 | reasoning content runner example | upstream-named reasoning content Runner entry point | [reasoning_content_runner_example.rs](../crates/openai-agents/examples/reasoning_content_runner_example.rs) |
 | realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
+| sandbox agent capabilities | sandbox tool surface controlled by capability flags | [sandbox_agent_capabilities.rs](../crates/openai-agents/examples/sandbox_agent_capabilities.rs) |
 | sandbox basic | local sandbox workspace with filesystem and shell tools | [sandbox_basic.rs](../crates/openai-agents/examples/sandbox_basic.rs) |
 | sandbox coding task | local sandbox coding task with patch and shell verification | [sandbox_coding_task.rs](../crates/openai-agents/examples/sandbox_coding_task.rs) |
 | sandbox handoffs | sandbox-backed handoff workflow across specialist agents | [sandbox_handoffs.rs](../crates/openai-agents/examples/sandbox_handoffs.rs) |
