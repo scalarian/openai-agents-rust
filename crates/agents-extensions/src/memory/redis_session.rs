@@ -1,5 +1,5 @@
 use agents_core::{
-    AgentsError, InputItem, Result, Session, SessionSettings, memory::util::apply_session_limit,
+    AgentsError, InputItem, Result, Session, SessionSettings, memory::resolve_session_limit,
 };
 use async_trait::async_trait;
 use redis::AsyncCommands;
@@ -74,21 +74,24 @@ impl Session for RedisSession {
 
     async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
         let mut conn = self.connection().await?;
-        let values: Vec<String> = conn
-            .lrange(self.key(), 0, -1)
-            .await
-            .map_err(|error| AgentsError::message(error.to_string()))?;
-        let items = values
+        let resolved_limit = resolve_session_limit(limit, self.session_settings());
+        if matches!(resolved_limit, Some(0)) {
+            return Ok(Vec::new());
+        }
+        let values: Vec<Vec<u8>> = match resolved_limit {
+            Some(limit) => conn
+                .lrange(self.key(), -(limit as isize), -1)
+                .await
+                .map_err(|error| AgentsError::message(error.to_string()))?,
+            None => conn
+                .lrange(self.key(), 0, -1)
+                .await
+                .map_err(|error| AgentsError::message(error.to_string()))?,
+        };
+        Ok(values
             .into_iter()
-            .map(|value| {
-                serde_json::from_str::<InputItem>(&value)
-                    .map_err(|error| AgentsError::message(error.to_string()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(apply_session_limit(
-            &items,
-            limit.or_else(|| self.session_settings.as_ref().and_then(|s| s.limit)),
-        ))
+            .filter_map(parse_redis_input_item)
+            .collect())
     }
 
     async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {

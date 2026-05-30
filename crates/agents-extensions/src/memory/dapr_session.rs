@@ -1,5 +1,5 @@
 use agents_core::{
-    AgentsError, InputItem, Result, Session, SessionSettings, memory::util::apply_session_limit,
+    AgentsError, InputItem, Result, Session, SessionSettings, memory::resolve_session_limit,
 };
 use async_trait::async_trait;
 use reqwest::StatusCode;
@@ -152,11 +152,19 @@ impl Session for DaprSession {
     }
 
     async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
-        let items = self.read_all_items().await?;
-        Ok(apply_session_limit(
-            &items,
-            limit.or_else(|| self.session_settings.as_ref().and_then(|s| s.limit)),
-        ))
+        let resolved_limit = resolve_session_limit(limit, self.session_settings());
+        if matches!(resolved_limit, Some(0)) {
+            return Ok(Vec::new());
+        }
+        let mut values = self.read_all_values().await?;
+        if let Some(limit) = resolved_limit {
+            let start = values.len().saturating_sub(limit);
+            values = values.split_off(start);
+        }
+        Ok(values
+            .into_iter()
+            .filter_map(|value| parse_dapr_input_item(value).ok())
+            .collect())
     }
 
     async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
