@@ -4825,7 +4825,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_redacts_handled_tool_error_trace_by_default() {
+    async fn runner_redacts_handled_tool_error_trace_when_sensitive_data_disabled() {
         let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
             .lock()
             .await;
@@ -4857,6 +4857,10 @@ mod tests {
 
         Runner::new()
             .with_model_provider(model_provider)
+            .with_config(RunConfig {
+                trace_include_sensitive_data: false,
+                ..RunConfig::default()
+            })
             .run(&agent, "hello")
             .await
             .expect("run should succeed with default tool error output");
@@ -4880,7 +4884,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_redacts_unhandled_tool_error_trace_by_default() {
+    async fn runner_redacts_unhandled_tool_error_trace_when_sensitive_data_disabled() {
         let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
             .lock()
             .await;
@@ -4913,6 +4917,7 @@ mod tests {
         let error = Runner::new()
             .with_model_provider(model_provider)
             .with_config(RunConfig {
+                trace_include_sensitive_data: false,
                 tool_error_formatter: Some(Arc::new(|_args| async move { Ok(None) }.boxed())),
                 ..RunConfig::default()
             })
@@ -4940,7 +4945,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_redacts_tool_span_payloads_by_default() {
+    async fn runner_redacts_tool_span_payloads_when_sensitive_data_disabled() {
         let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
             .lock()
             .await;
@@ -4972,6 +4977,10 @@ mod tests {
 
         Runner::new()
             .with_model_provider(model_provider)
+            .with_config(RunConfig {
+                trace_include_sensitive_data: false,
+                ..RunConfig::default()
+            })
             .run(&agent, "hello")
             .await
             .expect("run should succeed");

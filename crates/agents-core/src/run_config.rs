@@ -214,6 +214,15 @@ pub type CallModelInputFilter = Arc<
         + Sync,
 >;
 
+fn default_trace_include_sensitive_data() -> bool {
+    let value = std::env::var("OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA")
+        .unwrap_or_else(|_| "true".to_owned());
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 impl Default for RunConfig {
     fn default() -> Self {
         Self {
@@ -221,7 +230,7 @@ impl Default for RunConfig {
             max_turns: Some(DEFAULT_MAX_TURNS),
             nest_handoff_history: false,
             tracing_disabled: false,
-            trace_include_sensitive_data: false,
+            trace_include_sensitive_data: default_trace_include_sensitive_data(),
             workflow_name: "Agent workflow".to_owned(),
             trace_id: None,
             group_id: None,
@@ -285,5 +294,86 @@ where
                 &self.model_provider.as_ref().map(|_| "<provider>"),
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn trace_include_sensitive_data_defaults_true_when_env_unset() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _env = EnvVarGuard::remove("OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA");
+
+        assert!(RunConfig::default().trace_include_sensitive_data);
+    }
+
+    #[test]
+    fn trace_include_sensitive_data_follows_env_values() {
+        let _lock = env_lock().lock().expect("env lock");
+        for value in ["true", "True", "1", "yes", "on"] {
+            let _env = EnvVarGuard::set("OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA", value);
+            assert!(
+                RunConfig::default().trace_include_sensitive_data,
+                "expected {value} to enable sensitive trace data"
+            );
+        }
+
+        for value in ["false", "False", "0", "no", "off", "unknown"] {
+            let _env = EnvVarGuard::set("OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA", value);
+            assert!(
+                !RunConfig::default().trace_include_sensitive_data,
+                "expected {value} to disable sensitive trace data"
+            );
+        }
+    }
+
+    #[test]
+    fn trace_include_sensitive_data_explicit_override_wins() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _env = EnvVarGuard::set("OPENAI_AGENTS_TRACE_INCLUDE_SENSITIVE_DATA", "true");
+
+        let config = RunConfig {
+            trace_include_sensitive_data: false,
+            ..RunConfig::default()
+        };
+
+        assert!(!config.trace_include_sensitive_data);
     }
 }
