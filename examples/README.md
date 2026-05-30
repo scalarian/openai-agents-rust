@@ -14,6 +14,7 @@ cargo run -p openai-agents-rs --example input_guardrail
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example sandbox_workspace
 cargo run -p openai-agents-rs --example streamed_run
+cargo run -p openai-agents-rs --example usage_tracking
 cargo run -p openai-agents-rs --example realtime_session
 cargo run -p openai-agents-rs --example voice_pipeline
 ```
@@ -29,6 +30,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `sandbox_workspace` | local sandbox manifest staging and shell confinement | [docs/sandbox_agents.md](../docs/sandbox_agents.md) |
 | `streamed_run` | live streamed execution with `run_streamed` | [docs/streaming.md](../docs/streaming.md) |
+| `usage_tracking` | token usage from a completed run | [docs/usage.md](../docs/usage.md) |
 | `realtime_session` | a long-lived realtime session with live text interaction | [docs/realtime/README.md](../docs/realtime/README.md) |
 | `voice_pipeline` | a voice workflow and buffered audio pipeline | [docs/voice/README.md](../docs/voice/README.md) |
 
