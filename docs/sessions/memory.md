@@ -15,7 +15,7 @@ Use this page when you need a local session backend without OpenAI-specific conv
 | `MemorySession` | tests, demos, short-lived app state |
 | `SQLiteSession` | local persistence, desktop apps, prototypes that need durability |
 
-Runnable examples: [memory_session.rs](../../crates/openai-agents/examples/memory_session.rs) for in-memory state and [sqlite_session.rs](../../crates/openai-agents/examples/sqlite_session.rs) for SQLite-backed state.
+Runnable examples: [memory_session.rs](../../crates/openai-agents/examples/memory_session.rs) for in-memory state, [sqlite_session.rs](../../crates/openai-agents/examples/sqlite_session.rs) for SQLite-backed state, and [advanced_sqlite_session.rs](../../crates/openai-agents/examples/advanced_sqlite_session.rs) for the extension SQLite session with custom table names and persisted tool history.
 
 ## Session Settings
 
