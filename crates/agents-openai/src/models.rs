@@ -750,12 +750,15 @@ fn apply_responses_model_settings(
         );
     }
     if let Some(verbosity) = &settings.verbosity {
-        payload.insert(
-            "text".to_owned(),
-            json!({
-                "verbosity": verbosity,
-            }),
-        );
+        let text = payload
+            .entry("text".to_owned())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if !text.is_object() {
+            *text = Value::Object(serde_json::Map::new());
+        }
+        if let Value::Object(text_object) = text {
+            text_object.insert("verbosity".to_owned(), Value::String(verbosity.clone()));
+        }
     }
     for (key, value) in &settings.extra_body {
         payload.insert(key.clone(), value.clone());
@@ -3008,6 +3011,49 @@ mod tests {
             })
             .expect("responses payload should build");
 
+        assert_eq!(payload["text"]["format"]["type"], "json_schema");
+        assert_eq!(payload["text"]["format"]["name"], output_schema.name);
+        assert_eq!(payload["text"]["format"]["strict"], output_schema.strict);
+        assert_eq!(payload["text"]["format"]["schema"], output_schema.schema);
+    }
+
+    #[test]
+    fn responses_payload_merges_verbosity_with_structured_output_schema_format() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let output_schema = OutputSchemaDefinition::new(
+            "final_output",
+            json!({
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"}
+                },
+                "required": ["answer"],
+                "additionalProperties": false
+            }),
+            true,
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: Some("Be precise".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    verbosity: Some("low".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: Some(output_schema.clone()),
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(payload["text"]["verbosity"], "low");
         assert_eq!(payload["text"]["format"]["type"], "json_schema");
         assert_eq!(payload["text"]["format"]["name"], output_schema.name);
         assert_eq!(payload["text"]["format"]["strict"], output_schema.strict);
