@@ -180,6 +180,24 @@ impl SandboxAgentBuilder {
 pub struct Manifest {
     pub root: String,
     pub entries: BTreeMap<String, ManifestEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_path_grants: Vec<SandboxPathGrant>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxPathGrant {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedSandboxPathGrant {
+    original_path: PathBuf,
+    resolved_path: PathBuf,
+    read_only: bool,
 }
 
 impl Default for Manifest {
@@ -187,6 +205,7 @@ impl Default for Manifest {
         Self {
             root: "/workspace".to_owned(),
             entries: BTreeMap::new(),
+            extra_path_grants: Vec::new(),
         }
     }
 }
@@ -194,6 +213,11 @@ impl Default for Manifest {
 impl Manifest {
     pub fn with_entry(mut self, path: impl Into<String>, entry: impl Into<ManifestEntry>) -> Self {
         self.entries.insert(path.into(), entry.into());
+        self
+    }
+
+    pub fn with_extra_path_grant(mut self, grant: SandboxPathGrant) -> Self {
+        self.extra_path_grants.push(grant);
         self
     }
 
@@ -206,7 +230,42 @@ impl Manifest {
         for (path, entry) in &self.entries {
             describe_entry(path, entry, 0, &mut lines);
         }
+        for grant in &self.extra_path_grants {
+            let mode = if grant.read_only {
+                "read-only extra path grant"
+            } else {
+                "read-write extra path grant"
+            };
+            if let Some(description) = &grant.description {
+                lines.push(format!(
+                    "- {} ({mode}: {description})",
+                    grant.path.display()
+                ));
+            } else {
+                lines.push(format!("- {} ({mode})", grant.path.display()));
+            }
+        }
         truncate_manifest_description(&lines.join("\n"), max_chars)
+    }
+}
+
+impl SandboxPathGrant {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            read_only: false,
+            description: None,
+        }
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 }
 
@@ -574,10 +633,10 @@ impl LocalSandboxSession {
     }
 
     pub fn resolve_path(&self, requested: &str) -> Result<PathBuf> {
-        self.resolve_path_for_access(requested)
+        self.resolve_path_for_access(requested, false)
     }
 
-    fn resolve_path_for_access(&self, requested: &str) -> Result<PathBuf> {
+    fn resolve_path_for_access(&self, requested: &str, for_write: bool) -> Result<PathBuf> {
         if requested.trim().is_empty() {
             return Err(AgentsError::message(
                 "path must stay within the sandbox workspace",
@@ -585,13 +644,20 @@ impl LocalSandboxSession {
         }
 
         let requested_path = Path::new(requested);
-        let logical_root = self.manifest().root;
+        let manifest = self.manifest();
+        let logical_root = manifest.root;
         let relative = if requested_path.is_absolute() {
             let logical_root = Path::new(&logical_root);
-            requested_path
-                .strip_prefix(logical_root)
-                .map_err(|_| AgentsError::message("path must stay within the sandbox workspace"))?
-                .to_path_buf()
+            match requested_path.strip_prefix(logical_root) {
+                Ok(relative) => relative.to_path_buf(),
+                Err(_) => {
+                    return resolve_extra_path_grant_access(
+                        &manifest.extra_path_grants,
+                        requested_path,
+                        for_write,
+                    );
+                }
+            }
         } else {
             requested_path.to_path_buf()
         };
@@ -621,7 +687,7 @@ impl LocalSandboxSession {
     }
 
     pub fn list_files(&self, requested: &str) -> Result<String> {
-        let directory = self.resolve_path_for_access(requested)?;
+        let directory = self.resolve_path_for_access(requested, false)?;
         let entries =
             fs::read_dir(&directory).map_err(|error| AgentsError::message(error.to_string()))?;
         let mut names = entries
@@ -636,12 +702,12 @@ impl LocalSandboxSession {
     }
 
     pub fn read_file(&self, requested: &str) -> Result<String> {
-        let path = self.resolve_path_for_access(requested)?;
+        let path = self.resolve_path_for_access(requested, false)?;
         fs::read_to_string(path).map_err(|error| AgentsError::message(error.to_string()))
     }
 
     pub fn write_file(&self, requested: &str, content: impl AsRef<[u8]>) -> Result<()> {
-        let path = self.resolve_path_for_access(requested)?;
+        let path = self.resolve_path_for_access(requested, true)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| AgentsError::message(error.to_string()))?;
         }
@@ -662,13 +728,19 @@ impl LocalSandboxSession {
 
         let env_vars = sandbox_command_env(&self.inner.workspace_root);
         let shell_command = workspace_shell_command(&self.inner.workspace_root, command);
-        let output = confined_shell_command(&shell_command, &self.inner.workspace_root, &env_vars)?
-            .current_dir("/")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|error| AgentsError::message(error.to_string()))?;
+        let manifest = self.manifest();
+        let output = confined_shell_command(
+            &shell_command,
+            &self.inner.workspace_root,
+            &env_vars,
+            &manifest.extra_path_grants,
+        )?
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| AgentsError::message(error.to_string()))?;
 
         let shell_output = LocalShellOutput {
             command: command.to_owned(),
@@ -687,14 +759,19 @@ impl LocalSandboxSession {
 
         let env_vars = sandbox_command_env(&self.inner.workspace_root);
         let shell_command = workspace_shell_command(&self.inner.workspace_root, command);
-        let mut child =
-            confined_pty_command(&shell_command, &self.inner.workspace_root, &env_vars)?
-                .current_dir("/")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|error| AgentsError::message(error.to_string()))?;
+        let manifest = self.manifest();
+        let mut child = confined_pty_command(
+            &shell_command,
+            &self.inner.workspace_root,
+            &env_vars,
+            &manifest.extra_path_grants,
+        )?
+        .current_dir("/")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| AgentsError::message(error.to_string()))?;
 
         let stdout = child
             .stdout
@@ -1728,6 +1805,98 @@ fn maybe_wait_on_local_dir_test_hook(source: &Path) -> Result<()> {
     Ok(())
 }
 
+fn resolve_extra_path_grant_access(
+    grants: &[SandboxPathGrant],
+    requested_path: &Path,
+    for_write: bool,
+) -> Result<PathBuf> {
+    let requested_path = normalize_path_lexically(requested_path);
+    let requested_resolved = canonicalize_allow_missing(&requested_path)?;
+    let mut matching_grants = grants
+        .iter()
+        .map(validate_extra_path_grant)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|grant| requested_resolved.starts_with(&grant.resolved_path))
+        .collect::<Vec<_>>();
+    matching_grants.sort_by_key(|grant| grant.resolved_path.components().count());
+
+    let Some(grant) = matching_grants.pop() else {
+        return Err(AgentsError::message(
+            "path must stay within the sandbox workspace",
+        ));
+    };
+    if for_write && grant.read_only {
+        return Err(AgentsError::message(format!(
+            "path is under a read-only sandbox extra path grant: {}",
+            grant.original_path.display()
+        )));
+    }
+
+    Ok(requested_resolved)
+}
+
+fn validate_extra_path_grant(grant: &SandboxPathGrant) -> Result<ResolvedSandboxPathGrant> {
+    let grant_path = normalize_path_lexically(&grant.path);
+    if !grant_path.is_absolute() {
+        return Err(AgentsError::message(
+            "sandbox extra path grant path must be absolute",
+        ));
+    }
+    if is_filesystem_root(&grant_path) {
+        return Err(AgentsError::message(
+            "sandbox extra path grant path must not be filesystem root",
+        ));
+    }
+
+    let resolved_path =
+        fs::canonicalize(&grant_path).map_err(|error| AgentsError::message(error.to_string()))?;
+    if is_filesystem_root(&resolved_path) {
+        return Err(AgentsError::message(
+            "sandbox extra path grant path must not resolve to filesystem root",
+        ));
+    }
+
+    Ok(ResolvedSandboxPathGrant {
+        original_path: grant.path.clone(),
+        resolved_path,
+        read_only: grant.read_only,
+    })
+}
+
+fn canonicalize_allow_missing(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path).map_err(|error| AgentsError::message(error.to_string()));
+    }
+    let Some(parent) = path.parent() else {
+        return Ok(path.to_path_buf());
+    };
+    let mut resolved = canonicalize_allow_missing(parent)?;
+    if let Some(file_name) = path.file_name() {
+        resolved.push(file_name);
+    }
+    Ok(resolved)
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn is_filesystem_root(path: &Path) -> bool {
+    path.parent().is_none()
+}
+
 fn ensure_path_stays_within_workspace(workspace_root: &Path, candidate: &Path) -> Result<()> {
     let workspace_real = fs::canonicalize(workspace_root)
         .map_err(|error| AgentsError::message(error.to_string()))?;
@@ -1825,10 +1994,16 @@ fn confined_shell_command(
     command: &str,
     workspace_root: &Path,
     env_vars: &BTreeMap<String, String>,
+    extra_path_grants: &[SandboxPathGrant],
 ) -> Result<Command> {
     let mut process = if cfg!(target_os = "macos") {
         let sandbox_exec = darwin_sandbox_exec()?;
-        let profile = darwin_exec_profile(workspace_root, env_vars, Path::new("/bin/sh"));
+        let profile = darwin_exec_profile(
+            workspace_root,
+            env_vars,
+            Path::new("/bin/sh"),
+            extra_path_grants,
+        )?;
         let mut command_builder = Command::new(sandbox_exec);
         command_builder
             .arg("-p")
@@ -1850,13 +2025,19 @@ fn confined_pty_command(
     command: &str,
     workspace_root: &Path,
     env_vars: &BTreeMap<String, String>,
+    extra_path_grants: &[SandboxPathGrant],
 ) -> Result<Command> {
     let mut process = Command::new("/usr/bin/script");
 
     if cfg!(target_os = "macos") {
         process.arg("-q").arg("/dev/null");
         let sandbox_exec = darwin_sandbox_exec()?;
-        let profile = darwin_exec_profile(workspace_root, env_vars, Path::new("/bin/sh"));
+        let profile = darwin_exec_profile(
+            workspace_root,
+            env_vars,
+            Path::new("/bin/sh"),
+            extra_path_grants,
+        )?;
         process
             .arg(sandbox_exec)
             .arg("-p")
@@ -1917,7 +2098,8 @@ fn darwin_exec_profile(
     workspace_root: &Path,
     env_vars: &BTreeMap<String, String>,
     executable: &Path,
-) -> String {
+    extra_path_grants: &[SandboxPathGrant],
+) -> Result<String> {
     let mut extra_read_paths = darwin_additional_read_paths(env_vars, executable);
     extra_read_paths.sort();
     extra_read_paths.dedup();
@@ -1968,6 +2150,29 @@ fn darwin_exec_profile(
         ));
     }
 
+    let mut resolved_extra_path_grants = extra_path_grants
+        .iter()
+        .map(validate_extra_path_grant)
+        .collect::<Result<Vec<_>>>()?;
+    resolved_extra_path_grants.sort_by_key(|grant| grant.resolved_path.components().count());
+    for grant in resolved_extra_path_grants {
+        rules.push(format!(
+            "(allow file-read-data file-read-metadata (subpath {}))",
+            sandbox_profile_literal(&grant.resolved_path)
+        ));
+        if grant.read_only {
+            rules.push(format!(
+                "(deny file-write* (subpath {}))",
+                sandbox_profile_literal(&grant.resolved_path)
+            ));
+        } else {
+            rules.push(format!(
+                "(allow file-write* (subpath {}))",
+                sandbox_profile_literal(&grant.resolved_path)
+            ));
+        }
+    }
+
     for path in extra_read_paths {
         rules.push(format!(
             "(allow file-read-data file-read-metadata (subpath {}))",
@@ -1984,7 +2189,7 @@ fn darwin_exec_profile(
         "(allow file-write* (literal \"/dev/null\"))".to_owned(),
     ]);
 
-    rules.join("\n")
+    Ok(rules.join("\n"))
 }
 
 fn sandbox_profile_literal(path: impl AsRef<Path>) -> String {
@@ -2400,6 +2605,213 @@ mod tests {
 
         assert!(description.chars().count() <= MAX_MANIFEST_DESCRIPTION_CHARS);
         assert!(description.contains("truncated"));
+    }
+
+    #[test]
+    fn manifest_description_includes_extra_path_grants() {
+        let manifest = Manifest::default()
+            .with_extra_path_grant(
+                SandboxPathGrant::new("/tmp").description("temporary scratch files"),
+            )
+            .with_extra_path_grant(SandboxPathGrant::new("/opt/toolchain").read_only(true));
+
+        let description = manifest.describe();
+
+        assert!(
+            description.contains("/tmp (read-write extra path grant: temporary scratch files)")
+        );
+        assert!(description.contains("/opt/toolchain (read-only extra path grant)"));
+    }
+
+    #[test]
+    fn local_sandbox_extra_path_grant_allows_absolute_file_io() {
+        let external = TestTempDir::new();
+        let input = external.path().join("input.txt");
+        let output = external.path().join("output.txt");
+        fs::write(&input, b"external input").expect("external input should write");
+        let session = LocalSandboxSession::create_caller_owned(
+            Manifest::default().with_extra_path_grant(SandboxPathGrant::new(external.path())),
+        )
+        .expect("sandbox should create");
+
+        assert_eq!(
+            session
+                .read_file(input.to_str().expect("input path should be utf-8"))
+                .expect("extra path read should succeed"),
+            "external input"
+        );
+        session
+            .write_file(
+                output.to_str().expect("output path should be utf-8"),
+                b"external output",
+            )
+            .expect("extra path write should succeed");
+
+        assert_eq!(
+            fs::read_to_string(output).expect("external output should exist"),
+            "external output"
+        );
+    }
+
+    #[test]
+    fn local_sandbox_extra_path_grant_rejects_ungranted_absolute_paths() {
+        let external = TestTempDir::new();
+        let input = external.path().join("input.txt");
+        fs::write(&input, b"external input").expect("external input should write");
+        let session = LocalSandboxSession::create_caller_owned(Manifest::default())
+            .expect("sandbox should create");
+
+        let error = session
+            .read_file(input.to_str().expect("input path should be utf-8"))
+            .expect_err("ungranted absolute path should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("path must stay within the sandbox workspace")
+        );
+    }
+
+    #[test]
+    fn local_sandbox_extra_path_grant_rejects_read_only_writes() {
+        let external = TestTempDir::new();
+        let input = external.path().join("input.txt");
+        let output = external.path().join("output.txt");
+        fs::write(&input, b"external input").expect("external input should write");
+        let session = LocalSandboxSession::create_caller_owned(
+            Manifest::default()
+                .with_extra_path_grant(SandboxPathGrant::new(external.path()).read_only(true)),
+        )
+        .expect("sandbox should create");
+
+        assert_eq!(
+            session
+                .read_file(input.to_str().expect("input path should be utf-8"))
+                .expect("read-only grant should allow reads"),
+            "external input"
+        );
+        let error = session
+            .write_file(
+                output.to_str().expect("output path should be utf-8"),
+                b"external output",
+            )
+            .expect_err("read-only grant should reject writes");
+
+        assert!(
+            error
+                .to_string()
+                .contains("read-only sandbox extra path grant")
+        );
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn local_sandbox_extra_path_grant_uses_most_specific_grant() {
+        let external = TestTempDir::new();
+        let protected = external.path().join("protected");
+        fs::create_dir_all(&protected).expect("protected dir should create");
+        let session = LocalSandboxSession::create_caller_owned(
+            Manifest::default()
+                .with_extra_path_grant(SandboxPathGrant::new(external.path()))
+                .with_extra_path_grant(SandboxPathGrant::new(&protected).read_only(true)),
+        )
+        .expect("sandbox should create");
+        let sibling = external.path().join("sibling.txt");
+        let blocked = protected.join("blocked.txt");
+
+        session
+            .write_file(
+                sibling.to_str().expect("sibling path should be utf-8"),
+                b"allowed",
+            )
+            .expect("parent writable grant should allow sibling write");
+        let error = session
+            .write_file(
+                blocked.to_str().expect("blocked path should be utf-8"),
+                b"blocked",
+            )
+            .expect_err("nested read-only grant should reject write");
+
+        assert!(
+            error
+                .to_string()
+                .contains("read-only sandbox extra path grant")
+        );
+        assert_eq!(
+            fs::read_to_string(sibling).expect("sibling should exist"),
+            "allowed"
+        );
+        assert!(!blocked.exists());
+    }
+
+    #[test]
+    fn local_sandbox_extra_path_grant_rejects_filesystem_root() {
+        let session = LocalSandboxSession::create_caller_owned(
+            Manifest::default().with_extra_path_grant(SandboxPathGrant::new("/")),
+        )
+        .expect("sandbox should create");
+
+        let error = session
+            .resolve_path("/etc/passwd")
+            .expect_err("filesystem root grant should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox extra path grant path must not be filesystem root")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_sandbox_extra_path_grant_rejects_symlink_to_root() {
+        let external = TestTempDir::new();
+        let root_alias = external.path().join("root-alias");
+        std::os::unix::fs::symlink("/", &root_alias).expect("root symlink should create");
+        let session = LocalSandboxSession::create_caller_owned(
+            Manifest::default().with_extra_path_grant(SandboxPathGrant::new(&root_alias)),
+        )
+        .expect("sandbox should create");
+
+        let error = session
+            .resolve_path("/etc/passwd")
+            .expect_err("root alias grant should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox extra path grant path must not resolve to filesystem root")
+        );
+    }
+
+    #[test]
+    fn darwin_profile_allows_extra_path_grants() {
+        let workspace = TestTempDir::new();
+        let read_write = TestTempDir::new();
+        let read_only = TestTempDir::new();
+        let profile = darwin_exec_profile(
+            workspace.path(),
+            &std::collections::BTreeMap::new(),
+            Path::new("/bin/sh"),
+            &[
+                SandboxPathGrant::new(read_write.path()),
+                SandboxPathGrant::new(read_only.path()).read_only(true),
+            ],
+        )
+        .expect("profile should build");
+
+        assert!(profile.contains(&format!(
+            "(allow file-read-data file-read-metadata (subpath {}))",
+            sandbox_profile_literal(read_write.path())
+        )));
+        assert!(profile.contains(&format!(
+            "(allow file-write* (subpath {}))",
+            sandbox_profile_literal(read_write.path())
+        )));
+        assert!(profile.contains(&format!(
+            "(deny file-write* (subpath {}))",
+            sandbox_profile_literal(read_only.path())
+        )));
     }
 
     #[cfg(unix)]

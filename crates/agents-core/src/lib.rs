@@ -173,7 +173,7 @@ pub use run_state::{
 pub use sandbox::{
     Dir, File, LocalDir, LocalSandboxPtySession, LocalSandboxSession, LocalShellOutput, Manifest,
     ManifestEntry, PreparedSandboxRun, SandboxAgent, SandboxAgentBuilder, SandboxCapability,
-    SandboxConcurrencyLimits, SandboxRunConfig, prepare_sandbox_run,
+    SandboxConcurrencyLimits, SandboxPathGrant, SandboxRunConfig, prepare_sandbox_run,
 };
 pub use stream_events::{
     AgentUpdatedStreamEvent, RawResponsesStreamEvent, RunItemStreamEvent, StreamEvent,
