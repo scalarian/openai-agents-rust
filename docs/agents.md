@@ -73,6 +73,7 @@ Use `Agent::as_tool()` when:
 - the parent should decide when to delegate
 
 Use `Agent::as_tool::<TArgs>(...)` when the parent should pass typed structured arguments to the nested agent. See [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs).
+Use `AgentAsToolOptions::is_enabled` when agent tools should be visible only for some run contexts. See [agents_as_tools_conditional.rs](../crates/openai-agents/examples/agents_as_tools_conditional.rs).
 
 Read [multi_agent.md](multi_agent.md) and [handoffs.md](handoffs.md) before building large delegating systems.
 

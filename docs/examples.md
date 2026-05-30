@@ -9,6 +9,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | Example | What it covers | File |
 | --- | --- | --- |
 | agents as tools | specialist agents exposed as callable tools | [agents_as_tools.rs](../crates/openai-agents/examples/agents_as_tools.rs) |
+| agents as tools conditional | dynamically enabled agent tools | [agents_as_tools_conditional.rs](../crates/openai-agents/examples/agents_as_tools_conditional.rs) |
 | agents as tools structured | structured input for agent-as-tool calls | [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
 | deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
