@@ -85,6 +85,8 @@ struct HostedPairingInfo {
     shell_output_ids: std::collections::BTreeSet<String>,
     tool_search_call_ids: std::collections::BTreeSet<String>,
     tool_search_output_ids: std::collections::BTreeSet<String>,
+    custom_tool_call_ids: std::collections::BTreeSet<String>,
+    custom_tool_output_ids: std::collections::BTreeSet<String>,
     matched_anonymous_tool_search_call_indexes: std::collections::BTreeSet<usize>,
     matched_anonymous_tool_search_output_indexes: std::collections::BTreeSet<usize>,
 }
@@ -142,6 +144,16 @@ fn hosted_pairing_info(items: &[InputItem]) -> HostedPairingInfo {
                     info.tool_output_ids.insert(call_id.to_owned());
                 }
             }
+            Some("custom_tool_call") => {
+                if let Some(call_id) = call_id(value) {
+                    info.custom_tool_call_ids.insert(call_id.to_owned());
+                }
+            }
+            Some("custom_tool_call_output") => {
+                if let Some(call_id) = call_id(value) {
+                    info.custom_tool_output_ids.insert(call_id.to_owned());
+                }
+            }
             Some("shell_call") => {
                 if let Some(call_id) = call_id(value) {
                     info.shell_call_ids.insert(call_id.to_owned());
@@ -196,6 +208,16 @@ fn should_keep_replay_item(
         Some("tool_call_output") | Some("function_call_output") => {
             policy == ToolCallPrunePolicy::GeneratedHistory
                 || call_id(value).is_some_and(|call_id| pairing.tool_call_ids.contains(call_id))
+        }
+        Some("custom_tool_call") => {
+            policy == ToolCallPrunePolicy::HostedReplay
+                || call_id(value)
+                    .is_some_and(|call_id| pairing.custom_tool_output_ids.contains(call_id))
+        }
+        Some("custom_tool_call_output") => {
+            policy == ToolCallPrunePolicy::GeneratedHistory
+                || call_id(value)
+                    .is_some_and(|call_id| pairing.custom_tool_call_ids.contains(call_id))
         }
         Some("shell_call") => {
             if !is_completed_hosted_item(value) {

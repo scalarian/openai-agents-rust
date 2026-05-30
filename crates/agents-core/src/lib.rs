@@ -184,7 +184,7 @@ pub use stream_events::{
 };
 pub use strict_schema::ensure_strict_json_schema;
 pub use tool::{
-    ApplyPatchTool, ComputerProvider, ComputerTool, FunctionTool, FunctionToolResult,
+    ApplyPatchTool, ComputerProvider, ComputerTool, CustomTool, FunctionTool, FunctionToolResult,
     HostedMCPTool, LocalShellCommandRequest, LocalShellExecutor, LocalShellTool,
     MCPToolApprovalFunction, MCPToolApprovalFunctionResult, MCPToolApprovalRequest,
     ShellActionRequest, ShellCallData, ShellCallOutcome, ShellCommandOutput, ShellCommandRequest,
@@ -194,10 +194,10 @@ pub use tool::{
     ShellToolContainerReferenceEnvironment, ShellToolContainerSkill, ShellToolEnvironment,
     ShellToolHostedEnvironment, ShellToolInlineSkill, ShellToolInlineSkillSource,
     ShellToolLocalEnvironment, ShellToolLocalSkill, ShellToolSkillReference, StaticTool, Tool,
-    ToolApprovalFunction, ToolDefinition, ToolOrigin, ToolOriginType, ToolOutput,
-    ToolOutputFileContent, ToolOutputImage, ToolOutputText, default_tool_error_function,
-    dispose_resolved_computers, function_tool, get_function_tool_origin, resolve_computer,
-    tool_namespace,
+    ToolApprovalFunction, ToolDefinition, ToolDefinitionKind, ToolOrigin, ToolOriginType,
+    ToolOutput, ToolOutputFileContent, ToolOutputImage, ToolOutputText, custom_tool,
+    default_tool_error_function, dispose_resolved_computers, function_tool,
+    get_function_tool_origin, resolve_computer, tool_namespace,
 };
 pub use tool_context::{ToolCall, ToolContext};
 pub use tool_guardrails::{

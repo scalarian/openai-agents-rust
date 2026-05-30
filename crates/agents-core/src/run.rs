@@ -722,6 +722,7 @@ impl Runner {
 
             let output = response.output.clone();
             let tool_calls = internal_tool_execution::extract_tool_calls(&output);
+            let custom_tool_calls = internal_tool_execution::extract_custom_tool_calls(&output);
             let runtime_tools = if tool_calls.is_empty() {
                 None
             } else {
@@ -742,8 +743,10 @@ impl Runner {
 
             if let Some((handoff, target_agent)) = resolve_handoff(&current_agent, &output)? {
                 let mut handoff_tool_items = Vec::new();
-                if !tool_calls.is_empty() {
-                    let tool_outcome =
+                if !tool_calls.is_empty() || !custom_tool_calls.is_empty() {
+                    let mut tool_outcome = if tool_calls.is_empty() {
+                        internal_tool_execution::ToolExecutionOutcome::empty()
+                    } else {
                         internal_tool_execution::execute_local_function_tools_with_runtime_tools(
                             &current_agent,
                             &self.config,
@@ -753,7 +756,20 @@ impl Runner {
                             stream_recorder.as_ref(),
                             None,
                         )
-                        .await?;
+                        .await?
+                    };
+                    if tool_outcome.interruptions.is_empty() && !custom_tool_calls.is_empty() {
+                        tool_outcome.extend(
+                            internal_tool_execution::execute_local_custom_tools(
+                                &current_agent,
+                                &self.config,
+                                &context,
+                                custom_tool_calls,
+                                stream_recorder.as_ref(),
+                            )
+                            .await?,
+                        );
+                    }
                     if let Some(recorder) = &stream_recorder {
                         recorder.push_run_items(&tool_outcome.new_items).await;
                     }
@@ -852,7 +868,7 @@ impl Runner {
             session_generated_items.extend(response_items);
 
             let all_output_guardrails = merged_output_guardrails(&current_agent, &self.config);
-            if tool_calls.is_empty() {
+            if tool_calls.is_empty() && custom_tool_calls.is_empty() {
                 if let Some(refusal) = internal_turn_resolution::extract_refusal(&output) {
                     let refusal_error = ModelRefusalError { refusal };
                     if let Some(handler) = &self.config.run_error_handlers.model_refusal {
@@ -970,7 +986,9 @@ impl Runner {
                 break;
             }
 
-            let tool_outcome =
+            let mut tool_outcome = if tool_calls.is_empty() {
+                internal_tool_execution::ToolExecutionOutcome::empty()
+            } else {
                 internal_tool_execution::execute_local_function_tools_with_runtime_tools(
                     &current_agent,
                     &self.config,
@@ -980,7 +998,20 @@ impl Runner {
                     stream_recorder.as_ref(),
                     None,
                 )
-                .await?;
+                .await?
+            };
+            if tool_outcome.interruptions.is_empty() && !custom_tool_calls.is_empty() {
+                tool_outcome.extend(
+                    internal_tool_execution::execute_local_custom_tools(
+                        &current_agent,
+                        &self.config,
+                        &context,
+                        custom_tool_calls,
+                        stream_recorder.as_ref(),
+                    )
+                    .await?,
+                );
+            }
             if let Some(recorder) = &stream_recorder {
                 recorder.push_run_items(&tool_outcome.new_items).await;
             }
@@ -2259,7 +2290,7 @@ mod tests {
     use crate::run_config::{ReasoningItemIdPolicy, ToolNotFoundBehavior};
     use crate::run_context::{RunContext, RunContextWrapper};
     use crate::session::MemorySession;
-    use crate::tool::{ToolOrigin, ToolOutput, function_tool};
+    use crate::tool::{ToolOrigin, ToolOutput, custom_tool, function_tool};
 
     use super::*;
 
@@ -3333,6 +3364,64 @@ mod tests {
         }));
         assert_eq!(result.usage.input_tokens, 22);
         assert_eq!(result.usage.output_tokens, 11);
+    }
+
+    #[tokio::test]
+    async fn runner_executes_local_custom_tools_with_raw_input() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::CustomToolCall {
+                call_id: "call-custom".to_owned(),
+                tool_name: "raw_editor".to_owned(),
+                input: "hello".to_owned(),
+            }],
+            "done",
+        ));
+        let raw_editor = custom_tool("raw_editor", "Edit raw text.", |ctx, input| async move {
+            assert_eq!(ctx.tool_name, "raw_editor");
+            assert_eq!(ctx.tool_arguments, "hello");
+            Ok::<_, AgentsError>(input.to_uppercase())
+        });
+        let agent = Agent::builder("assistant").custom_tool(raw_editor).build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert!(result.new_items.iter().any(|item| {
+            matches!(
+                item,
+                RunItem::CustomToolCall {
+                    tool_name,
+                    input,
+                    call_id,
+                } if tool_name == "raw_editor"
+                    && input == "hello"
+                    && call_id.as_deref() == Some("call-custom")
+            )
+        }));
+        assert!(result.new_items.iter().any(|item| {
+            matches!(
+                item,
+                RunItem::CustomToolCallOutput {
+                    output,
+                    call_id,
+                    ..
+                } if output == "HELLO" && call_id.as_deref() == Some("call-custom")
+            )
+        }));
+        let seen_inputs = model.seen_inputs();
+        assert!(seen_inputs[1].iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                    && value.get("call_id").and_then(Value::as_str) == Some("call-custom")
+                    && value.get("output").and_then(Value::as_str) == Some("HELLO")
+        )));
     }
 
     #[tokio::test]

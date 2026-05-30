@@ -94,6 +94,18 @@ impl ModelResponse {
                         "namespace": namespace,
                     }),
                 },
+                OutputItem::CustomToolCall {
+                    call_id,
+                    tool_name,
+                    input,
+                } => InputItem::Json {
+                    value: serde_json::json!({
+                        "type": "custom_tool_call",
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "input": input,
+                    }),
+                },
                 OutputItem::Handoff { target_agent } => InputItem::Json {
                     value: serde_json::json!({
                         "type": "handoff_call",

@@ -21,13 +21,31 @@ use crate::tool_context::ToolContext;
 use crate::tool_guardrails::{ToolInputGuardrail, ToolOutputGuardrail};
 use std::collections::BTreeMap;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDefinitionKind {
+    #[default]
+    Auto,
+    Custom,
+}
+
+impl ToolDefinitionKind {
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "ToolDefinitionKind::is_auto")]
+    pub kind: ToolDefinitionKind,
     pub namespace: Option<String>,
     pub strict_json_schema: bool,
     pub input_json_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Value>,
     pub defer_loading: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hosted_tool_options: BTreeMap<String, Value>,
@@ -40,13 +58,21 @@ impl ToolDefinition {
         Self {
             name: name.into(),
             description: description.into(),
+            kind: ToolDefinitionKind::Auto,
             namespace: None,
             strict_json_schema: true,
             input_json_schema: None,
+            format: None,
             defer_loading: false,
             hosted_tool_options: BTreeMap::new(),
             hosted_tool_includes: Vec::new(),
         }
+    }
+
+    pub fn custom(name: impl Into<String>, description: impl Into<String>) -> Self {
+        let mut definition = Self::new(name, description);
+        definition.kind = ToolDefinitionKind::Custom;
+        definition
     }
 
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
@@ -56,6 +82,11 @@ impl ToolDefinition {
 
     pub fn with_input_json_schema(mut self, schema: Value) -> Self {
         self.input_json_schema = Some(schema);
+        self
+    }
+
+    pub fn with_format(mut self, format: Value) -> Self {
+        self.format = Some(format);
         self
     }
 
@@ -286,6 +317,8 @@ impl Tool for StaticTool {
 
 type ToolExecutor =
     Arc<dyn Fn(ToolContext, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync>;
+type CustomToolExecutor =
+    Arc<dyn Fn(ToolContext, String) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync>;
 pub type ToolEnabledFunction =
     Arc<dyn Fn(RunContextWrapper<RunContext>, Agent) -> BoxFuture<'static, bool> + Send + Sync>;
 pub type ToolApprovalFunction = Arc<
@@ -293,6 +326,46 @@ pub type ToolApprovalFunction = Arc<
         + Send
         + Sync,
 >;
+
+#[derive(Clone)]
+pub struct CustomTool {
+    pub definition: ToolDefinition,
+    executor: CustomToolExecutor,
+}
+
+impl std::fmt::Debug for CustomTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomTool")
+            .field("definition", &self.definition)
+            .finish()
+    }
+}
+
+impl CustomTool {
+    pub fn new(definition: ToolDefinition, executor: CustomToolExecutor) -> Self {
+        let mut definition = definition;
+        definition.kind = ToolDefinitionKind::Custom;
+        definition.input_json_schema = None;
+        Self {
+            definition,
+            executor,
+        }
+    }
+
+    pub fn with_format(mut self, format: Value) -> Self {
+        self.definition.format = Some(format);
+        self
+    }
+
+    pub fn with_defer_loading(mut self, defer_loading: bool) -> Self {
+        self.definition.defer_loading = defer_loading;
+        self
+    }
+
+    pub async fn invoke_raw(&self, context: ToolContext, input: String) -> Result<ToolOutput> {
+        (self.executor)(context, input).await
+    }
+}
 
 #[derive(Clone)]
 pub struct FunctionTool {
@@ -430,6 +503,21 @@ impl FunctionTool {
         };
 
         is_enabled(run_context.clone(), agent.clone()).await
+    }
+}
+
+#[async_trait]
+impl Tool for CustomTool {
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+
+    async fn invoke(&self, context: ToolContext, args: Value) -> Result<ToolOutput> {
+        let input = match args {
+            Value::String(input) => input,
+            other => other.to_string(),
+        };
+        self.invoke_raw(context, input).await
     }
 }
 
@@ -709,6 +797,30 @@ where
     });
 
     Ok(FunctionTool::new(definition, executor))
+}
+
+pub fn custom_tool<TResult, F, Fut>(
+    name: impl Into<String>,
+    description: impl Into<String>,
+    handler: F,
+) -> CustomTool
+where
+    TResult: Into<ToolOutput> + Send + 'static,
+    F: Fn(ToolContext, String) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<TResult>> + Send + 'static,
+{
+    let definition = ToolDefinition::custom(name, description);
+    let handler = Arc::new(handler);
+    let executor: CustomToolExecutor = Arc::new(move |context, input| {
+        let handler = Arc::clone(&handler);
+        async move {
+            let result = handler(context, input).await?;
+            Ok(result.into())
+        }
+        .boxed()
+    });
+
+    CustomTool::new(definition, executor)
 }
 
 #[cfg(test)]

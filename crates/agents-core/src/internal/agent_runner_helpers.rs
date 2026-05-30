@@ -45,6 +45,7 @@ pub(crate) fn get_unsent_tool_call_ids_for_interrupted_state(state: &RunState) -
                 .iter()
                 .filter_map(|item| match item {
                     OutputItem::ToolCall { call_id, .. } => Some(call_id.clone()),
+                    OutputItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
                     OutputItem::Text { .. }
                     | OutputItem::Refusal { .. }
                     | OutputItem::Json { .. }

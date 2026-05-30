@@ -33,7 +33,8 @@ use crate::run_context::{RunContext, RunContextWrapper};
 use crate::session::Session;
 use crate::stream_events::StreamEvent;
 use crate::tool::{
-    FunctionTool, FunctionToolResult, StaticTool, ToolEnabledFunction, ToolOrigin, ToolOutput,
+    CustomTool, FunctionTool, FunctionToolResult, StaticTool, ToolEnabledFunction, ToolOrigin,
+    ToolOutput,
 };
 use crate::tool_context::{ToolCall, ToolContext};
 
@@ -128,7 +129,9 @@ fn default_agent_tool_output_text(result: &RunResult) -> String {
                     return text;
                 }
             }
+            RunItem::CustomToolCallOutput { output, .. } => return output.clone(),
             RunItem::ToolCall { .. }
+            | RunItem::CustomToolCall { .. }
             | RunItem::HandoffCall { .. }
             | RunItem::HandoffOutput { .. }
             | RunItem::Reasoning { .. } => {}
@@ -148,9 +151,10 @@ fn output_item_text(item: &OutputItem) -> Option<String> {
         OutputItem::Text { text } => Some(text.clone()),
         OutputItem::Json { value } => serde_json::to_string(value).ok(),
         OutputItem::Reasoning { text } => Some(text.clone()),
-        OutputItem::Refusal { .. } | OutputItem::ToolCall { .. } | OutputItem::Handoff { .. } => {
-            None
-        }
+        OutputItem::Refusal { .. }
+        | OutputItem::ToolCall { .. }
+        | OutputItem::CustomToolCall { .. }
+        | OutputItem::Handoff { .. } => None,
     }
 }
 
@@ -300,6 +304,8 @@ pub struct Agent {
     #[serde(skip, default)]
     pub function_tools: Vec<FunctionTool>,
     #[serde(skip, default)]
+    pub custom_tools: Vec<CustomTool>,
+    #[serde(skip, default)]
     pub mcp_servers: Vec<Arc<dyn MCPServer>>,
     #[serde(skip, default)]
     pub mcp_tool_filter: Option<ToolFilter>,
@@ -336,6 +342,7 @@ impl fmt::Debug for Agent {
             .field("model_settings", &self.model_settings)
             .field("tools", &self.tools)
             .field("function_tools", &self.function_tools.len())
+            .field("custom_tools", &self.custom_tools.len())
             .field("mcp_servers", &self.mcp_servers.len())
             .field(
                 "mcp_tool_filter",
@@ -429,7 +436,7 @@ impl Agent {
         &self,
         run_context: &RunContextWrapper<RunContext>,
     ) -> Result<Vec<crate::tool::ToolDefinition>> {
-        let function_tool_keys = self
+        let runtime_tool_keys = self
             .function_tools
             .iter()
             .map(|tool| {
@@ -438,12 +445,18 @@ impl Agent {
                     tool.definition.namespace.clone(),
                 )
             })
+            .chain(self.custom_tools.iter().map(|tool| {
+                (
+                    tool.definition.name.clone(),
+                    tool.definition.namespace.clone(),
+                )
+            }))
             .collect::<std::collections::HashSet<_>>();
         let mut definitions = self
             .tools
             .iter()
             .filter(|tool| {
-                !function_tool_keys.contains(&(
+                !runtime_tool_keys.contains(&(
                     tool.definition.name.clone(),
                     tool.definition.namespace.clone(),
                 ))
@@ -457,6 +470,7 @@ impl Agent {
                 .into_iter()
                 .map(|tool| tool.definition.clone()),
         );
+        definitions.extend(self.custom_tools.iter().map(|tool| tool.definition.clone()));
 
         let mut seen = std::collections::HashSet::new();
         for definition in &definitions {
@@ -481,6 +495,12 @@ impl Agent {
         self.function_tools.iter().find(|tool| {
             tool.definition.name == name && tool.definition.namespace.as_deref() == namespace
         })
+    }
+
+    pub fn find_custom_tool(&self, name: &str) -> Option<&CustomTool> {
+        self.custom_tools
+            .iter()
+            .find(|tool| tool.definition.name == name)
     }
 
     pub fn find_handoff(&self, target: &str) -> Option<&Handoff> {
@@ -828,6 +848,14 @@ impl AgentBuilder {
             definition: tool.definition.clone(),
         });
         self.agent.function_tools.push(tool);
+        self
+    }
+
+    pub fn custom_tool(mut self, tool: CustomTool) -> Self {
+        self.agent.tools.push(StaticTool {
+            definition: tool.definition.clone(),
+        });
+        self.agent.custom_tools.push(tool);
         self
     }
 

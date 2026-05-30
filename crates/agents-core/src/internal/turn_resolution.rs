@@ -8,6 +8,7 @@ pub(crate) fn extract_text_outputs(output: &[OutputItem]) -> Vec<String> {
             OutputItem::Refusal { .. }
             | OutputItem::Json { .. }
             | OutputItem::ToolCall { .. }
+            | OutputItem::CustomToolCall { .. }
             | OutputItem::Handoff { .. }
             | OutputItem::Reasoning { .. } => None,
         })
@@ -26,6 +27,7 @@ pub(crate) fn extract_refusal(output: &[OutputItem]) -> Option<String> {
             OutputItem::Json { value } => refusal_from_json_message(value),
             OutputItem::Text { .. }
             | OutputItem::ToolCall { .. }
+            | OutputItem::CustomToolCall { .. }
             | OutputItem::Handoff { .. }
             | OutputItem::Reasoning { .. } => None,
         })
@@ -61,6 +63,15 @@ pub(crate) fn build_message_output_items(output: &[OutputItem]) -> Vec<RunItem> 
                 call_id: Some(call_id),
                 namespace,
                 tool_origin: None,
+            },
+            OutputItem::CustomToolCall {
+                call_id,
+                tool_name,
+                input,
+            } => RunItem::CustomToolCall {
+                tool_name,
+                input,
+                call_id: Some(call_id),
             },
             OutputItem::Handoff { target_agent } => RunItem::HandoffCall { target_agent },
             OutputItem::Reasoning { text } => RunItem::Reasoning { text },

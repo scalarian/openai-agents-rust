@@ -981,11 +981,29 @@ fn openai_response_json_item(value: &Value) -> Value {
             "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
             "output": tool_output_to_responses_output(value.get("output")),
         }),
+        Some("custom_tool_call_output") => json!({
+            "type": "custom_tool_call_output",
+            "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
+            "output": value
+                .get("output")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| value.get("output").map(Value::to_string).unwrap_or_default()),
+        }),
         Some("tool_call") => json!({
             "type": "function_call",
             "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
             "name": first_non_empty_string(value, &["tool_name", "name"]).unwrap_or_default(),
             "arguments": serialize_json_argument(value.get("arguments").unwrap_or(&Value::Null)),
+        }),
+        Some("custom_tool_call") => json!({
+            "type": "custom_tool_call",
+            "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
+            "name": first_non_empty_string(value, &["tool_name", "name"]).unwrap_or_default(),
+            "input": value
+                .get("input")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
         }),
         Some("reasoning") if has_reasoning_persistence_identity(value) => value.clone(),
         Some("reasoning") => json!({
@@ -1065,6 +1083,16 @@ fn openai_chat_json_messages(value: &Value, strict_feature_validation: bool) -> 
             "tool_call_id": first_non_empty_string(value, &["call_id", "id"]),
             "content": chat_tool_output_content(value.get("output"), strict_feature_validation)?,
         })]),
+        Some("custom_tool_call") | Some("custom_tool_call_output") => {
+            if strict_feature_validation {
+                return Err(UserError {
+                    message: "Custom tool calls are not supported by Chat Completions models"
+                        .to_owned(),
+                }
+                .into());
+            }
+            Ok(Vec::new())
+        }
         Some("tool_call") => Ok(vec![json!({
             "role": "assistant",
             "content": Value::Null,
@@ -1114,7 +1142,8 @@ fn openai_responses_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
     let mut namespace_tools_by_name: BTreeMap<String, Vec<Value>> = BTreeMap::new();
 
     for tool in tools {
-        if tool.input_json_schema.is_some()
+        if !matches!(tool.kind, agents_core::tool::ToolDefinitionKind::Custom)
+            && tool.input_json_schema.is_some()
             && let Some(namespace) = tool
                 .namespace
                 .as_deref()
@@ -1207,6 +1236,10 @@ fn append_response_include(payload: &mut serde_json::Map<String, Value>, include
 }
 
 fn openai_responses_tool_payload(tool: &ToolDefinition) -> Value {
+    if matches!(tool.kind, agents_core::tool::ToolDefinitionKind::Custom) {
+        return openai_responses_custom_tool_payload(tool);
+    }
+
     if tool.input_json_schema.is_none() {
         let mut payload = serde_json::Map::new();
         payload.insert("type".to_owned(), Value::String(tool.name.clone()));
@@ -1215,6 +1248,25 @@ fn openai_responses_tool_payload(tool: &ToolDefinition) -> Value {
     }
 
     openai_responses_function_tool_payload(tool)
+}
+
+fn openai_responses_custom_tool_payload(tool: &ToolDefinition) -> Value {
+    let mut payload = serde_json::Map::from_iter([
+        ("type".to_owned(), Value::String("custom".to_owned())),
+        ("name".to_owned(), Value::String(tool.name.clone())),
+        (
+            "description".to_owned(),
+            Value::String(tool.description.clone()),
+        ),
+    ]);
+    if let Some(format) = &tool.format {
+        payload.insert("format".to_owned(), format.clone());
+    }
+    if tool.defer_loading {
+        payload.insert("defer_loading".to_owned(), Value::Bool(true));
+    }
+    payload.extend(tool.hosted_tool_options.clone());
+    Value::Object(payload)
 }
 
 fn openai_responses_function_tool_payload(tool: &ToolDefinition) -> Value {
@@ -1335,6 +1387,22 @@ fn parse_responses_response(
                             tool_name,
                             arguments: parse_json_maybe_string(item.get("arguments")),
                             namespace: optional_string_field(item, "namespace"),
+                        });
+                    } else {
+                        output.push(OutputItem::Json {
+                            value: item.clone(),
+                        });
+                    }
+                }
+                "custom_tool_call" => {
+                    let tool_name = first_non_empty_string(item, &["name", "tool_name"]);
+                    let input = item.get("input").and_then(Value::as_str);
+                    if let (Some(tool_name), Some(input)) = (tool_name, input) {
+                        output.push(OutputItem::CustomToolCall {
+                            call_id: first_non_empty_string(item, &["call_id", "id"])
+                                .unwrap_or_default(),
+                            tool_name,
+                            input: input.to_owned(),
                         });
                     } else {
                         output.push(OutputItem::Json {
@@ -1717,6 +1785,43 @@ mod tests {
             })
         );
         assert_eq!(payload["service_tier"], "priority");
+    }
+
+    #[test]
+    fn responses_payload_includes_custom_tools() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::custom("raw_editor", "Edit raw text.")
+                        .with_format(json!({"type": "text"}))
+                        .with_defer_loading(true),
+                ],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "custom",
+                "name": "raw_editor",
+                "description": "Edit raw text.",
+                "format": {"type": "text"},
+                "defer_loading": true
+            })
+        );
     }
 
     #[test]
@@ -2867,6 +2972,43 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_preserves_custom_tool_outputs() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "custom_tool_call_output",
+                        "call_id": "call-custom",
+                        "output": "HELLO"
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["input"][0],
+            json!({
+                "type": "custom_tool_call_output",
+                "call_id": "call-custom",
+                "output": "HELLO"
+            })
+        );
+    }
+
+    #[test]
     fn responses_payload_preserves_persistable_reasoning_items() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",
@@ -2983,6 +3125,31 @@ mod tests {
         assert!(matches!(parsed.output[0], OutputItem::Reasoning { .. }));
         assert!(matches!(parsed.output[1], OutputItem::ToolCall { .. }));
         assert!(matches!(parsed.output[2], OutputItem::Text { .. }));
+    }
+
+    #[test]
+    fn parses_responses_custom_tool_call() {
+        let parsed = parse_responses_response(
+            "gpt-5",
+            &json!({
+                "output": [{
+                    "type": "custom_tool_call",
+                    "call_id": "call-custom",
+                    "name": "raw_editor",
+                    "input": "hello"
+                }]
+            }),
+            None,
+        );
+
+        assert!(matches!(
+            &parsed.output[0],
+            OutputItem::CustomToolCall {
+                call_id,
+                tool_name,
+                input
+            } if call_id == "call-custom" && tool_name == "raw_editor" && input == "hello"
+        ));
     }
 
     #[test]

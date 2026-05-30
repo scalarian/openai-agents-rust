@@ -67,6 +67,7 @@ fn stream_event_text(event: &StreamEvent) -> Option<String> {
                 agents_core::OutputItem::Reasoning { .. }
                 | agents_core::OutputItem::Refusal { .. }
                 | agents_core::OutputItem::ToolCall { .. }
+                | agents_core::OutputItem::CustomToolCall { .. }
                 | agents_core::OutputItem::Handoff { .. } => None,
             },
             RunItem::ToolCallOutput { output, .. } => match output {
@@ -75,9 +76,12 @@ fn stream_event_text(event: &StreamEvent) -> Option<String> {
                 agents_core::OutputItem::Reasoning { .. }
                 | agents_core::OutputItem::Refusal { .. }
                 | agents_core::OutputItem::ToolCall { .. }
+                | agents_core::OutputItem::CustomToolCall { .. }
                 | agents_core::OutputItem::Handoff { .. } => None,
             },
+            RunItem::CustomToolCallOutput { output, .. } => Some(output.clone()),
             RunItem::ToolCall { .. }
+            | RunItem::CustomToolCall { .. }
             | RunItem::HandoffCall { .. }
             | RunItem::HandoffOutput { .. }
             | RunItem::Reasoning { .. } => None,

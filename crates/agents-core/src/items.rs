@@ -66,6 +66,11 @@ pub enum OutputItem {
         arguments: Value,
         namespace: Option<String>,
     },
+    CustomToolCall {
+        call_id: String,
+        tool_name: String,
+        input: String,
+    },
     Handoff {
         target_agent: String,
     },
@@ -81,6 +86,7 @@ impl OutputItem {
             Self::Refusal { .. }
             | Self::Json { .. }
             | Self::ToolCall { .. }
+            | Self::CustomToolCall { .. }
             | Self::Handoff { .. }
             | Self::Reasoning { .. } => None,
         }
@@ -117,6 +123,17 @@ pub enum RunItem {
             deserialize_with = "crate::tool::deserialize_tool_origin_option"
         )]
         tool_origin: Option<ToolOrigin>,
+    },
+    CustomToolCall {
+        tool_name: String,
+        input: String,
+        call_id: Option<String>,
+    },
+    CustomToolCallOutput {
+        output: String,
+        call_id: Option<String>,
+        #[serde(skip)]
+        tool_name: Option<String>,
     },
     HandoffCall {
         target_agent: String,
@@ -264,13 +281,17 @@ impl ItemHelpers {
             OutputItem::Text { .. }
             | OutputItem::Json { .. }
             | OutputItem::ToolCall { .. }
+            | OutputItem::CustomToolCall { .. }
             | OutputItem::Handoff { .. }
             | OutputItem::Reasoning { .. } => None,
         }
     }
 
     pub fn is_tool_call(item: &RunItem) -> bool {
-        matches!(item, RunItem::ToolCall { .. })
+        matches!(
+            item,
+            RunItem::ToolCall { .. } | RunItem::CustomToolCall { .. }
+        )
     }
 }
 
@@ -280,6 +301,8 @@ impl RunItem {
             Self::ToolCall { tool_name, .. } | Self::ToolCallOutput { tool_name, .. } => {
                 Some(tool_name)
             }
+            Self::CustomToolCall { tool_name, .. } => Some(tool_name),
+            Self::CustomToolCallOutput { tool_name, .. } => tool_name.as_deref(),
             Self::MessageOutput { .. }
             | Self::HandoffCall { .. }
             | Self::HandoffOutput { .. }
@@ -290,6 +313,9 @@ impl RunItem {
     pub fn call_id(&self) -> Option<&str> {
         match self {
             Self::ToolCall { call_id, .. } | Self::ToolCallOutput { call_id, .. } => {
+                call_id.as_deref()
+            }
+            Self::CustomToolCall { call_id, .. } | Self::CustomToolCallOutput { call_id, .. } => {
                 call_id.as_deref()
             }
             Self::MessageOutput { .. }
@@ -332,6 +358,18 @@ impl RunItem {
                         "namespace": namespace,
                     }),
                 }),
+                OutputItem::CustomToolCall {
+                    call_id,
+                    tool_name,
+                    input,
+                } => Some(InputItem::Json {
+                    value: json!({
+                        "type": "custom_tool_call",
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "input": input,
+                    }),
+                }),
                 OutputItem::Handoff { target_agent } => Some(InputItem::Json {
                     value: json!({
                         "type": "handoff_call",
@@ -367,6 +405,27 @@ impl RunItem {
                     "output": serde_json::to_value(output).ok(),
                     "call_id": call_id,
                     "namespace": namespace,
+                }),
+            }),
+            Self::CustomToolCall {
+                tool_name,
+                input,
+                call_id,
+            } => Some(InputItem::Json {
+                value: json!({
+                    "type": "custom_tool_call",
+                    "name": tool_name,
+                    "input": input,
+                    "call_id": call_id,
+                }),
+            }),
+            Self::CustomToolCallOutput {
+                output, call_id, ..
+            } => Some(InputItem::Json {
+                value: json!({
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": output,
                 }),
             }),
             Self::HandoffCall { target_agent } => Some(InputItem::Json {

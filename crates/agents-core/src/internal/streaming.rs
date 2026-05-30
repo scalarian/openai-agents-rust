@@ -203,6 +203,8 @@ fn run_item_name(item: &crate::items::RunItem) -> String {
         crate::items::RunItem::MessageOutput { .. } => "message_output".to_owned(),
         crate::items::RunItem::ToolCall { .. } => "tool_call".to_owned(),
         crate::items::RunItem::ToolCallOutput { .. } => "tool_call_output".to_owned(),
+        crate::items::RunItem::CustomToolCall { .. } => "custom_tool_call".to_owned(),
+        crate::items::RunItem::CustomToolCallOutput { .. } => "custom_tool_call_output".to_owned(),
         crate::items::RunItem::HandoffCall { .. } => "handoff_call".to_owned(),
         crate::items::RunItem::HandoffOutput { .. } => "handoff_output".to_owned(),
         crate::items::RunItem::Reasoning { .. } => "reasoning".to_owned(),

@@ -6,7 +6,7 @@ use crate::run_config::{RunConfig, ToolErrorFormatterArgs, ToolNotFoundBehavior}
 use crate::run_context::{ApprovalRecord, RunContextWrapper};
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
 use crate::tool::{
-    FunctionTool, FunctionToolResult, Tool, ToolOutput, default_tool_error_function,
+    CustomTool, FunctionTool, FunctionToolResult, Tool, ToolOutput, default_tool_error_function,
     get_function_tool_origin,
 };
 use crate::tool_context::{ToolCall, ToolContext};
@@ -28,6 +28,28 @@ pub(crate) struct ToolExecutionOutcome {
     pub input_guardrail_results: Vec<ToolInputGuardrailResult>,
     pub output_guardrail_results: Vec<ToolOutputGuardrailResult>,
     pub interruptions: Vec<RunInterruption>,
+}
+
+impl ToolExecutionOutcome {
+    pub(crate) fn empty() -> Self {
+        Self {
+            new_items: Vec::new(),
+            tool_results: Vec::new(),
+            input_guardrail_results: Vec::new(),
+            output_guardrail_results: Vec::new(),
+            interruptions: Vec::new(),
+        }
+    }
+
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.new_items.extend(other.new_items);
+        self.tool_results.extend(other.tool_results);
+        self.input_guardrail_results
+            .extend(other.input_guardrail_results);
+        self.output_guardrail_results
+            .extend(other.output_guardrail_results);
+        self.interruptions.extend(other.interruptions);
+    }
 }
 
 enum ToolExecutionPlan {
@@ -116,6 +138,41 @@ pub(crate) async fn execute_local_function_tools_with_runtime_tools(
     }
 
     execute_tool_plans_concurrently(agent, run_config, context, plans, stream_recorder).await
+}
+
+pub(crate) async fn execute_local_custom_tools(
+    agent: &Agent,
+    run_config: &RunConfig,
+    context: &RunContextWrapper,
+    tool_calls: Vec<ToolCall>,
+    stream_recorder: Option<&StreamRecorder>,
+) -> Result<ToolExecutionOutcome> {
+    let mut outcome = ToolExecutionOutcome::empty();
+
+    for tool_call in tool_calls {
+        let custom_tool = agent
+            .find_custom_tool(&tool_call.name)
+            .cloned()
+            .ok_or_else(|| ModelBehaviorError {
+                message: format!(
+                    "model requested unknown custom tool `{}` from agent `{}`",
+                    tool_call.name, agent.name
+                ),
+            })?;
+        let single = execute_single_custom_tool(
+            agent,
+            run_config,
+            context,
+            tool_call,
+            custom_tool,
+            stream_recorder,
+        )
+        .await?;
+        outcome.new_items.extend(single.new_items);
+        outcome.tool_results.extend(single.tool_results);
+    }
+
+    Ok(outcome)
 }
 
 async fn build_tool_execution_plans(
@@ -669,6 +726,131 @@ async fn execute_single_function_tool(
     })
 }
 
+async fn execute_single_custom_tool(
+    agent: &Agent,
+    run_config: &RunConfig,
+    context: &RunContextWrapper,
+    tool_call: ToolCall,
+    custom_tool: CustomTool,
+    stream_recorder: Option<&StreamRecorder>,
+) -> Result<SingleToolExecutionOutcome> {
+    let mut new_items = Vec::new();
+    let mut tool_results = Vec::new();
+
+    let tool_context = ToolContext::from_tool_call(context, tool_call.clone())
+        .with_agent(agent.clone())
+        .with_run_config(run_config.clone());
+    let provider = get_trace_provider();
+    let trace_sensitive = !run_config.tracing_disabled && run_config.trace_include_sensitive_data;
+    let mut span = function_span(
+        &tool_context.trace_name(),
+        trace_sensitive.then(|| tool_call.arguments.clone()),
+        None,
+    );
+
+    if let Some(recorder) = stream_recorder {
+        recorder
+            .push_lifecycle(
+                "tool_start",
+                Some(serde_json::json!({
+                    "tool_name": tool_call.name.clone(),
+                    "call_id": tool_call.id.clone(),
+                    "tool_type": "custom",
+                })),
+            )
+            .await;
+    }
+    if let Some(hooks) = &run_config.run_hooks {
+        hooks
+            .on_tool_start(&tool_context, agent, &custom_tool.definition)
+            .await;
+    }
+    if let Some(hooks) = &agent.hooks {
+        hooks
+            .on_tool_start(&tool_context, agent, &custom_tool.definition)
+            .await;
+    }
+    provider.start_span(&mut span, true);
+
+    let output = match custom_tool
+        .invoke_raw(tool_context.clone(), tool_call.arguments.clone())
+        .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            let error_message = error.to_string();
+            set_tool_error_on_span(
+                &mut span,
+                &custom_tool.definition.name,
+                "Error running custom tool",
+                trace_sensitive,
+                &error_message,
+            );
+            resolve_custom_tool_error_output(
+                context,
+                run_config,
+                &tool_call,
+                "invoke_error",
+                "Tool execution failed.".to_owned(),
+            )
+            .await?
+        }
+    };
+    let output_text = custom_tool_output_text(&output);
+    let run_item = RunItem::CustomToolCallOutput {
+        output: output_text.clone(),
+        call_id: Some(tool_call.id.clone()),
+        tool_name: Some(tool_call.name.clone()),
+    };
+
+    new_items.push(run_item.clone());
+    tool_results.push(FunctionToolResult {
+        tool_name: tool_call.name.clone(),
+        call_id: Some(tool_call.id.clone()),
+        tool_arguments: Some(tool_call.arguments.clone()),
+        qualified_name: Some(custom_tool.definition.name.clone()),
+        output: ToolOutput::from(output_text.clone()),
+        run_item: Some(run_item),
+        interruptions: Vec::new(),
+        agent_run_result: None,
+    });
+
+    if let Some(hooks) = &run_config.run_hooks {
+        hooks
+            .on_tool_end(&tool_context, agent, &custom_tool.definition, &output)
+            .await;
+    }
+    if let Some(hooks) = &agent.hooks {
+        hooks
+            .on_tool_end(&tool_context, agent, &custom_tool.definition, &output)
+            .await;
+    }
+    if let SpanData::Function(data) = &mut span.data {
+        data.output = trace_sensitive.then(|| output_text.clone());
+    }
+    provider.finish_span(&mut span, true);
+    if let Some(recorder) = stream_recorder {
+        recorder
+            .push_lifecycle(
+                "tool_end",
+                Some(serde_json::json!({
+                    "tool_name": tool_call.name,
+                    "call_id": tool_call.id,
+                    "tool_type": "custom",
+                })),
+            )
+            .await;
+    }
+
+    Ok(SingleToolExecutionOutcome {
+        new_items,
+        tool_results,
+        input_guardrail_results: Vec::new(),
+        output_guardrail_results: Vec::new(),
+        interruptions: Vec::new(),
+    })
+}
+
 fn approval_decision_matches_tool_call(
     interruption: &RunInterruption,
     approval: &ApprovalRecord,
@@ -845,6 +1027,25 @@ pub(crate) fn extract_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {
         .collect()
 }
 
+pub(crate) fn extract_custom_tool_calls(output: &[OutputItem]) -> Vec<ToolCall> {
+    output
+        .iter()
+        .filter_map(|item| match item {
+            OutputItem::CustomToolCall {
+                call_id,
+                tool_name,
+                input,
+            } => Some(ToolCall {
+                id: call_id.clone(),
+                name: tool_name.clone(),
+                arguments: input.clone(),
+                namespace: None,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 pub(crate) fn apply_tool_origins_to_run_items(
     items: &mut [RunItem],
     runtime_tools: &[FunctionTool],
@@ -933,6 +1134,44 @@ async fn resolve_function_tool_error_output(
         run_context: context.clone(),
     };
     Ok(Some(ToolOutput::from(default_tool_error_function(&args))))
+}
+
+async fn resolve_custom_tool_error_output(
+    context: &RunContextWrapper,
+    run_config: &RunConfig,
+    tool_call: &ToolCall,
+    kind: &'static str,
+    default_message: String,
+) -> Result<ToolOutput> {
+    if let Some(formatter) = &run_config.tool_error_formatter {
+        let formatted = formatter(ToolErrorFormatterArgs {
+            kind,
+            tool_type: "custom",
+            tool_name: tool_call.name.clone(),
+            call_id: tool_call.id.clone(),
+            default_message: default_message.clone(),
+            run_context: context.clone(),
+        })
+        .await?;
+        return Ok(ToolOutput::from(formatted.unwrap_or(default_message)));
+    }
+
+    let args = ToolErrorFormatterArgs {
+        kind,
+        tool_type: "custom",
+        tool_name: tool_call.name.clone(),
+        call_id: tool_call.id.clone(),
+        default_message,
+        run_context: context.clone(),
+    };
+    Ok(ToolOutput::from(default_tool_error_function(&args)))
+}
+
+fn custom_tool_output_text(output: &ToolOutput) -> String {
+    match output {
+        ToolOutput::Text(value) => value.text.clone(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| String::new()),
+    }
 }
 
 pub(crate) fn resolve_handoff_agent(
