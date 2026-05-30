@@ -18,6 +18,7 @@ pub(crate) struct OpenAIServerConversationTracker {
     sent_item_fingerprints: HashSet<String>,
     server_item_ids: HashSet<String>,
     server_tool_call_ids: HashSet<String>,
+    primed_from_state: bool,
     prepared_item_source_ids_by_identity: HashMap<InputItemIdentity, Uuid>,
     prepared_item_source_ids_by_fingerprint: HashMap<String, Vec<Uuid>>,
     prepared_item_sources_by_id: HashMap<Uuid, crate::items::InputItem>,
@@ -34,6 +35,7 @@ impl OpenAIServerConversationTracker {
             sent_item_fingerprints: HashSet::new(),
             server_item_ids: HashSet::new(),
             server_tool_call_ids: HashSet::new(),
+            primed_from_state: false,
             prepared_item_source_ids_by_identity: HashMap::new(),
             prepared_item_source_ids_by_fingerprint: HashMap::new(),
             prepared_item_sources_by_id: HashMap::new(),
@@ -64,6 +66,52 @@ impl OpenAIServerConversationTracker {
         self.auto_previous_response_id |= state.auto_previous_response_id;
     }
 
+    pub fn hydrate_from_state(&mut self, state: &RunState, unsent_tool_call_ids: &HashSet<String>) {
+        if self.primed_from_state || self.sent_initial_input {
+            return;
+        }
+
+        let original_input = state
+            .normalized_input
+            .as_deref()
+            .unwrap_or(&state.original_input);
+        for item in original_input {
+            self.track_input_item_as_sent(item);
+        }
+
+        let mut latest_response_id = None;
+        for response in &state.model_responses {
+            if response.response_id.is_some() {
+                latest_response_id = response.response_id.clone();
+            }
+            for item in response.to_input_items() {
+                self.track_input_item_as_sent(&item);
+            }
+        }
+
+        if self.conversation_id.is_none() && latest_response_id.is_some() {
+            self.previous_response_id = latest_response_id;
+        }
+
+        for run_item in &state.generated_items {
+            let Some(item) = crate::internal::items::run_item_to_input_item(
+                run_item,
+                state.reasoning_item_id_policy,
+            ) else {
+                continue;
+            };
+            if self
+                .extract_output_call_id(&item)
+                .is_some_and(|call_id| unsent_tool_call_ids.contains(call_id))
+            {
+                continue;
+            }
+            self.track_input_item_as_sent(&item);
+        }
+
+        self.primed_from_state = true;
+    }
+
     pub fn apply_response(&mut self, response: &ModelResponse) {
         self.track_server_items(response);
         if (self.auto_previous_response_id || self.previous_response_id.is_some())
@@ -82,13 +130,18 @@ impl OpenAIServerConversationTracker {
         let mut prepared = Vec::new();
 
         if !self.sent_initial_input {
+            let mut remaining_initial_input = Vec::new();
             for item in original_input {
+                if self.primed_from_state && self.should_skip_sent_input_item(item) {
+                    continue;
+                }
                 let prepared_item = item.clone();
                 self.register_prepared_item_source(&prepared_item, item.clone());
+                remaining_initial_input.push(item.clone());
                 prepared.push(prepared_item);
             }
             self.remaining_initial_input =
-                (!original_input.is_empty()).then(|| original_input.to_vec());
+                (!remaining_initial_input.is_empty()).then_some(remaining_initial_input);
             self.sent_initial_input = true;
         } else if let Some(remaining) = self.remaining_initial_input.clone() {
             for item in remaining {
@@ -346,6 +399,34 @@ impl OpenAIServerConversationTracker {
         if remaining.is_empty() {
             self.remaining_initial_input = None;
         }
+    }
+
+    fn track_input_item_as_sent(&mut self, item: &crate::items::InputItem) {
+        if let Some(item_id) = self.extract_item_id(item).map(ToOwned::to_owned) {
+            self.server_item_ids.insert(item_id);
+        }
+        if let Some(call_id) = self.extract_output_call_id(item).map(ToOwned::to_owned) {
+            self.server_tool_call_ids.insert(call_id);
+        }
+        self.sent_item_fingerprints
+            .insert(fingerprint_input_item(item));
+    }
+
+    fn should_skip_sent_input_item(&self, item: &crate::items::InputItem) -> bool {
+        if self
+            .extract_item_id(item)
+            .is_some_and(|item_id| self.server_item_ids.contains(item_id))
+        {
+            return true;
+        }
+        if self
+            .extract_output_call_id(item)
+            .is_some_and(|call_id| self.server_tool_call_ids.contains(call_id))
+        {
+            return true;
+        }
+        self.sent_item_fingerprints
+            .contains(&fingerprint_input_item(item))
     }
 
     fn extract_item_id<'a>(&self, item: &'a crate::items::InputItem) -> Option<&'a str> {

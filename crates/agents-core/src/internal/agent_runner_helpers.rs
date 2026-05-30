@@ -1,4 +1,6 @@
-use crate::items::{InputItem, RunItem};
+use std::collections::HashSet;
+
+use crate::items::{InputItem, OutputItem, RunItem};
 use crate::run_config::RunConfig;
 use crate::run_state::RunState;
 use crate::session::Session;
@@ -27,6 +29,41 @@ pub(crate) fn apply_resumed_conversation_settings(config: &mut RunConfig, state:
         config.conversation_id = resumed_conversation_id;
     }
     config.auto_previous_response_id |= state.auto_previous_response_id;
+}
+
+pub(crate) fn get_unsent_tool_call_ids_for_interrupted_state(state: &RunState) -> HashSet<String> {
+    if state.current_step.is_none() {
+        return HashSet::new();
+    }
+
+    let mut call_ids = state
+        .model_responses
+        .last()
+        .map(|response| {
+            response
+                .output
+                .iter()
+                .filter_map(|item| match item {
+                    OutputItem::ToolCall { call_id, .. } => Some(call_id.clone()),
+                    OutputItem::Text { .. }
+                    | OutputItem::Refusal { .. }
+                    | OutputItem::Json { .. }
+                    | OutputItem::Handoff { .. }
+                    | OutputItem::Reasoning { .. } => None,
+                })
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+
+    if let Some(call_id) = state
+        .current_step
+        .as_ref()
+        .and_then(|step| step.call_id.clone())
+    {
+        call_ids.insert(call_id);
+    }
+
+    call_ids
 }
 
 fn latest_response_id(state: &RunState) -> Option<String> {

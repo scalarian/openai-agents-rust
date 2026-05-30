@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use agents_core::{
-    Agent, AgentsError, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
-    RunInterruptionKind, RunItem, Runner, Usage, function_tool,
+    Agent, AgentsError, InputItem, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
+    RunConfig, RunInterruptionKind, RunItem, Runner, Usage, function_tool,
 };
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -90,6 +90,66 @@ struct SearchArgs {
     query: String,
 }
 
+#[derive(Clone, Default)]
+struct ConversationApprovalModel {
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
+}
+
+#[async_trait]
+impl Model for ConversationApprovalModel {
+    async fn generate(&self, request: ModelRequest) -> agents_core::Result<ModelResponse> {
+        let mut requests = self
+            .requests
+            .lock()
+            .expect("conversation approval requests lock");
+        requests.push(request.clone());
+
+        if requests.len() == 1 {
+            return Ok(ModelResponse {
+                model: request.model,
+                output: vec![
+                    OutputItem::ToolCall {
+                        call_id: "call-fast".to_owned(),
+                        tool_name: "fast".to_owned(),
+                        arguments: json!({ "query": "rust" }),
+                        namespace: None,
+                    },
+                    OutputItem::ToolCall {
+                        call_id: "call-approval".to_owned(),
+                        tool_name: "needs_approval".to_owned(),
+                        arguments: json!({ "query": "rust" }),
+                        namespace: None,
+                    },
+                ],
+                usage: Usage::default(),
+                response_id: Some("resp-approval-1".to_owned()),
+                request_id: Some("req-approval-1".to_owned()),
+            });
+        }
+
+        Ok(ModelResponse {
+            model: request.model,
+            output: vec![OutputItem::Text {
+                text: "done".to_owned(),
+            }],
+            usage: Usage::default(),
+            response_id: Some("resp-approval-2".to_owned()),
+            request_id: Some("req-approval-2".to_owned()),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct ConversationApprovalProvider {
+    model: Arc<ConversationApprovalModel>,
+}
+
+impl ModelProvider for ConversationApprovalProvider {
+    fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+        self.model.clone()
+    }
+}
+
 #[tokio::test]
 async fn runner_interrupts_and_resumes_tool_approval() {
     let provider = Arc::new(ApprovalProvider {
@@ -152,6 +212,88 @@ async fn runner_interrupts_and_resumes_tool_approval() {
             } if tool_name == "search" && call_id.as_deref() == Some("call-1")
         )
     }));
+}
+
+#[tokio::test]
+async fn conversation_resume_sends_only_unsent_interrupted_tool_outputs() {
+    let model = Arc::new(ConversationApprovalModel::default());
+    let provider = Arc::new(ConversationApprovalProvider {
+        model: model.clone(),
+    });
+    let fast_tool = function_tool("fast", "Fast lookup", |_ctx, args: SearchArgs| async move {
+        Ok::<_, AgentsError>(format!("fast:{}", args.query))
+    })
+    .expect("fast tool should build");
+    let approval_tool =
+        function_tool(
+            "needs_approval",
+            "Approval lookup",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("approved:{}", args.query))
+            },
+        )
+        .expect("approval tool should build")
+        .with_needs_approval(true);
+    let agent = Agent::builder("assistant")
+        .function_tool(fast_tool)
+        .function_tool(approval_tool)
+        .build();
+    let runner = Runner::new()
+        .with_model_provider(provider)
+        .with_config(RunConfig {
+            conversation_id: Some("conv-approval".to_owned()),
+            ..RunConfig::default()
+        });
+
+    let initial = runner
+        .run(&agent, "hello")
+        .await
+        .expect("initial run should interrupt");
+    let mut state = initial
+        .durable_state()
+        .cloned()
+        .expect("state should exist");
+    state.approve_for_tool(
+        "call-approval",
+        Some("needs_approval".to_owned()),
+        Some("approved".to_owned()),
+    );
+
+    let resumed = runner
+        .resume_with_agent(&state, &agent)
+        .await
+        .expect("resume should succeed");
+
+    assert_eq!(resumed.final_output.as_deref(), Some("done"));
+    let requests = model
+        .requests
+        .lock()
+        .expect("conversation approval requests lock")
+        .clone();
+    assert_eq!(requests.len(), 2);
+    let resumed_input = &requests[1].input;
+    assert!(resumed_input.iter().all(|item| !matches!(
+        item,
+        InputItem::Text { text } if text == "hello"
+    )));
+    assert!(resumed_input.iter().all(|item| !matches!(
+        item,
+        InputItem::Json { value }
+            if value.get("type").and_then(serde_json::Value::as_str) == Some("tool_call")
+    )));
+    let output_call_ids = resumed_input
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::Json { value }
+                if value.get("type").and_then(serde_json::Value::as_str)
+                    == Some("tool_call_output") =>
+            {
+                value.get("call_id").and_then(serde_json::Value::as_str)
+            }
+            InputItem::Text { .. } | InputItem::Json { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(output_call_ids, vec!["call-fast", "call-approval"]);
 }
 
 #[tokio::test]

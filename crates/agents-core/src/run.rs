@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use uuid::Uuid;
@@ -53,6 +53,29 @@ struct HandoffTransition {
     pre_handoff_items: Vec<RunItem>,
     normalized_step_items: Vec<RunItem>,
     session_step_items: Vec<RunItem>,
+}
+
+#[derive(Clone, Debug)]
+struct ConversationResumeHydration {
+    state: RunState,
+    unsent_tool_call_ids: HashSet<String>,
+}
+
+fn conversation_resume_hydration(
+    config: &RunConfig,
+    state: &RunState,
+    unsent_tool_call_ids: HashSet<String>,
+) -> Option<ConversationResumeHydration> {
+    let has_server_state = config.conversation_id.is_some()
+        || config.previous_response_id.is_some()
+        || state
+            .model_responses
+            .iter()
+            .any(|response| response.response_id.is_some());
+    has_server_state.then(|| ConversationResumeHydration {
+        state: state.clone(),
+        unsent_tool_call_ids,
+    })
 }
 
 fn default_agent_runner_cell() -> &'static RwLock<AgentRunner> {
@@ -259,8 +282,17 @@ impl Runner {
         input: Vec<InputItem>,
         context: crate::run_context::RunContextWrapper,
     ) -> Result<RunResult> {
-        self.run_items_internal(agent, input.clone(), input, None, None, Some(context), None)
-            .await
+        self.run_items_internal(
+            agent,
+            input.clone(),
+            input,
+            None,
+            None,
+            Some(context),
+            None,
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn run_items_with_session_and_context(
@@ -295,6 +327,7 @@ impl Runner {
                     None,
                     Some(context),
                     Some(recorder.clone()),
+                    None,
                 )
                 .await;
             recorder.complete(result).await;
@@ -367,11 +400,21 @@ impl Runner {
                 None,
                 Some(context),
                 recorder,
+                None,
             )
             .await
         } else {
-            self.run_items_internal(agent, input.clone(), input, None, None, None, recorder)
-                .await
+            self.run_items_internal(
+                agent,
+                input.clone(),
+                input,
+                None,
+                None,
+                None,
+                recorder,
+                None,
+            )
+            .await
         }
     }
 
@@ -402,6 +445,7 @@ impl Runner {
             Some(session),
             Some(context),
             recorder,
+            None,
         )
         .await
     }
@@ -415,6 +459,7 @@ impl Runner {
         session: Option<&(dyn Session + Sync)>,
         context_override: Option<crate::run_context::RunContextWrapper>,
         stream_recorder: Option<StreamRecorder>,
+        conversation_hydration: Option<ConversationResumeHydration>,
     ) -> Result<RunResult> {
         internal_turn_preparation::validate_run_hooks()?;
 
@@ -550,6 +595,12 @@ impl Runner {
             internal_oai_conversation::OpenAIServerConversationTracker::new(&self.config);
         if let Some(session_state) = &session_conversation_state {
             conversation_tracker.apply_session_state(session_state);
+        }
+        if conversation_tracker.is_active()
+            && let Some(hydration) = conversation_hydration.as_ref()
+        {
+            conversation_tracker
+                .hydrate_from_state(&hydration.state, &hydration.unsent_tool_call_ids);
         }
 
         let mut max_turns_exceeded = false;
@@ -1178,7 +1229,28 @@ impl Runner {
             config: resumed_config,
         };
 
-        let mut result = runner.run_items(&agent, state.resume_input()).await?;
+        let conversation_hydration = conversation_resume_hydration(
+            &runner.config,
+            state,
+            internal_agent_runner_helpers::get_unsent_tool_call_ids_for_interrupted_state(state),
+        );
+        let mut result = if let Some(hydration) = conversation_hydration {
+            let resume_input = state.resume_input();
+            runner
+                .run_items_internal(
+                    &agent,
+                    resume_input.clone(),
+                    resume_input,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(hydration),
+                )
+                .await?
+        } else {
+            runner.run_items(&agent, state.resume_input()).await?
+        };
 
         let result_preserve_items = result.new_items.clone();
         let result_normalized_items = result
@@ -1321,6 +1393,8 @@ impl Runner {
             .into());
         }
 
+        let unsent_tool_call_ids =
+            internal_agent_runner_helpers::get_unsent_tool_call_ids_for_interrupted_state(state);
         let mut continued_state = state.clone();
         continued_state.clear_interruption();
         continued_state
@@ -1351,9 +1425,27 @@ impl Runner {
             model_provider: self.model_provider.clone(),
             config: resumed_config,
         };
-        let mut result = runner
-            .run_items(agent, continued_state.resume_input())
-            .await?;
+        let conversation_hydration =
+            conversation_resume_hydration(&runner.config, &continued_state, unsent_tool_call_ids);
+        let mut result = if let Some(hydration) = conversation_hydration {
+            let resume_input = continued_state.resume_input();
+            runner
+                .run_items_internal(
+                    agent,
+                    resume_input.clone(),
+                    resume_input,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(hydration),
+                )
+                .await?
+        } else {
+            runner
+                .run_items(agent, continued_state.resume_input())
+                .await?
+        };
 
         let result_preserve_items = result.new_items.clone();
         let result_normalized_items = result
