@@ -2144,6 +2144,41 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_includes_code_interpreter_options() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let code_interpreter = crate::tools::code_interpreter_tool_with_options(
+            crate::tools::CodeInterpreterToolOptions {
+                container: Some(json!({"type": "auto"})),
+            },
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![code_interpreter.definition],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "code_interpreter",
+                "container": {"type": "auto"}
+            })
+        );
+    }
+
+    #[test]
     fn responses_payload_includes_tool_search_options() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",

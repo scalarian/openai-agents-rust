@@ -11,6 +11,21 @@ pub type ToolSearchTool = StaticTool;
 pub type ImageGenerationTool = StaticTool;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CodeInterpreterToolOptions {
+    pub container: Option<Value>,
+}
+
+impl CodeInterpreterToolOptions {
+    fn into_hosted_tool_options(self) -> BTreeMap<String, Value> {
+        let mut options = BTreeMap::new();
+        if let Some(container) = self.container {
+            options.insert("container".to_owned(), container);
+        }
+        options
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FileSearchToolOptions {
     pub vector_store_ids: Vec<String>,
     pub max_num_results: Option<u64>,
@@ -156,10 +171,15 @@ pub fn file_search_tool() -> StaticTool {
 }
 
 pub fn code_interpreter_tool() -> StaticTool {
+    code_interpreter_tool_with_options(CodeInterpreterToolOptions::default())
+}
+
+pub fn code_interpreter_tool_with_options(options: CodeInterpreterToolOptions) -> StaticTool {
     StaticTool::new(
         "code_interpreter",
         "Run short code snippets in the hosted OpenAI code interpreter.",
     )
+    .with_hosted_tool_options(options.into_hosted_tool_options())
 }
 
 pub fn tool_search_tool() -> StaticTool {

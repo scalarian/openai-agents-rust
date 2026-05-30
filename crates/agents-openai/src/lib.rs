@@ -66,11 +66,12 @@ pub use reasoning_content_replay::{
     ReasoningContentReplayContext, ReasoningContentSource, default_should_replay_reasoning_content,
 };
 pub use tools::{
-    CodeInterpreterTool, FileSearchTool, FileSearchToolOptions, ImageGenerationTool,
-    ToolSearchTool, ToolSearchToolOptions, WebSearchTool, WebSearchToolOptions,
-    code_interpreter_tool, file_search_tool, file_search_tool_with_options,
-    file_search_tool_with_vector_store_ids, image_generation_tool, tool_search_tool,
-    tool_search_tool_with_options, web_search_tool, web_search_tool_with_options,
+    CodeInterpreterTool, CodeInterpreterToolOptions, FileSearchTool, FileSearchToolOptions,
+    ImageGenerationTool, ToolSearchTool, ToolSearchToolOptions, WebSearchTool,
+    WebSearchToolOptions, code_interpreter_tool, code_interpreter_tool_with_options,
+    file_search_tool, file_search_tool_with_options, file_search_tool_with_vector_store_ids,
+    image_generation_tool, tool_search_tool, tool_search_tool_with_options, web_search_tool,
+    web_search_tool_with_options,
 };
 pub use websocket::{
     OpenAIResponsesWebSocketOptions, ResponsesWebSocketSession, responses_websocket_session,

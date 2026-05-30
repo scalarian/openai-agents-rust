@@ -1,8 +1,8 @@
 use openai_agents::{
-    Agent, InputItem, MCPListToolsItem, Model, ModelProvider, ModelRequest, ModelResponse,
-    OutputItem, Result as AgentsResult, Runner, ToolSearchCallItem, ToolSearchOutputItem, Usage,
-    code_interpreter_tool, file_search_tool, image_generation_tool, tool_search_tool,
-    web_search_tool,
+    Agent, CodeInterpreterToolOptions, InputItem, MCPListToolsItem, Model, ModelProvider,
+    ModelRequest, ModelResponse, OutputItem, Result as AgentsResult, Runner, ToolSearchCallItem,
+    ToolSearchOutputItem, Usage, code_interpreter_tool, code_interpreter_tool_with_options,
+    file_search_tool, image_generation_tool, tool_search_tool, web_search_tool,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -60,6 +60,14 @@ fn facade_hosted_tool_helpers_are_constructible() {
             "tool_search",
             "web_search",
         ]
+    );
+
+    let configured = code_interpreter_tool_with_options(CodeInterpreterToolOptions {
+        container: Some(json!({"type": "auto"})),
+    });
+    assert_eq!(
+        configured.definition.hosted_tool_options.get("container"),
+        Some(&json!({"type": "auto"}))
     );
 }
 

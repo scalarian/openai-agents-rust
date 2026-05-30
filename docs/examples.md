@@ -13,6 +13,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | agents as tools streaming | stream events emitted by a nested agent tool | [agents_as_tools_streaming.rs](../crates/openai-agents/examples/agents_as_tools_streaming.rs) |
 | agents as tools structured | structured input for agent-as-tool calls | [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
+| code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
 | custom agent model | per-agent model name resolved by a custom provider | [custom_agent_model.rs](../crates/openai-agents/examples/custom_agent_model.rs) |
 | custom model provider | per-run custom model provider selection | [custom_model_provider.rs](../crates/openai-agents/examples/custom_model_provider.rs) |
 | default model provider | global default runner model provider | [default_model_provider.rs](../crates/openai-agents/examples/default_model_provider.rs) |

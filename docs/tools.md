@@ -13,7 +13,7 @@ Use this page when you want the model to trigger typed behavior instead of only 
 
 Function tools can return text, JSON, image, or file outputs. See [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) for an image-returning function tool.
 
-Hosted tools are added as static tools on the agent. For example, [file_search.rs](../crates/openai-agents/examples/file_search.rs) configures vector store search with included results, [web_search.rs](../crates/openai-agents/examples/web_search.rs) configures `web_search_tool_with_options(...)` with an approximate user location, and [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) shows domain filters plus source includes.
+Hosted tools are added as static tools on the agent. For example, [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) configures an auto code interpreter container, [file_search.rs](../crates/openai-agents/examples/file_search.rs) configures vector store search with included results, [web_search.rs](../crates/openai-agents/examples/web_search.rs) configures `web_search_tool_with_options(...)` with an approximate user location, and [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) shows domain filters plus source includes.
 
 ## Function Tool Example
 
