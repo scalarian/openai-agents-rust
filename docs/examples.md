@@ -46,6 +46,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | handoffs | control transfer between agents | [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) |
 | hello world | upstream-style haiku response example | [hello_world.rs](../crates/openai-agents/examples/hello_world.rs) |
 | hosted MCP connectors | hosted MCP connector payload configuration | [hosted_mcp_connectors.rs](../crates/openai-agents/examples/hosted_mcp_connectors.rs) |
+| hosted MCP human in the loop | approval interruption and resume for hosted MCP calls | [hosted_mcp_human_in_the_loop.rs](../crates/openai-agents/examples/hosted_mcp_human_in_the_loop.rs) |
 | hosted MCP simple | upstream-named hosted MCP simple entry point | [hosted_mcp_simple.rs](../crates/openai-agents/examples/hosted_mcp_simple.rs) |
 | hosted mcp | hosted MCP tool payload configuration for Responses models | [hosted_mcp.rs](../crates/openai-agents/examples/hosted_mcp.rs) |
 | human in the loop | approval-required tool calls with saved run state | [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) |
