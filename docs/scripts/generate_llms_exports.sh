@@ -42,11 +42,14 @@ done < <(find . -type f -name '*.md' ! -path './assets/*' ! -path './stylesheets
 {
   echo "# openai-agents-rust docs full export"
   echo
-  for file in "${files[@]}"; do
+  for index in "${!files[@]}"; do
+    file="${files[$index]}"
     echo
     echo "## ${file#./}"
     echo
     cat "$file"
-    echo
+    if (( index + 1 < ${#files[@]} )); then
+      echo
+    fi
   done
 } > llms-full.txt

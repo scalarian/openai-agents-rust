@@ -63,9 +63,11 @@ An agent is the runtime definition of:
 - `dynamic_instructions(...)`
 - `prompt(...)`
 - `dynamic_prompt(...)`
+- `model_settings(...)`
 - `function_tool(...)`
 - `handoff(...)`
 - `output_schema(...)`
+- `reset_tool_choice(...)`
 - `hooks(...)`
 
 Use `dynamic_instructions(...)` when the system prompt should be derived from the run context or another runtime value instead of being fixed on the agent.
@@ -86,6 +88,44 @@ Use `AgentOutputSchema<T>` or `OutputSchemaDefinition` directly when you need no
 For file input content, pass raw JSON `InputItem::Json` messages with `content` entries such as `{"type":"input_file","file_data":"data:application/pdf;base64,...","filename":"..."}` or `{"type":"input_file","file_url":"https://..."}`. See [local_file.rs](../crates/openai-agents/examples/local_file.rs) and [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs).
 
 For image input content, use `{"type":"input_image","detail":"auto","image_url":"data:image/...;base64,..."}` for local images or an HTTPS image URL for remote images. See [local_image.rs](../crates/openai-agents/examples/local_image.rs) and [remote_image.rs](../crates/openai-agents/examples/remote_image.rs).
+
+## Forcing Tool Use
+
+Use `ModelSettings { tool_choice: Some(...) }` when the model should be forced to use a tool.
+
+```rust,no_run
+use openai_agents::{Agent, AgentsError, ModelSettings, function_tool};
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WeatherArgs {
+    city: String,
+}
+
+# fn build_agent() -> Result<Agent, AgentsError> {
+let weather = function_tool(
+    "get_weather",
+    "Return weather for a city.",
+    |_ctx, args: WeatherArgs| async move {
+        Ok::<_, AgentsError>(format!("The weather in {} is sunny.", args.city))
+    },
+)?;
+
+let agent = Agent::builder("weather")
+    .function_tool(weather)
+    .model_settings(ModelSettings {
+        tool_choice: Some("get_weather".to_owned()),
+        ..ModelSettings::default()
+    })
+    .build();
+# Ok(agent)
+# }
+```
+
+By default, the runner clears forced `tool_choice` after that agent uses a function, custom, or handoff tool. This matches the upstream loop-prevention behavior: tool results are sent back to the model, and leaving `tool_choice` forced can make the model call tools forever.
+
+Use `.reset_tool_choice(false)` only when the agent must preserve a forced tool choice across tool-result turns.
 
 ## Agents As Tools
 
