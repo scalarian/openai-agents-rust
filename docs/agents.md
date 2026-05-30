@@ -39,10 +39,13 @@ An agent is the runtime definition of:
 ## Common Agent Builder Features
 
 - `instructions(...)`
+- `dynamic_instructions(...)`
 - `function_tool(...)`
 - `handoff(...)`
 - `output_schema(...)`
 - `hooks(...)`
+
+Use `dynamic_instructions(...)` when the system prompt should be derived from the run context or another runtime value instead of being fixed on the agent.
 
 ## Structured Output
 
