@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use uuid::Uuid;
 
+use crate::_tool_identity::get_tool_call_trace_name;
 use crate::agent::Agent;
 use crate::errors::Result;
 use crate::exceptions::{MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, UserError};
@@ -737,7 +738,7 @@ impl Runner {
             let tool_names_for_reset = tool_calls
                 .iter()
                 .chain(custom_tool_calls.iter())
-                .map(|call| call.name.clone())
+                .map(tool_name_for_reset)
                 .collect::<Vec<_>>();
             tool_use_tracker.add_tool_use(&current_agent, tool_names_for_reset);
             let runtime_tools = if tool_calls.is_empty() {
@@ -2245,6 +2246,10 @@ async fn dispatch_llm_end(
     if let Some(hooks) = agent_hooks {
         hooks.on_llm_end(context, agent, response).await;
     }
+}
+
+fn tool_name_for_reset(tool_call: &crate::tool_context::ToolCall) -> String {
+    get_tool_call_trace_name(tool_call).unwrap_or_else(|| tool_call.name.clone())
 }
 
 fn merge_run_states(previous: &RunState, next: &mut RunState) {
@@ -3803,6 +3808,32 @@ mod tests {
                     && call_id.as_deref() == Some("call-missing")
             )
         }));
+    }
+
+    #[test]
+    fn tool_name_for_reset_matches_tool_trace_names() {
+        let namespaced = crate::tool_context::ToolCall {
+            id: "call-namespaced".to_owned(),
+            name: "lookup_account".to_owned(),
+            arguments: "{}".to_owned(),
+            namespace: Some("billing".to_owned()),
+        };
+        let deferred = crate::tool_context::ToolCall {
+            id: "call-deferred".to_owned(),
+            name: "get_weather".to_owned(),
+            arguments: "{}".to_owned(),
+            namespace: Some("get_weather".to_owned()),
+        };
+        let bare = crate::tool_context::ToolCall {
+            id: "call-bare".to_owned(),
+            name: "raw_editor".to_owned(),
+            arguments: "{}".to_owned(),
+            namespace: None,
+        };
+
+        assert_eq!(tool_name_for_reset(&namespaced), "billing.lookup_account");
+        assert_eq!(tool_name_for_reset(&deferred), "get_weather");
+        assert_eq!(tool_name_for_reset(&bare), "raw_editor");
     }
 
     #[tokio::test]
