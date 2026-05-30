@@ -233,6 +233,11 @@ impl RunResultStreaming {
         }
     }
 
+    pub async fn run_loop_error(&self) -> Option<crate::errors::AgentsError> {
+        let shared_state = self.shared_state.as_ref()?;
+        shared_state.completion().await.and_then(Result::err)
+    }
+
     pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
         self.agent_tool_invocation.as_ref()
     }
@@ -273,11 +278,15 @@ impl RunResultStreaming {
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt as _;
     use serde_json::json;
 
+    use crate::errors::AgentsError;
+    use crate::internal::streaming::StreamRecorder;
     use crate::items::OutputItem;
     use crate::model::ModelResponse;
     use crate::run_context::RunContext;
+    use crate::stream_events::StreamEvent;
     use crate::usage::Usage;
 
     use super::*;
@@ -405,5 +414,50 @@ mod tests {
         assert_eq!(normalized.len(), 2);
         assert_eq!(normalized[0].as_text(), Some("normalized-start"));
         assert_eq!(normalized[1].as_text(), Some("normalized"));
+    }
+
+    #[tokio::test]
+    async fn streaming_run_loop_error_is_none_for_pending_and_success() {
+        let recorder = StreamRecorder::new();
+        let streaming = RunResultStreaming::from_live(Some(1), recorder.shared_state());
+
+        assert!(streaming.run_loop_error().await.is_none());
+
+        recorder
+            .complete(Ok(RunResult {
+                agent_name: "assistant".to_owned(),
+                final_output: Some("done".to_owned()),
+                ..RunResult::default()
+            }))
+            .await;
+
+        let events = streaming.stream_events().collect::<Vec<_>>().await;
+        assert!(!events.is_empty());
+        assert!(streaming.run_loop_error().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn streaming_run_loop_error_surfaces_failure_after_events_complete() {
+        let recorder = StreamRecorder::new();
+        let streaming = RunResultStreaming::from_live(Some(1), recorder.shared_state());
+
+        recorder
+            .complete(Err(AgentsError::message("run loop boom")))
+            .await;
+
+        let events = streaming.stream_events().collect::<Vec<_>>().await;
+        assert!(matches!(
+            events.as_slice(),
+            [StreamEvent::Lifecycle(event)] if event.name == "run_failed"
+        ));
+
+        let error = streaming
+            .run_loop_error()
+            .await
+            .expect("run loop error should be stored");
+        assert!(matches!(
+            error,
+            AgentsError::Message { message } if message == "run loop boom"
+        ));
     }
 }
