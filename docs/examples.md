@@ -18,6 +18,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | auto mode | deterministic fallback inputs and confirmations for automated example runs | [auto_mode.rs](../crates/openai-agents/examples/auto_mode.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
 | code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
+| compaction session example | upstream-named compaction session entry point | [compaction_session_example.rs](../crates/openai-agents/examples/compaction_session_example.rs) |
 | compaction session | automatic and manual OpenAI Responses session compaction | [compaction_session.rs](../crates/openai-agents/examples/compaction_session.rs) |
 | compaction session stateless | auto compaction for `store=false` Responses runs | [compaction_session_stateless.rs](../crates/openai-agents/examples/compaction_session_stateless.rs) |
 | custom example agent | upstream-named per-agent custom model entry point | [custom_example_agent.rs](../crates/openai-agents/examples/custom_example_agent.rs) |
