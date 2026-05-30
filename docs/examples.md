@@ -138,6 +138,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | sandbox remote snapshot | local sandbox session state serialization and workspace restore round-trip | [sandbox_remote_snapshot.rs](../crates/openai-agents/examples/sandbox_remote_snapshot.rs) |
 | sandbox repo code review | sandboxed repository test run with generated review, findings, and patch artifacts | [sandbox_repo_code_review.rs](../crates/openai-agents/examples/sandbox_repo_code_review.rs) |
 | sandbox tax prep | streamed sandbox tax preparation workflow with generated 1040 summary artifact | [sandbox_tax_prep.rs](../crates/openai-agents/examples/sandbox_tax_prep.rs) |
+| sandbox tutorial resume | serialized sandbox resume from app build to added test coverage | [sandbox_tutorial_resume.rs](../crates/openai-agents/examples/sandbox_tutorial_resume.rs) |
 | sandbox Unix local runner | local Unix sandbox runner with path grants | [sandbox_unix_local_runner.rs](../crates/openai-agents/examples/sandbox_unix_local_runner.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
 | sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
