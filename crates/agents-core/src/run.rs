@@ -4104,6 +4104,7 @@ mod tests {
 
     #[tokio::test]
     async fn generation_span_model_config_omits_request_extras() {
+        let trace_id = uuid::Uuid::new_v4();
         let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
             .lock()
             .await;
@@ -4120,6 +4121,7 @@ mod tests {
                 model: Arc::new(RequestCaptureModel::default()),
             }))
             .with_config(RunConfig {
+                trace_id: Some(trace_id.to_string()),
                 model_settings: Some(crate::ModelSettings {
                     temperature: Some(0.5),
                     extra_headers: BTreeMap::from([(
@@ -4140,9 +4142,14 @@ mod tests {
         let model_config = processor
             .spans()
             .into_iter()
-            .find_map(|span| match span.data {
-                crate::tracing::SpanData::Generation(data) => data.model_config,
-                _ => None,
+            .find_map(|span| {
+                if span.trace_id != trace_id {
+                    return None;
+                }
+                match span.data {
+                    crate::tracing::SpanData::Generation(data) => data.model_config,
+                    _ => None,
+                }
             })
             .expect("generation span should carry model config");
 
