@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use openai_agents::sandbox::{
-    Dir, File, LocalDir, LocalSandboxSession, Manifest, prepare_sandbox_run,
+    Dir, File, LocalDir, LocalSandboxSession, Manifest, SandboxPathGrant, prepare_sandbox_run,
 };
 use openai_agents::{
     ApplyPatchOperation, InputItem, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
@@ -347,6 +347,7 @@ async fn sandbox_manifest_entries_are_ready_before_first_tool_call() {
         sandbox: Some(SandboxRunConfig {
             manifest: Some(
                 Manifest::default()
+                    .with_extra_path_grant(SandboxPathGrant::new(&source_root).read_only(true))
                     .with_entry("notes.txt", File::from_text("inline bytes\n"))
                     .with_entry(
                         "project",
@@ -422,6 +423,85 @@ async fn sandbox_manifest_entries_are_ready_before_first_tool_call() {
     };
     let copied_bytes = copied_bytes.text;
     assert_eq!(copied_bytes, "copied bytes\n");
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+    fs::remove_dir_all(&source_root).expect("remove source root");
+}
+
+#[test]
+fn sandbox_manifest_localdir_rejects_ungranted_absolute_source() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let source_root = unique_temp_path("sandbox-localdir-ungranted-source");
+    if source_root.exists() {
+        fs::remove_dir_all(&source_root).expect("remove stale source root");
+    }
+    fs::create_dir_all(&source_root).expect("create localdir source");
+    fs::write(source_root.join("secret.txt"), "secret\n").expect("write source file");
+
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let before_temp_roots = sandbox_temp_roots();
+    let error = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(
+                    Manifest::default().with_entry("copied", LocalDir::new(&source_root)),
+                ),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect_err("ungranted localdir source outside base should be rejected");
+    let after_temp_roots = sandbox_temp_roots();
+
+    let message = error.to_string();
+    assert!(
+        message.contains("manifest base directory") && message.contains("extra path grant"),
+        "unexpected error: {message}"
+    );
+    assert_eq!(
+        before_temp_roots, after_temp_roots,
+        "failed staging should not leave sandbox temp roots behind"
+    );
+
+    fs::remove_dir_all(&source_root).expect("remove source root");
+}
+
+#[test]
+fn sandbox_manifest_localdir_allows_extra_path_granted_source() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let source_root = unique_temp_path("sandbox-localdir-granted-source");
+    if source_root.exists() {
+        fs::remove_dir_all(&source_root).expect("remove stale source root");
+    }
+    fs::create_dir_all(&source_root).expect("create localdir source");
+    fs::write(source_root.join("safe.txt"), "safe\n").expect("write source file");
+
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let prepared = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(
+                    Manifest::default()
+                        .with_extra_path_grant(SandboxPathGrant::new(&source_root).read_only(true))
+                        .with_entry("copied", LocalDir::new(&source_root)),
+                ),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("extra path granted localdir source should stage successfully");
+
+    assert_eq!(
+        prepared
+            .session
+            .read_file("/workspace/copied/safe.txt")
+            .expect("staged file should be readable"),
+        "safe\n"
+    );
 
     prepared.session.cleanup().expect("cleanup succeeds");
     fs::remove_dir_all(&source_root).expect("remove source root");
@@ -653,7 +733,9 @@ fn localdir_staging_rejects_symlinked_ancestor_sources() {
 
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
     let linked_source = source_root.join("linked-parent");
-    let manifest = Manifest::default().with_entry("copied", LocalDir::new(&linked_source));
+    let manifest = Manifest::default()
+        .with_extra_path_grant(SandboxPathGrant::new(&source_root).read_only(true))
+        .with_entry("copied", LocalDir::new(&linked_source));
     let before_temp_roots = sandbox_temp_roots();
     let error = prepare_sandbox_run(
         &sandbox_agent,
@@ -688,7 +770,9 @@ fn localdir_staging_rejects_symlinked_ancestor_sources() {
         &RunConfig {
             sandbox: Some(SandboxRunConfig {
                 manifest: Some(
-                    Manifest::default().with_entry("copied", LocalDir::new(&stable_root)),
+                    Manifest::default()
+                        .with_extra_path_grant(SandboxPathGrant::new(&stable_root).read_only(true))
+                        .with_entry("copied", LocalDir::new(&stable_root)),
                 ),
                 ..SandboxRunConfig::default()
             }),
@@ -750,8 +834,9 @@ fn localdir_staging_rejects_live_source_swaps() {
     let source_root_for_thread = source_root.clone();
     let handle = thread::spawn(move || {
         let sandbox_agent = SandboxAgent::builder("sandbox").build();
-        let manifest =
-            Manifest::default().with_entry("copied", LocalDir::new(&source_root_for_thread));
+        let manifest = Manifest::default()
+            .with_extra_path_grant(SandboxPathGrant::new(&source_root_for_thread).read_only(true))
+            .with_entry("copied", LocalDir::new(&source_root_for_thread));
         prepare_sandbox_run(
             &sandbox_agent,
             &RunConfig {

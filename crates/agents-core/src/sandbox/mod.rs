@@ -811,8 +811,16 @@ impl LocalSandboxSession {
             Path::new(""),
         )?;
 
+        let base_dir =
+            env::current_dir().map_err(|error| AgentsError::message(error.to_string()))?;
         for (rel_path, entry) in &entries_to_apply {
-            materialize_entry(entry, &self.inner.workspace_root, rel_path)?;
+            materialize_entry(
+                entry,
+                &self.inner.workspace_root,
+                rel_path,
+                &base_dir,
+                &processed_manifest.extra_path_grants,
+            )?;
         }
 
         *self.inner.manifest.lock().expect("sandbox manifest lock") = processed_manifest;
@@ -1469,8 +1477,15 @@ fn default_function_tools(
 
 fn materialize_manifest(manifest: &Manifest, workspace_root: &Path) -> Result<()> {
     validate_manifest_root(manifest)?;
+    let base_dir = env::current_dir().map_err(|error| AgentsError::message(error.to_string()))?;
     for (path, entry) in &manifest.entries {
-        materialize_entry(entry, workspace_root, Path::new(path))?;
+        materialize_entry(
+            entry,
+            workspace_root,
+            Path::new(path),
+            &base_dir,
+            &manifest.extra_path_grants,
+        )?;
     }
     Ok(())
 }
@@ -1488,6 +1503,8 @@ fn materialize_entry(
     entry: &ManifestEntry,
     workspace_root: &Path,
     relative_path: &Path,
+    base_dir: &Path,
+    extra_path_grants: &[SandboxPathGrant],
 ) -> Result<()> {
     let destination = workspace_root.join(relative_path);
     match entry {
@@ -1503,11 +1520,18 @@ fn materialize_entry(
             fs::create_dir_all(&destination)
                 .map_err(|error| AgentsError::message(error.to_string()))?;
             for (child, child_entry) in &dir.entries {
-                materialize_entry(child_entry, workspace_root, &relative_path.join(child))?;
+                materialize_entry(
+                    child_entry,
+                    workspace_root,
+                    &relative_path.join(child),
+                    base_dir,
+                    extra_path_grants,
+                )?;
             }
         }
         ManifestEntry::LocalDir(local_dir) => {
-            copy_local_dir(&local_dir.src, &destination)?;
+            let source = resolve_local_dir_source(&local_dir.src, base_dir, extra_path_grants)?;
+            copy_local_dir(&source, &destination)?;
         }
     }
     Ok(())
@@ -1625,6 +1649,56 @@ fn copy_local_dir(source: &Path, destination: &Path) -> Result<()> {
 
     fs::rename(&staging_destination, destination)
         .map_err(|error| AgentsError::message(error.to_string()))
+}
+
+fn resolve_local_dir_source(
+    source: &Path,
+    base_dir: &Path,
+    extra_path_grants: &[SandboxPathGrant],
+) -> Result<PathBuf> {
+    let base_dir = absolute_without_symlink_resolution(base_dir)?;
+    let source_input = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        base_dir.join(source)
+    };
+    let resolved_source = absolute_without_symlink_resolution(&source_input)?;
+
+    if resolved_source.starts_with(&base_dir)
+        || local_dir_source_matches_extra_path_grant(&resolved_source, extra_path_grants)?
+    {
+        return Ok(resolved_source);
+    }
+
+    Err(AgentsError::message(format!(
+        "local dir source must stay within the manifest base directory or an extra path grant: {}",
+        resolved_source.display()
+    )))
+}
+
+fn local_dir_source_matches_extra_path_grant(
+    source: &Path,
+    extra_path_grants: &[SandboxPathGrant],
+) -> Result<bool> {
+    let source_resolved = canonicalize_allow_missing(source)?;
+    for grant in extra_path_grants {
+        let grant = validate_extra_path_grant(grant)?;
+        if source_resolved.starts_with(&grant.resolved_path) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn absolute_without_symlink_resolution(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .map_err(|error| AgentsError::message(error.to_string()))?
+    };
+    Ok(normalize_path_lexically(&absolute))
 }
 
 fn copy_local_dir_contents(
