@@ -114,6 +114,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | sandbox coding task | local sandbox coding task with patch and shell verification | [sandbox_coding_task.rs](../crates/openai-agents/examples/sandbox_coding_task.rs) |
 | sandbox handoffs | sandbox-backed handoff workflow across specialist agents | [sandbox_handoffs.rs](../crates/openai-agents/examples/sandbox_handoffs.rs) |
 | sandbox memory | sandbox session memory restored across runs | [sandbox_memory.rs](../crates/openai-agents/examples/sandbox_memory.rs) |
+| sandbox memory multi-agent | shared sandbox session with separate agent memory namespaces | [sandbox_memory_multi_agent.rs](../crates/openai-agents/examples/sandbox_memory_multi_agent.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
 | sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
 | sandbox Cloudflare extension | Cloudflare hosted sandbox client feature-gate and session lifecycle | [sandbox_cloudflare_extension.rs](../crates/openai-agents/examples/sandbox_cloudflare_extension.rs) |
