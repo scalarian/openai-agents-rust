@@ -107,6 +107,11 @@ impl RunResult {
         self.raw_responses.last()
     }
 
+    pub fn last_response_id(&self) -> Option<&str> {
+        self.last_response()
+            .and_then(|response| response.response_id.as_deref())
+    }
+
     pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
         self.agent_tool_invocation.as_ref()
     }
@@ -249,6 +254,11 @@ impl RunResultStreaming {
             .or_else(|| self.raw_responses.last())
     }
 
+    pub fn last_response_id(&self) -> Option<&str> {
+        self.last_response()
+            .and_then(|response| response.response_id.as_deref())
+    }
+
     pub async fn wait_for_completion(&self) -> crate::errors::Result<RunResult> {
         if let Some(result) = &self.final_run_result {
             return Ok(result.clone());
@@ -363,24 +373,31 @@ mod tests {
 
     #[test]
     fn exposes_conversation_metadata_and_response_replay() {
-        let result = RunResult {
-            conversation_id: Some("conv_123".to_owned()),
-            previous_response_id: Some("resp_123".to_owned()),
-            reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
-            ..RunResult::default()
-        };
         let response = ModelResponse {
             output: vec![OutputItem::Reasoning {
                 text: "thinking".to_owned(),
             }],
             usage: Usage::default(),
             model: Some("gpt-5".to_owned()),
-            response_id: Some("resp_123".to_owned()),
+            response_id: Some("resp_last".to_owned()),
             request_id: Some("req_123".to_owned()),
+        };
+        let result = RunResult {
+            conversation_id: Some("conv_123".to_owned()),
+            previous_response_id: Some("resp_123".to_owned()),
+            raw_responses: vec![response.clone()],
+            reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
+            ..RunResult::default()
         };
 
         assert_eq!(result.conversation_id(), Some("conv_123"));
         assert_eq!(result.previous_response_id(), Some("resp_123"));
+        assert_eq!(result.last_response_id(), Some("resp_last"));
+        assert_eq!(
+            RunResultStreaming::from_run_result(result.clone(), 1, Some(10), Vec::new())
+                .last_response_id(),
+            Some("resp_last")
+        );
         assert_eq!(response.to_input_items().len(), 1);
     }
 
