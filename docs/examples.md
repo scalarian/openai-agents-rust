@@ -128,6 +128,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | sandbox agents as tools | sandbox specialist agents exposed as callable tools | [sandbox_agents_as_tools.rs](../crates/openai-agents/examples/sandbox_agents_as_tools.rs) |
 | sandbox basic | local sandbox workspace with filesystem and shell tools | [sandbox_basic.rs](../crates/openai-agents/examples/sandbox_basic.rs) |
 | sandbox coding task | local sandbox coding task with patch and shell verification | [sandbox_coding_task.rs](../crates/openai-agents/examples/sandbox_coding_task.rs) |
+| sandbox dataroom metric extract | sandboxed synthetic 10-K metric extraction into verified JSONL output | [sandbox_dataroom_metric_extract.rs](../crates/openai-agents/examples/sandbox_dataroom_metric_extract.rs) |
 | sandbox handoffs | sandbox-backed handoff workflow across specialist agents | [sandbox_handoffs.rs](../crates/openai-agents/examples/sandbox_handoffs.rs) |
 | sandbox memory | sandbox session memory restored across runs | [sandbox_memory.rs](../crates/openai-agents/examples/sandbox_memory.rs) |
 | sandbox memory multi-agent | shared sandbox session with separate agent memory namespaces | [sandbox_memory_multi_agent.rs](../crates/openai-agents/examples/sandbox_memory_multi_agent.rs) |
