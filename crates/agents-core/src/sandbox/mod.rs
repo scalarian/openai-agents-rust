@@ -1328,8 +1328,18 @@ fn default_function_tools(
 }
 
 fn materialize_manifest(manifest: &Manifest, workspace_root: &Path) -> Result<()> {
+    validate_manifest_root(manifest)?;
     for (path, entry) in &manifest.entries {
         materialize_entry(entry, workspace_root, Path::new(path))?;
+    }
+    Ok(())
+}
+
+fn validate_manifest_root(manifest: &Manifest) -> Result<()> {
+    if !manifest.root.starts_with('/') {
+        return Err(AgentsError::message(
+            "sandbox workspace root must be absolute",
+        ));
     }
     Ok(())
 }
@@ -2163,6 +2173,30 @@ fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_sandbox_session_rejects_relative_manifest_root() {
+        let manifest = Manifest {
+            root: "workspace".to_owned(),
+            ..Manifest::default()
+        };
+
+        let error = match LocalSandboxSession::create_caller_owned(manifest) {
+            Ok(_) => panic!("relative manifest root should fail"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("sandbox workspace root must be absolute")
+        );
+    }
 }
 
 impl Drop for LocalSandboxPtySessionInner {
