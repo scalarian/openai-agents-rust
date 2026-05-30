@@ -35,10 +35,8 @@ pub(crate) fn prepare_model_input_items(
     reasoning_item_id_policy: ReasoningItemIdPolicy,
 ) -> Vec<InputItem> {
     let mut prepared = copy_input_items(caller_items);
-    prepared.extend(run_items_to_input_items(
-        generated_items,
-        reasoning_item_id_policy,
-    ));
+    let generated_inputs = run_items_to_input_items(generated_items, reasoning_item_id_policy);
+    prepared.extend(drop_orphan_generated_tool_call_items(&generated_inputs));
     prepared
 }
 
@@ -55,23 +53,52 @@ pub(crate) fn compose_replay_input_items(
 }
 
 fn sanitize_hosted_tool_replay_items(items: &[InputItem]) -> Vec<InputItem> {
-    let hosted_pairs = hosted_pairing_info(items);
-    items
-        .iter()
-        .enumerate()
-        .filter(|(index, item)| should_keep_hosted_replay_item(*index, item, &hosted_pairs))
-        .map(|(_, item)| item.clone())
-        .collect()
+    drop_orphan_tool_call_items(items, ToolCallPrunePolicy::HostedReplay)
 }
 
 #[derive(Default)]
 struct HostedPairingInfo {
+    tool_call_ids: std::collections::BTreeSet<String>,
+    tool_output_ids: std::collections::BTreeSet<String>,
     shell_call_ids: std::collections::BTreeSet<String>,
     shell_output_ids: std::collections::BTreeSet<String>,
     tool_search_call_ids: std::collections::BTreeSet<String>,
     tool_search_output_ids: std::collections::BTreeSet<String>,
     matched_anonymous_tool_search_call_indexes: std::collections::BTreeSet<usize>,
     matched_anonymous_tool_search_output_indexes: std::collections::BTreeSet<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolCallPrunePolicy {
+    HostedReplay,
+    GeneratedHistory,
+}
+
+fn drop_orphan_generated_tool_call_items(items: &[InputItem]) -> Vec<InputItem> {
+    drop_orphan_tool_call_items(items, ToolCallPrunePolicy::GeneratedHistory)
+}
+
+fn drop_orphan_tool_call_items(items: &[InputItem], policy: ToolCallPrunePolicy) -> Vec<InputItem> {
+    let hosted_pairs = hosted_pairing_info(items);
+    let dropped_indexes = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            (!should_keep_replay_item(index, item, &hosted_pairs, policy)).then_some(index)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    if dropped_indexes.is_empty() {
+        return items.to_vec();
+    }
+
+    let reasoning_indexes = reasoning_indexes_preceding_dropped_calls(items, &dropped_indexes);
+    items
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !dropped_indexes.contains(index) && !reasoning_indexes.contains(index))
+        .map(|(_, item)| item.clone())
+        .collect()
 }
 
 fn hosted_pairing_info(items: &[InputItem]) -> HostedPairingInfo {
@@ -84,6 +111,16 @@ fn hosted_pairing_info(items: &[InputItem]) -> HostedPairingInfo {
         };
 
         match item_type(value) {
+            Some("tool_call") | Some("function_call") => {
+                if let Some(call_id) = call_id(value) {
+                    info.tool_call_ids.insert(call_id.to_owned());
+                }
+            }
+            Some("tool_call_output") | Some("function_call_output") => {
+                if let Some(call_id) = call_id(value) {
+                    info.tool_output_ids.insert(call_id.to_owned());
+                }
+            }
             Some("shell_call") => {
                 if let Some(call_id) = call_id(value) {
                     info.shell_call_ids.insert(call_id.to_owned());
@@ -120,16 +157,25 @@ fn hosted_pairing_info(items: &[InputItem]) -> HostedPairingInfo {
     info
 }
 
-fn should_keep_hosted_replay_item(
+fn should_keep_replay_item(
     index: usize,
     item: &InputItem,
     pairing: &HostedPairingInfo,
+    policy: ToolCallPrunePolicy,
 ) -> bool {
     let Some(value) = input_item_json(item) else {
         return true;
     };
 
     match item_type(value) {
+        Some("tool_call") | Some("function_call") => {
+            policy == ToolCallPrunePolicy::HostedReplay
+                || call_id(value).is_some_and(|call_id| pairing.tool_output_ids.contains(call_id))
+        }
+        Some("tool_call_output") | Some("function_call_output") => {
+            policy == ToolCallPrunePolicy::GeneratedHistory
+                || call_id(value).is_some_and(|call_id| pairing.tool_call_ids.contains(call_id))
+        }
         Some("shell_call") => {
             if !is_completed_hosted_item(value) {
                 return true;
@@ -160,6 +206,34 @@ fn should_keep_hosted_replay_item(
     }
 }
 
+fn reasoning_indexes_preceding_dropped_calls(
+    items: &[InputItem],
+    dropped_indexes: &std::collections::BTreeSet<usize>,
+) -> std::collections::BTreeSet<usize> {
+    let mut reasoning_indexes = std::collections::BTreeSet::new();
+
+    for index in (0..items.len()).rev() {
+        if !is_reasoning_item(&items[index]) || dropped_indexes.contains(&index) {
+            continue;
+        }
+
+        for next_index in index + 1..items.len() {
+            if reasoning_indexes.contains(&next_index) {
+                continue;
+            }
+            if is_reasoning_item(&items[next_index]) {
+                continue;
+            }
+            if dropped_indexes.contains(&next_index) {
+                reasoning_indexes.insert(index);
+            }
+            break;
+        }
+    }
+
+    reasoning_indexes
+}
+
 fn input_item_json(item: &InputItem) -> Option<&Value> {
     match item {
         InputItem::Text { .. } => None,
@@ -169,6 +243,10 @@ fn input_item_json(item: &InputItem) -> Option<&Value> {
 
 fn item_type(value: &Value) -> Option<&str> {
     value.get("type").and_then(Value::as_str)
+}
+
+fn is_reasoning_item(item: &InputItem) -> bool {
+    input_item_json(item).and_then(item_type) == Some("reasoning")
 }
 
 fn call_id(value: &Value) -> Option<&str> {
@@ -325,6 +403,82 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn drops_reasoning_preceding_dropped_generated_tool_call() {
+        let prepared = prepare_model_input_items(
+            &[InputItem::from("hello")],
+            &[
+                RunItem::Reasoning {
+                    text: "orphan-a".to_owned(),
+                },
+                RunItem::Reasoning {
+                    text: "orphan-b".to_owned(),
+                },
+                RunItem::ToolCall {
+                    tool_name: "orphan".to_owned(),
+                    arguments: json!({}),
+                    call_id: Some("orphan-call".to_owned()),
+                    namespace: None,
+                },
+                RunItem::Reasoning {
+                    text: "paired".to_owned(),
+                },
+                RunItem::ToolCall {
+                    tool_name: "paired".to_owned(),
+                    arguments: json!({}),
+                    call_id: Some("paired-call".to_owned()),
+                    namespace: None,
+                },
+                RunItem::ToolCallOutput {
+                    tool_name: "paired".to_owned(),
+                    output: OutputItem::Text {
+                        text: "ok".to_owned(),
+                    },
+                    call_id: Some("paired-call".to_owned()),
+                    namespace: None,
+                },
+            ],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        let reasoning_texts = prepared
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::Json { value }
+                    if value.get("type").and_then(Value::as_str) == Some("reasoning") =>
+                {
+                    value.get("text").and_then(Value::as_str)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reasoning_texts, vec!["paired"]);
+        assert!(!prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("tool_call")
+                    && value.get("call_id").and_then(Value::as_str) == Some("orphan-call")
+        )));
+    }
+
+    #[test]
+    fn keeps_lone_reasoning_when_no_generated_tool_call_is_dropped() {
+        let prepared = prepare_model_input_items(
+            &[InputItem::from("hello")],
+            &[RunItem::Reasoning {
+                text: "standalone".to_owned(),
+            }],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert!(prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("reasoning")
+                    && value.get("text").and_then(Value::as_str) == Some("standalone")
+        )));
     }
 
     #[test]
