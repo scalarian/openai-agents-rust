@@ -284,6 +284,58 @@ pub struct MCPReadResourceResult {
     pub contents: Vec<MCPResourceContents>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPPromptArgument {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPPrompt {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub arguments: Vec<MCPPromptArgument>,
+    pub meta: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPPromptTextContent {
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MCPPromptContent {
+    Text(MCPPromptTextContent),
+    Json { value: Value },
+}
+
+impl Default for MCPPromptContent {
+    fn default() -> Self {
+        Self::Text(MCPPromptTextContent::default())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPPromptMessage {
+    pub role: String,
+    pub content: MCPPromptContent,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPListPromptsResult {
+    pub prompts: Vec<MCPPrompt>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPGetPromptResult {
+    pub description: Option<String>,
+    pub messages: Vec<MCPPromptMessage>,
+}
+
 #[async_trait]
 pub trait MCPServer: Send + Sync {
     fn name(&self) -> &str;
@@ -323,6 +375,22 @@ pub trait MCPServer: Send + Sync {
     async fn read_resource(&self, _uri: &str) -> Result<MCPReadResourceResult> {
         Err(AgentsError::User(UserError {
             message: "read_resource is not implemented".to_owned(),
+        }))
+    }
+
+    async fn list_prompts(&self, _cursor: Option<String>) -> Result<MCPListPromptsResult> {
+        Err(AgentsError::User(UserError {
+            message: "list_prompts is not implemented".to_owned(),
+        }))
+    }
+
+    async fn get_prompt(
+        &self,
+        _prompt_name: &str,
+        _arguments: Value,
+    ) -> Result<MCPGetPromptResult> {
+        Err(AgentsError::User(UserError {
+            message: "get_prompt is not implemented".to_owned(),
         }))
     }
 }
@@ -479,6 +547,8 @@ pub struct MCPServerStdio {
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
+    prompts: Arc<Mutex<Vec<MCPPrompt>>>,
+    prompt_results: Arc<Mutex<HashMap<String, MCPGetPromptResult>>>,
 }
 
 impl fmt::Debug for MCPServerStdio {
@@ -503,6 +573,8 @@ impl MCPServerStdio {
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+            prompt_results: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -542,6 +614,19 @@ impl MCPServerStdio {
         result: MCPReadResourceResult,
     ) -> Self {
         self.resource_contents = Arc::new(Mutex::new(HashMap::from([(uri.into(), result)])));
+        self
+    }
+
+    pub fn with_prompts(mut self, prompts: Vec<MCPPrompt>) -> Self {
+        self.prompts = Arc::new(Mutex::new(prompts));
+        self
+    }
+
+    pub fn with_prompt_results(
+        mut self,
+        prompt_results: HashMap<String, MCPGetPromptResult>,
+    ) -> Self {
+        self.prompt_results = Arc::new(Mutex::new(prompt_results));
         self
     }
 
@@ -627,6 +712,28 @@ impl MCPServer for MCPServerStdio {
                 })
             })
     }
+
+    async fn list_prompts(&self, _cursor: Option<String>) -> Result<MCPListPromptsResult> {
+        self.ensure_connected()?;
+        Ok(MCPListPromptsResult {
+            prompts: self.prompts.lock().await.clone(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_prompt(&self, prompt_name: &str, _arguments: Value) -> Result<MCPGetPromptResult> {
+        self.ensure_connected()?;
+        self.prompt_results
+            .lock()
+            .await
+            .get(prompt_name)
+            .cloned()
+            .ok_or_else(|| {
+                AgentsError::User(UserError {
+                    message: format!("prompt `{prompt_name}` not found"),
+                })
+            })
+    }
 }
 
 #[derive(Clone)]
@@ -642,6 +749,8 @@ pub struct MCPServerSse {
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
+    prompts: Arc<Mutex<Vec<MCPPrompt>>>,
+    prompt_results: Arc<Mutex<HashMap<String, MCPGetPromptResult>>>,
 }
 
 impl fmt::Debug for MCPServerSse {
@@ -668,6 +777,8 @@ impl MCPServerSse {
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+            prompt_results: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -712,6 +823,19 @@ impl MCPServerSse {
         result: MCPReadResourceResult,
     ) -> Self {
         self.resource_contents = Arc::new(Mutex::new(HashMap::from([(uri.into(), result)])));
+        self
+    }
+
+    pub fn with_prompts(mut self, prompts: Vec<MCPPrompt>) -> Self {
+        self.prompts = Arc::new(Mutex::new(prompts));
+        self
+    }
+
+    pub fn with_prompt_results(
+        mut self,
+        prompt_results: HashMap<String, MCPGetPromptResult>,
+    ) -> Self {
+        self.prompt_results = Arc::new(Mutex::new(prompt_results));
         self
     }
 
@@ -835,6 +959,28 @@ impl MCPServer for MCPServerSse {
                 })
             })
     }
+
+    async fn list_prompts(&self, _cursor: Option<String>) -> Result<MCPListPromptsResult> {
+        self.ensure_connected()?;
+        Ok(MCPListPromptsResult {
+            prompts: self.prompts.lock().await.clone(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_prompt(&self, prompt_name: &str, _arguments: Value) -> Result<MCPGetPromptResult> {
+        self.ensure_connected()?;
+        self.prompt_results
+            .lock()
+            .await
+            .get(prompt_name)
+            .cloned()
+            .ok_or_else(|| {
+                AgentsError::User(UserError {
+                    message: format!("prompt `{prompt_name}` not found"),
+                })
+            })
+    }
 }
 
 #[derive(Clone)]
@@ -850,6 +996,8 @@ pub struct MCPServerStreamableHttp {
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
     resource_contents: Arc<Mutex<HashMap<String, MCPReadResourceResult>>>,
+    prompts: Arc<Mutex<Vec<MCPPrompt>>>,
+    prompt_results: Arc<Mutex<HashMap<String, MCPGetPromptResult>>>,
 }
 
 impl fmt::Debug for MCPServerStreamableHttp {
@@ -876,6 +1024,8 @@ impl MCPServerStreamableHttp {
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
+            prompts: Arc::new(Mutex::new(Vec::new())),
+            prompt_results: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -920,6 +1070,19 @@ impl MCPServerStreamableHttp {
         result: MCPReadResourceResult,
     ) -> Self {
         self.resource_contents = Arc::new(Mutex::new(HashMap::from([(uri.into(), result)])));
+        self
+    }
+
+    pub fn with_prompts(mut self, prompts: Vec<MCPPrompt>) -> Self {
+        self.prompts = Arc::new(Mutex::new(prompts));
+        self
+    }
+
+    pub fn with_prompt_results(
+        mut self,
+        prompt_results: HashMap<String, MCPGetPromptResult>,
+    ) -> Self {
+        self.prompt_results = Arc::new(Mutex::new(prompt_results));
         self
     }
 
@@ -1048,6 +1211,28 @@ impl MCPServer for MCPServerStreamableHttp {
             .ok_or_else(|| {
                 AgentsError::User(UserError {
                     message: format!("resource `{uri}` not found"),
+                })
+            })
+    }
+
+    async fn list_prompts(&self, _cursor: Option<String>) -> Result<MCPListPromptsResult> {
+        self.ensure_connected()?;
+        Ok(MCPListPromptsResult {
+            prompts: self.prompts.lock().await.clone(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_prompt(&self, prompt_name: &str, _arguments: Value) -> Result<MCPGetPromptResult> {
+        self.ensure_connected()?;
+        self.prompt_results
+            .lock()
+            .await
+            .get(prompt_name)
+            .cloned()
+            .ok_or_else(|| {
+                AgentsError::User(UserError {
+                    message: format!("prompt `{prompt_name}` not found"),
                 })
             })
     }
@@ -1398,5 +1583,68 @@ mod tests {
         assert_eq!(output, ToolOutput::from("29"));
 
         server.cleanup().await.expect("cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn streamable_http_prompts_can_roundtrip() {
+        let server = MCPServerStreamableHttp::new(
+            "prompt-server",
+            MCPServerStreamableHttpParams {
+                url: "http://localhost:8000/mcp".to_owned(),
+                ..MCPServerStreamableHttpParams::default()
+            },
+        )
+        .with_prompts(vec![MCPPrompt {
+            name: "generate_code_review_instructions".to_owned(),
+            description: Some("Generate code review instructions.".to_owned()),
+            arguments: vec![MCPPromptArgument {
+                name: "focus".to_owned(),
+                description: Some("Review focus area.".to_owned()),
+                required: Some(false),
+            }],
+            ..MCPPrompt::default()
+        }])
+        .with_prompt_results(HashMap::from([(
+            "generate_code_review_instructions".to_owned(),
+            MCPGetPromptResult {
+                description: Some("Code review prompt".to_owned()),
+                messages: vec![MCPPromptMessage {
+                    role: "user".to_owned(),
+                    content: MCPPromptContent::Text(MCPPromptTextContent {
+                        text: "You are a senior code reviewer.".to_owned(),
+                    }),
+                }],
+            },
+        )]));
+
+        assert!(server.list_prompts(None).await.is_err());
+        assert!(
+            server
+                .get_prompt("generate_code_review_instructions", json!({}))
+                .await
+                .is_err()
+        );
+
+        server.connect().await.expect("connect should succeed");
+        let prompts = server
+            .list_prompts(None)
+            .await
+            .expect("prompts should load");
+        let prompt = server
+            .get_prompt(
+                "generate_code_review_instructions",
+                json!({"focus": "security"}),
+            )
+            .await
+            .expect("prompt should load");
+
+        assert_eq!(prompts.prompts[0].name, "generate_code_review_instructions");
+        assert_eq!(prompt.messages.len(), 1);
+        assert_eq!(
+            prompt.messages[0].content,
+            MCPPromptContent::Text(MCPPromptTextContent {
+                text: "You are a senior code reviewer.".to_owned()
+            })
+        );
     }
 }

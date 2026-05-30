@@ -118,15 +118,17 @@ pub use items::{
 pub use lifecycle::{AgentHooks, RunHooks, SharedAgentHooks, SharedRunHooks};
 pub use logger::{LOGGER_TARGET, enable_verbose_stdout_logging};
 pub use mcp::{
-    MCPBlobResourceContents, MCPListResourceTemplatesResult, MCPListResourcesResult,
-    MCPReadResourceResult, MCPResource, MCPResourceContents, MCPResourceTemplate, MCPServer,
-    MCPServerManager, MCPServerSse, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
-    MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
-    MCPToolAnnotations, MCPToolMetaContext, MCPToolMetaResolver, MCPTransportAuth,
-    MCPTransportClient, MCPTransportClientBuilder, MCPTransportClientConfig, MCPTransportKind,
-    MCPUtil, RequireApprovalObject, RequireApprovalPolicy, RequireApprovalSetting,
-    RequireApprovalToolList, RequireApprovalValue, ToolFilter, ToolFilterCallable,
-    ToolFilterContext, ToolFilterStatic, create_static_tool_filter,
+    MCPBlobResourceContents, MCPGetPromptResult, MCPListPromptsResult,
+    MCPListResourceTemplatesResult, MCPListResourcesResult, MCPPrompt, MCPPromptArgument,
+    MCPPromptContent, MCPPromptMessage, MCPPromptTextContent, MCPReadResourceResult, MCPResource,
+    MCPResourceContents, MCPResourceTemplate, MCPServer, MCPServerManager, MCPServerSse,
+    MCPServerSseParams, MCPServerStdio, MCPServerStdioParams, MCPServerStreamableHttp,
+    MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool, MCPToolAnnotations,
+    MCPToolMetaContext, MCPToolMetaResolver, MCPTransportAuth, MCPTransportClient,
+    MCPTransportClientBuilder, MCPTransportClientConfig, MCPTransportKind, MCPUtil,
+    RequireApprovalObject, RequireApprovalPolicy, RequireApprovalSetting, RequireApprovalToolList,
+    RequireApprovalValue, ToolFilter, ToolFilterCallable, ToolFilterContext, ToolFilterStatic,
+    create_static_tool_filter,
 };
 pub use memory::Session as SessionABC;
 pub use memory::{

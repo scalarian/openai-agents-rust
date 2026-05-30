@@ -6,13 +6,14 @@ pub mod util;
 
 pub use manager::MCPServerManager;
 pub use server::{
-    MCPBlobResourceContents, MCPListResourceTemplatesResult, MCPListResourcesResult,
-    MCPReadResourceResult, MCPResource, MCPResourceContents, MCPResourceTemplate, MCPServer,
-    MCPServerSse, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
-    MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
-    MCPToolAnnotations, MCPTransportAuth, MCPTransportClient, MCPTransportClientBuilder,
-    MCPTransportClientConfig, MCPTransportKind, RequireApprovalObject, RequireApprovalPolicy,
-    RequireApprovalSetting, RequireApprovalToolList, RequireApprovalValue,
+    MCPBlobResourceContents, MCPGetPromptResult, MCPListPromptsResult,
+    MCPListResourceTemplatesResult, MCPListResourcesResult, MCPPrompt, MCPPromptArgument,
+    MCPPromptContent, MCPPromptMessage, MCPPromptTextContent, MCPReadResourceResult, MCPResource,
+    MCPResourceContents, MCPResourceTemplate, MCPServer, MCPServerSse, MCPServerSseParams,
+    MCPServerStdio, MCPServerStdioParams, MCPServerStreamableHttp, MCPServerStreamableHttpParams,
+    MCPTextResourceContents, MCPTool, MCPToolAnnotations, MCPTransportAuth, MCPTransportClient,
+    MCPTransportClientBuilder, MCPTransportClientConfig, MCPTransportKind, RequireApprovalObject,
+    RequireApprovalPolicy, RequireApprovalSetting, RequireApprovalToolList, RequireApprovalValue,
 };
 pub use util::{
     MCPToolMetaContext, MCPToolMetaResolver, MCPUtil, ToolFilter, ToolFilterCallable,
