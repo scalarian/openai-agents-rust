@@ -629,6 +629,34 @@ impl Runner {
             raw_responses.push(response);
 
             if let Some((handoff, target_agent)) = resolve_handoff(&current_agent, &output)? {
+                let tool_calls = internal_tool_execution::extract_tool_calls(&output);
+                let mut handoff_tool_items = Vec::new();
+                if !tool_calls.is_empty() {
+                    let tool_outcome = internal_tool_execution::execute_local_function_tools(
+                        &current_agent,
+                        &self.config,
+                        &context,
+                        tool_calls,
+                        stream_recorder.as_ref(),
+                        None,
+                    )
+                    .await?;
+                    if let Some(recorder) = &stream_recorder {
+                        recorder.push_run_items(&tool_outcome.new_items).await;
+                    }
+                    tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
+                    tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
+                    handoff_tool_items = tool_outcome.new_items;
+                    if !tool_outcome.interruptions.is_empty() {
+                        normalized_generated_items.extend(response_items.clone());
+                        session_generated_items.extend(response_items);
+                        normalized_generated_items.extend(handoff_tool_items.clone());
+                        session_generated_items.extend(handoff_tool_items);
+                        interruptions = tool_outcome.interruptions;
+                        break;
+                    }
+                }
+
                 dispatch_handoff(
                     self.config.run_hooks.as_ref(),
                     target_agent.hooks.as_ref(),
@@ -645,6 +673,7 @@ impl Runner {
                 provider.start_span(&mut span, true);
                 provider.finish_span(&mut span, true);
                 let mut step_items = response_items;
+                step_items.extend(handoff_tool_items);
                 let handoff_output = RunItem::HandoffOutput {
                     source_agent: current_agent.name.clone(),
                 };
@@ -3379,6 +3408,69 @@ mod tests {
             matches!(
                 item,
                 RunItem::HandoffOutput { source_agent } if source_agent == "assistant"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn runner_preserves_tool_guardrail_results_when_handoff_shares_turn() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![
+                OutputItem::ToolCall {
+                    call_id: "call-1".to_owned(),
+                    tool_name: "search".to_owned(),
+                    arguments: json!({"query":"rust"}),
+                    namespace: None,
+                },
+                OutputItem::Handoff {
+                    target_agent: "specialist".to_owned(),
+                },
+            ],
+            "specialist:done",
+        ));
+        let provider = Arc::new(StaticProvider { model });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_input_guardrail(crate::tool_guardrails::tool_input_guardrail(
+            "record",
+            |_data| async move {
+                Ok(crate::tool_guardrails::ToolGuardrailFunctionOutput::allow(
+                    Some(json!({"checked": true})),
+                ))
+            },
+        ));
+        let specialist = Agent::builder("specialist").build();
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .handoff_to_agent(specialist)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("handoff run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("specialist:done"));
+        assert_eq!(result.tool_input_guardrail_results.len(), 1);
+        assert_eq!(
+            result.tool_input_guardrail_results[0].output.output_info,
+            Some(json!({"checked": true}))
+        );
+        assert!(result.new_items.iter().any(|item| {
+            matches!(
+                item,
+                RunItem::ToolCallOutput {
+                    tool_name,
+                    call_id,
+                    ..
+                } if tool_name == "search" && call_id.as_deref() == Some("call-1")
             )
         }));
     }
