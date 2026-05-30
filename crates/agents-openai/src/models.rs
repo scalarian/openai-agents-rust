@@ -496,6 +496,7 @@ fn apply_responses_model_settings(
             "include",
             "metadata",
             "reasoning",
+            "context_management",
         ],
     )?;
     if let Some(value) = settings.temperature {
@@ -542,6 +543,12 @@ fn apply_responses_model_settings(
                 "effort": reasoning.effort,
                 "summary": reasoning.summary,
             }),
+        );
+    }
+    if !settings.context_management.is_empty() {
+        payload.insert(
+            "context_management".to_owned(),
+            Value::Array(settings.context_management.clone()),
         );
     }
     if let Some(verbosity) = &settings.verbosity {
@@ -1126,6 +1133,10 @@ mod tests {
                     store: Some(true),
                     tool_choice: Some("required".to_owned()),
                     response_include: vec!["reasoning".to_owned()],
+                    context_management: vec![json!({
+                        "type": "compaction",
+                        "compact_threshold": 200_000
+                    })],
                     extra_body: std::collections::BTreeMap::from([(
                         "service_tier".to_owned(),
                         json!("priority"),
@@ -1155,6 +1166,13 @@ mod tests {
         assert_eq!(payload["store"], true);
         assert_eq!(payload["tool_choice"], "required");
         assert_eq!(payload["include"][0], "reasoning");
+        assert_eq!(
+            payload["context_management"][0],
+            json!({
+                "type": "compaction",
+                "compact_threshold": 200_000
+            })
+        );
         assert_eq!(payload["service_tier"], "priority");
     }
 
@@ -1188,6 +1206,43 @@ mod tests {
             error
                 .to_string()
                 .contains("extra_body cannot override reserved request field `model`")
+        );
+    }
+
+    #[test]
+    fn responses_payload_rejects_context_management_extra_body_override() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    context_management: vec![json!({
+                        "type": "compaction",
+                        "compact_threshold": 200_000
+                    })],
+                    extra_body: std::collections::BTreeMap::from([(
+                        "context_management".to_owned(),
+                        json!([{"type": "compaction"}]),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("reserved context management field should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("extra_body cannot override reserved request field `context_management`")
         );
     }
 

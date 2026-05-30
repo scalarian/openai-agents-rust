@@ -22,6 +22,8 @@ pub struct ModelSettings {
     pub top_logprobs: Option<u32>,
     pub reasoning: Option<ReasoningSettings>,
     pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_management: Vec<Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -89,6 +91,12 @@ impl ModelSettings {
         if let Some(value) = &self.verbosity {
             traceable.insert("verbosity".to_owned(), json!(value));
         }
+        if !self.context_management.is_empty() {
+            traceable.insert(
+                "context_management".to_owned(),
+                json!(self.context_management),
+            );
+        }
         if !self.metadata.is_empty() {
             traceable.insert("metadata".to_owned(), json!(self.metadata));
         }
@@ -143,6 +151,9 @@ impl ModelSettings {
         if override_settings.verbosity.is_some() {
             resolved.verbosity = override_settings.verbosity.clone();
         }
+        if !override_settings.context_management.is_empty() {
+            resolved.context_management = override_settings.context_management.clone();
+        }
         if !override_settings.metadata.is_empty() {
             resolved.metadata.extend(override_settings.metadata.clone());
         }
@@ -196,6 +207,10 @@ mod tests {
                 summary: None,
             }),
             verbosity: Some("medium".to_owned()),
+            context_management: vec![json!({
+                "type": "compaction",
+                "compact_threshold": 100_000
+            })],
             metadata: BTreeMap::from([("tier".to_owned(), json!("base"))]),
             extra_query: BTreeMap::from([("route".to_owned(), json!("slow"))]),
             extra_body: BTreeMap::from([("store".to_owned(), json!(false))]),
@@ -220,6 +235,10 @@ mod tests {
                 summary: Some("auto".to_owned()),
             }),
             verbosity: Some("low".to_owned()),
+            context_management: vec![json!({
+                "type": "compaction",
+                "compact_threshold": 200_000
+            })],
             metadata: BTreeMap::from([("route".to_owned(), json!("fast"))]),
             extra_query: BTreeMap::from([("region".to_owned(), json!("us"))]),
             extra_body: BTreeMap::from([("parallel_tool_calls".to_owned(), json!(true))]),
@@ -252,6 +271,13 @@ mod tests {
             Some("medium")
         );
         assert_eq!(resolved.verbosity.as_deref(), Some("low"));
+        assert_eq!(
+            resolved.context_management,
+            vec![json!({
+                "type": "compaction",
+                "compact_threshold": 200_000
+            })]
+        );
         assert_eq!(resolved.metadata.get("tier"), Some(&json!("base")));
         assert_eq!(resolved.metadata.get("route"), Some(&json!("fast")));
         assert_eq!(resolved.extra_query.get("route"), Some(&json!("slow")));
@@ -271,6 +297,10 @@ mod tests {
     fn traceable_model_settings_omit_request_extras() {
         let settings = ModelSettings {
             temperature: Some(0.5),
+            context_management: vec![json!({
+                "type": "compaction",
+                "compact_threshold": 200_000
+            })],
             metadata: BTreeMap::from([("purpose".to_owned(), json!("trace"))]),
             extra_query: BTreeMap::from([("api-key".to_owned(), json!("query-secret"))]),
             extra_body: BTreeMap::from([("secret".to_owned(), json!("body-secret"))]),
@@ -285,6 +315,13 @@ mod tests {
         let traceable = settings.to_traceable_map();
 
         assert_eq!(traceable.get("temperature"), Some(&json!(0.5)));
+        assert_eq!(
+            traceable.get("context_management"),
+            Some(&json!([{
+                "type": "compaction",
+                "compact_threshold": 200_000
+            }]))
+        );
         assert_eq!(
             traceable.get("metadata"),
             Some(&json!({"purpose": "trace"}))
