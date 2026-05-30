@@ -10,7 +10,7 @@ use crate::tool_context::{ToolCall, ToolContext};
 use crate::tool_guardrails::{
     ToolGuardrailBehavior, ToolInputGuardrailResult, ToolOutputGuardrailResult,
 };
-use crate::tracing::{SpanData, function_span, get_trace_provider};
+use crate::tracing::{Span, SpanData, function_span, get_trace_provider};
 use uuid::Uuid;
 
 use super::approvals::append_approval_error_output;
@@ -33,6 +33,7 @@ pub(crate) async fn execute_local_function_tools(
     approved_execution: Option<(&RunInterruption, &ApprovalRecord)>,
 ) -> Result<ToolExecutionOutcome> {
     let runtime_tools = agent.get_all_function_tools(context).await?;
+    reject_disabled_function_tool_calls(agent, &runtime_tools, &tool_calls)?;
     let mut new_items = Vec::new();
     let mut tool_results = Vec::new();
     let mut input_guardrail_results = Vec::new();
@@ -196,17 +197,26 @@ pub(crate) async fn execute_local_function_tools(
         } else {
             match parse_function_tool_json_input(&tool_call.name, &tool_call.arguments) {
                 Err(error) => {
+                    let error_message = error.to_string();
+                    set_tool_error_on_span(
+                        &mut span,
+                        &function_tool.definition.name,
+                        "Error parsing tool arguments",
+                        trace_sensitive,
+                        &error_message,
+                    );
                     if let Some(output) = resolve_function_tool_error_output(
                         context,
                         run_config,
                         &tool_call,
                         "invalid_json_input",
-                        error.to_string(),
+                        error_message,
                     )
                     .await?
                     {
                         output
                     } else {
+                        provider.finish_span(&mut span, true);
                         return Err(error);
                     }
                 }
@@ -216,6 +226,14 @@ pub(crate) async fn execute_local_function_tools(
                 {
                     Ok(output) => output,
                     Err(error) => {
+                        let error_message = error.to_string();
+                        set_tool_error_on_span(
+                            &mut span,
+                            &function_tool.definition.name,
+                            "Error running tool",
+                            trace_sensitive,
+                            &error_message,
+                        );
                         if let Some(output) = resolve_function_tool_error_output(
                             context,
                             run_config,
@@ -227,6 +245,7 @@ pub(crate) async fn execute_local_function_tools(
                         {
                             output
                         } else {
+                            provider.finish_span(&mut span, true);
                             return Err(error);
                         }
                     }
@@ -354,6 +373,66 @@ fn approval_matches_tool_call(
         && interruption.call_id.as_deref() == Some(tool_call.id.as_str())
         && interruption.tool_name.as_deref() == Some(tool_call.name.as_str())
         && interruption.namespace == tool_call.namespace
+}
+
+fn reject_disabled_function_tool_calls(
+    agent: &Agent,
+    runtime_tools: &[crate::tool::FunctionTool],
+    tool_calls: &[ToolCall],
+) -> Result<()> {
+    for tool_call in tool_calls {
+        if runtime_tools
+            .iter()
+            .any(|tool| tool_matches_call(tool, tool_call))
+        {
+            continue;
+        }
+
+        if agent
+            .function_tools
+            .iter()
+            .any(|tool| tool_matches_call(tool, tool_call))
+        {
+            return Err(ModelBehaviorError {
+                message: format!(
+                    "Tool {} is currently disabled for agent {}.",
+                    tool_call.name, agent.name
+                ),
+            }
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
+fn tool_matches_call(tool: &crate::tool::FunctionTool, tool_call: &ToolCall) -> bool {
+    tool.definition.name == tool_call.name
+        && tool.definition.namespace.as_deref() == tool_call.namespace.as_deref()
+}
+
+fn set_tool_error_on_span(
+    span: &mut Span,
+    tool_name: &str,
+    message: &str,
+    trace_include_sensitive_data: bool,
+    error_message: &str,
+) {
+    span.set_error(
+        message.to_owned(),
+        Some(serde_json::json!({
+            "tool_name": tool_name,
+            "error": trace_tool_error(trace_include_sensitive_data, error_message),
+        })),
+    );
+}
+
+fn trace_tool_error(trace_include_sensitive_data: bool, error_message: &str) -> String {
+    if trace_include_sensitive_data {
+        error_message.to_owned()
+    } else {
+        "Tool execution failed. Error details are redacted.".to_owned()
+    }
 }
 
 async fn resolve_tool_not_found_message(
@@ -517,8 +596,10 @@ pub(crate) fn find_pending_tool_call(state: &RunState, call_id: &str) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
 
+    use futures::FutureExt;
     use schemars::JsonSchema;
     use serde::Deserialize;
     use serde_json::json;
@@ -674,5 +755,78 @@ mod tests {
             "Tool `echo_tool` failed: Invalid JSON input for tool echo_tool"
         );
         assert!(!text.contains("SECRET_TOKEN_123"));
+    }
+
+    #[tokio::test]
+    async fn disabled_function_tool_call_fails_before_siblings_execute() {
+        let disabled_invocations = Arc::new(AtomicUsize::new(0));
+        let sibling_invocations = Arc::new(AtomicUsize::new(0));
+        let disabled_invocations_for_tool = disabled_invocations.clone();
+        let sibling_invocations_for_tool = sibling_invocations.clone();
+
+        let disabled_tool = function_tool(
+            "disabled_tool",
+            "Disabled tool",
+            move |_ctx, _args: serde_json::Value| {
+                let disabled_invocations = disabled_invocations_for_tool.clone();
+                async move {
+                    disabled_invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>("disabled result")
+                }
+            },
+        )
+        .expect("disabled function tool should build")
+        .with_is_enabled(Arc::new(|_, _| async move { false }.boxed()));
+        let sibling_tool = function_tool(
+            "sibling_tool",
+            "Sibling tool",
+            move |_ctx, _args: serde_json::Value| {
+                let sibling_invocations = sibling_invocations_for_tool.clone();
+                async move {
+                    sibling_invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, AgentsError>("sibling result")
+                }
+            },
+        )
+        .expect("sibling function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(disabled_tool)
+            .function_tool(sibling_tool)
+            .build();
+
+        let error = match execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![
+                ToolCall {
+                    id: "call-disabled".to_owned(),
+                    name: "disabled_tool".to_owned(),
+                    arguments: "{}".to_owned(),
+                    namespace: None,
+                },
+                ToolCall {
+                    id: "call-sibling".to_owned(),
+                    name: "sibling_tool".to_owned(),
+                    arguments: "{}".to_owned(),
+                    namespace: None,
+                },
+            ],
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(_) => panic!("disabled function tool should fail before execution"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("Tool disabled_tool is currently disabled for agent assistant.")
+        );
+        assert_eq!(disabled_invocations.load(Ordering::SeqCst), 0);
+        assert_eq!(sibling_invocations.load(Ordering::SeqCst), 0);
     }
 }

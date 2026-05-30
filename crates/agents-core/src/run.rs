@@ -3509,6 +3509,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_redacts_handled_tool_error_trace_by_default() {
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        let model_provider = Arc::new(StaticProvider {
+            model: Arc::new(NamedToolModel {
+                tool_name: "handled_error_search".to_owned(),
+                calls: Arc::new(Mutex::new(0)),
+            }),
+        });
+        let search_tool = function_tool(
+            "handled_error_search",
+            "Search documents",
+            |_ctx, _args: SearchArgs| async move {
+                Err::<String, _>(AgentsError::message("secret-token-123"))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        Runner::new()
+            .with_model_provider(model_provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed with default tool error output");
+
+        let function_span = processor
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "handled_error_search")
+            .expect("function span should be exported");
+        let error = function_span
+            .error
+            .expect("function span should record error");
+        assert_eq!(error.message, "Error running tool");
+        let data = error.data.expect("error data should be present");
+        assert_eq!(data["tool_name"], "handled_error_search");
+        assert_eq!(
+            data["error"],
+            "Tool execution failed. Error details are redacted."
+        );
+        assert!(!data.to_string().contains("secret-token-123"));
+    }
+
+    #[tokio::test]
+    async fn runner_redacts_unhandled_tool_error_trace_by_default() {
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        let model_provider = Arc::new(StaticProvider {
+            model: Arc::new(NamedToolModel {
+                tool_name: "unhandled_error_search".to_owned(),
+                calls: Arc::new(Mutex::new(0)),
+            }),
+        });
+        let search_tool = function_tool(
+            "unhandled_error_search",
+            "Search documents",
+            |_ctx, _args: SearchArgs| async move {
+                Err::<String, _>(AgentsError::message("secret-token-123"))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let error = Runner::new()
+            .with_model_provider(model_provider)
+            .with_config(RunConfig {
+                tool_error_formatter: Some(Arc::new(|_args| async move { Ok(None) }.boxed())),
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect_err("formatter should allow tool error to propagate");
+
+        assert!(error.to_string().contains("secret-token-123"));
+        let function_span = processor
+            .spans()
+            .into_iter()
+            .find(|span| span.name == "unhandled_error_search")
+            .expect("function span should be exported");
+        let span_error = function_span
+            .error
+            .expect("function span should record error");
+        assert_eq!(span_error.message, "Error running tool");
+        let data = span_error.data.expect("error data should be present");
+        assert_eq!(data["tool_name"], "unhandled_error_search");
+        assert_eq!(
+            data["error"],
+            "Tool execution failed. Error details are redacted."
+        );
+        assert!(!data.to_string().contains("secret-token-123"));
+    }
+
+    #[tokio::test]
     async fn runner_redacts_tool_span_payloads_by_default() {
         let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
             .lock()
