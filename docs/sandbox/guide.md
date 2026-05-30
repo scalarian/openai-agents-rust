@@ -10,6 +10,8 @@ The Rust sandbox surface is local-first:
 - `LocalSandboxSession` owns filesystem, shell, patch, PTY, snapshot, and memory-note operations.
 - `prepare_sandbox_run` materializes the workspace, attaches capability tools, and returns the prepared `Agent` plus session.
 
+For client selection, optional hosted-provider feature flags, and mount payload support, see [clients.md](clients.md). For note-style workspace memory across local resumes, see [memory.md](memory.md).
+
 ## Minimal Flow
 
 The runnable version lives in [sandbox_workspace.rs](../../crates/openai-agents/examples/sandbox_workspace.rs).
@@ -99,6 +101,8 @@ On Linux, the local shell path uses Landlock where available to restrict writes.
 ## Read Next
 
 - [../sandbox_agents.md](../sandbox_agents.md)
+- [clients.md](clients.md)
+- [memory.md](memory.md)
 - [../examples.md](../examples.md)
 - [../tools.md](../tools.md)
 - [../human_in_the_loop.md](../human_in_the_loop.md)

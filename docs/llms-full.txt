@@ -12,7 +12,7 @@ Open this directory when you want guides, curated reference, examples, or subsys
 - first program: [quickstart.md](quickstart.md)
 - runtime guides: [agents.md](agents.md), [running_agents.md](running_agents.md), [tools.md](tools.md)
 - sessions and replay: [sessions/README.md](sessions/README.md), [results.md](results.md)
-- sandbox workspaces: [sandbox/guide.md](sandbox/guide.md), [sandbox_agents.md](sandbox_agents.md)
+- sandbox workspaces: [sandbox/guide.md](sandbox/guide.md), [sandbox/clients.md](sandbox/clients.md), [sandbox/memory.md](sandbox/memory.md), [sandbox_agents.md](sandbox_agents.md)
 - realtime and voice: [realtime/README.md](realtime/README.md), [voice/README.md](voice/README.md)
 - curated API map: [ref/README.md](ref/README.md)
 
@@ -646,7 +646,7 @@ This is the product docs home for the Rust agents runtime. Start here if you wan
 | build a first agent | [quickstart.md](quickstart.md) | [agents.md](agents.md), [running_agents.md](running_agents.md) |
 | run with tools | [tools.md](tools.md) | [guardrails.md](guardrails.md), [human_in_the_loop.md](human_in_the_loop.md) |
 | keep conversational state | [sessions/README.md](sessions/README.md) | [results.md](results.md), [context.md](context.md) |
-| work with files in a sandbox | [sandbox/guide.md](sandbox/guide.md) | [sandbox_agents.md](sandbox_agents.md), [tools.md](tools.md) |
+| work with files in a sandbox | [sandbox/guide.md](sandbox/guide.md) | [sandbox/clients.md](sandbox/clients.md), [sandbox/memory.md](sandbox/memory.md) |
 | stream events live | [streaming.md](streaming.md) | [tracing.md](tracing.md), [usage.md](usage.md) |
 | work with MCP | [mcp.md](mcp.md) | [tools.md](tools.md), [human_in_the_loop.md](human_in_the_loop.md) |
 | build realtime flows | [realtime/README.md](realtime/README.md) | [realtime/events.md](realtime/events.md), [realtime/audio.md](realtime/audio.md) |
@@ -678,6 +678,8 @@ flowchart LR
 - [multi_agent.md](multi_agent.md): compose routers, specialists, and nested agent tools
 - [tools.md](tools.md): add function tools, shell/computer tools, hosted tools, and approvals
 - [sandbox/guide.md](sandbox/guide.md): prepare isolated workspaces with filesystem, shell, patch, and resume support
+- [sandbox/clients.md](sandbox/clients.md): choose local sandbox state or optional hosted-provider clients
+- [sandbox/memory.md](sandbox/memory.md): persist compact workspace notes across sandbox resumes
 - [sandbox_agents.md](sandbox_agents.md): quick API map for sandbox agent construction
 - [guardrails.md](guardrails.md): stop bad inputs, outputs, and tool traffic before it leaks
 - [handoffs.md](handoffs.md): route between agents with explicit history control
@@ -1620,6 +1622,138 @@ Use the built-in result/session machinery when you want:
 - [sessions/README.md](sessions/README.md)
 
 
+## sandbox/clients.md
+
+# Sandbox Clients
+
+Use this page to choose where sandbox work should run and which Rust feature flags expose optional hosted-provider client types.
+
+The core Rust runtime currently provides a local sandbox session through `prepare_sandbox_run` and `LocalSandboxSession`. Optional hosted-provider clients live in `openai_agents::extensions::sandbox` behind crate features. Docker-backed sandbox parity is intentionally deferred for this workspace.
+
+## Decision Guide
+
+| Goal | Start with | Why |
+| --- | --- | --- |
+| local development on macOS or Linux | `SandboxRunConfig::default()` | No provider credentials or extra feature flags. |
+| resume local workspace state | `SandboxRunConfig { session_state: Some(state), .. }` | Restores a serialized `LocalSandboxSessionState`. |
+| reuse a live local workspace | `SandboxRunConfig { session: Some(session), .. }` | Keeps one live `LocalSandboxSession` across runs. |
+| inspect hosted-provider configuration | `openai_agents::extensions::sandbox::*` | Enables provider-specific option, state, auth, and mount payload types. |
+
+## Local Client Path
+
+Most applications do not instantiate a separate client for local sandbox work. They pass `SandboxRunConfig` into `prepare_sandbox_run`.
+
+```rust,no_run
+use openai_agents::{AgentsError, RunConfig, SandboxAgent, SandboxRunConfig, prepare_sandbox_run};
+
+fn main() -> Result<(), AgentsError> {
+    let agent = SandboxAgent::builder("local sandbox").build();
+    let prepared = prepare_sandbox_run(
+        &agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig::default()),
+            ..RunConfig::default()
+        },
+    )?;
+
+    println!("{}", prepared.session.workspace_root().display());
+    prepared.session.cleanup()?;
+    Ok(())
+}
+```
+
+The returned `LocalSandboxSession` exposes direct operations:
+
+- `read_file`, `write_file`, `list_files`, and `apply_patch`
+- `run_shell`
+- `open_pty`
+- `serialize_session_state` and `deserialize_session_state`
+- `write_memory_note` and `read_memory_note`
+
+## Resume Choices
+
+Use a live session when multiple runs happen in one process and you want immediate workspace continuity. Use serialized session state when the application needs to persist or transfer the workspace state.
+
+```rust,no_run
+use openai_agents::{
+    AgentsError, LocalSandboxSession, RunConfig, SandboxAgent, SandboxRunConfig,
+    prepare_sandbox_run,
+};
+
+fn main() -> Result<(), AgentsError> {
+    let agent = SandboxAgent::builder("resumable sandbox").build();
+    let first = prepare_sandbox_run(
+        &agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig::default()),
+            ..RunConfig::default()
+        },
+    )?;
+    first.session.write_file("/workspace/status.txt", "ready\n")?;
+
+    let encoded = first.session.serialize_session_state()?;
+    let restored_state = LocalSandboxSession::deserialize_session_state(encoded)?;
+    let resumed = prepare_sandbox_run(
+        &agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(restored_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )?;
+
+    assert_eq!(resumed.session.read_file("/workspace/status.txt")?, "ready\n");
+    resumed.session.cleanup()?;
+    Ok(())
+}
+```
+
+See [sandbox_remote_snapshot.rs](../../crates/openai-agents/examples/sandbox_remote_snapshot.rs) and [sandbox_tutorial_resume.rs](../../crates/openai-agents/examples/sandbox_tutorial_resume.rs) for runnable resume flows.
+
+## Hosted Provider Types
+
+Hosted provider support is exposed through feature flags on `openai-agents-rs`. Enable only the providers you need.
+
+| Feature | Client | Auth environment variable | PTY support |
+| --- | --- | --- | --- |
+| `e2b` | `E2BSandboxClient` | `E2B_API_KEY` | yes |
+| `modal` | `ModalSandboxClient` | `MODAL_TOKEN_ID` | no |
+| `daytona` | `DaytonaSandboxClient` | `DAYTONA_API_KEY` | yes |
+| `blaxel` | `BlaxelSandboxClient` | `BL_API_KEY` | yes |
+| `cloudflare` | `CloudflareSandboxClient` | `CLOUDFLARE_SANDBOX_API_KEY` | yes |
+| `runloop` | `RunloopSandboxClient` | `RUNLOOP_API_KEY` | no |
+| `vercel` | `VercelSandboxClient` | `VERCEL_TOKEN` | no |
+
+Example:
+
+```bash
+cargo run -p openai-agents-rs --features e2b --example sandbox_e2b_extension
+```
+
+Provider examples are indexed in [../examples.md](../examples.md). They cover option construction, auth precedence, session state serialization, resume, exposed ports, idle timeout, and provider-specific workspace-root constraints.
+
+## Hosted Mount Payloads
+
+The extension crate also exposes hosted mount entry and strategy types for provider payload parity:
+
+| Storage | Entry type |
+| --- | --- |
+| S3 | `HostedS3Mount` |
+| Cloudflare R2 | `HostedR2Mount` |
+| Google Cloud Storage | `HostedGcsMount` |
+
+Use `HostedMountStrategy` to resolve provider payloads for E2B, Modal, Daytona, Blaxel, Cloudflare, and Runloop. Vercel currently has no hosted-specific mount strategy in this Rust surface.
+
+## Read Next
+
+- [guide.md](guide.md)
+- [memory.md](memory.md)
+- [../examples.md](../examples.md)
+- [../sandbox_agents.md](../sandbox_agents.md)
+
+
 ## sandbox/guide.md
 
 # Sandbox Guide
@@ -1633,6 +1767,8 @@ The Rust sandbox surface is local-first:
 - `SandboxRunConfig` chooses the per-run sandbox input: a manifest override, a live local session, or serialized local session state.
 - `LocalSandboxSession` owns filesystem, shell, patch, PTY, snapshot, and memory-note operations.
 - `prepare_sandbox_run` materializes the workspace, attaches capability tools, and returns the prepared `Agent` plus session.
+
+For client selection, optional hosted-provider feature flags, and mount payload support, see [clients.md](clients.md). For note-style workspace memory across local resumes, see [memory.md](memory.md).
 
 ## Minimal Flow
 
@@ -1723,9 +1859,119 @@ On Linux, the local shell path uses Landlock where available to restrict writes.
 ## Read Next
 
 - [../sandbox_agents.md](../sandbox_agents.md)
+- [clients.md](clients.md)
+- [memory.md](memory.md)
 - [../examples.md](../examples.md)
 - [../tools.md](../tools.md)
 - [../human_in_the_loop.md](../human_in_the_loop.md)
+
+
+## sandbox/memory.md
+
+# Sandbox Memory
+
+Sandbox memory is workspace state that survives local sandbox resume. It is separate from conversational sessions such as `SQLiteSession` and `OpenAIConversationsSession`.
+
+In this Rust runtime, sandbox memory is exposed as explicit memory notes on `LocalSandboxSession`:
+
+- `write_memory_note(key, value)` stores a note in the serialized sandbox session state.
+- `read_memory_note(key)` reads a note after live reuse or state restore.
+- memory notes travel with `serialize_session_state`.
+
+Use this when follow-up sandbox runs should remember short operational facts, user preferences, or prior fixes without replaying the whole conversation.
+
+## Minimal Flow
+
+The runnable version lives in [sandbox_memory.rs](../../crates/openai-agents/examples/sandbox_memory.rs).
+
+```rust,no_run
+use openai_agents::{
+    AgentsError, LocalSandboxSession, RunConfig, SandboxAgent, SandboxRunConfig,
+    prepare_sandbox_run,
+};
+
+fn main() -> Result<(), AgentsError> {
+    let agent = SandboxAgent::builder("memory demo")
+        .instructions("Use sandbox session memory when follow-up work depends on prior fixes.")
+        .build();
+
+    let first = prepare_sandbox_run(
+        &agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig::default()),
+            ..RunConfig::default()
+        },
+    )?;
+    first
+        .session
+        .write_memory_note("last_fix", "Invoice total must multiply by 1 + tax_rate.")?;
+
+    let encoded = first.session.serialize_session_state()?;
+    let restored_state = LocalSandboxSession::deserialize_session_state(encoded)?;
+    let resumed = prepare_sandbox_run(
+        &agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(restored_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )?;
+
+    assert_eq!(
+        resumed.session.read_memory_note("last_fix")?,
+        Some("Invoice total must multiply by 1 + tax_rate.".to_owned())
+    );
+
+    resumed.session.cleanup()?;
+    Ok(())
+}
+```
+
+## What To Store
+
+Store compact facts that are useful without the full transcript:
+
+- a bug fix or verification command that matters for follow-up work
+- a known data-source location inside the workspace
+- a user preference that should shape the next sandbox run
+- a handoff note between isolated sandbox agents
+
+Do not use memory notes as a database replacement. Large artifacts belong in workspace files, and conversational history belongs in a `Session`.
+
+## Multi-Agent Layouts
+
+Memory notes use string keys, so applications can isolate layouts by prefix convention.
+
+```rust,no_run
+session.write_memory_note("gtm:last_analysis", "Segment enterprise buyers first.")?;
+session.write_memory_note("engineering:last_fix", "Add regression coverage for invoice totals.")?;
+```
+
+See [sandbox_memory_multi_agent.rs](../../crates/openai-agents/examples/sandbox_memory_multi_agent.rs) for a runnable example that keeps GTM and engineering notes separate while sharing sandbox resume mechanics.
+
+## Persistent Workspace Layouts
+
+If the memory should also be visible as workspace files, write files under a stable directory such as `persistent/memories/` and include that directory in the serialized or restored sandbox state.
+
+[sandbox_memory_s3.rs](../../crates/openai-agents/examples/sandbox_memory_s3.rs) demonstrates a persistent-memory-style layout using local sandbox files and memory notes. Hosted remote storage can use the provider mount payload types described in [clients.md](clients.md), but live provider validation depends on credentials and provider setup.
+
+## Combine With Conversation Sessions
+
+For multi-turn chats, use both layers:
+
+- a conversational `Session` stores model-visible message history
+- the sandbox session stores workspace files and memory notes
+
+Pass the same live sandbox session or restored `session_state` when you want workspace continuity. Pass the same conversational session when you want chat continuity.
+
+## Read Next
+
+- [guide.md](guide.md)
+- [clients.md](clients.md)
+- [../sessions/README.md](../sessions/README.md)
+- [../examples.md](../examples.md)
 
 
 ## sandbox_agents.md
@@ -1795,6 +2041,8 @@ Read-only extra grants can expose host paths to the model without allowing write
 ## Read Next
 
 - [sandbox/guide.md](sandbox/guide.md)
+- [sandbox/clients.md](sandbox/clients.md)
+- [sandbox/memory.md](sandbox/memory.md)
 - [examples.md](examples.md)
 - [tools.md](tools.md)
 - [human_in_the_loop.md](human_in_the_loop.md)
