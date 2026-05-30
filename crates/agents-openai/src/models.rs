@@ -129,6 +129,7 @@ impl OpenAIResponsesModel {
     }
 
     pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
+        validate_responses_tool_search_configuration(&request.tools)?;
         let mut payload = serde_json::Map::new();
         payload.insert("model".to_owned(), Value::String(self.model.clone()));
         if let Some(instructions) = &request.instructions {
@@ -933,6 +934,30 @@ fn openai_responses_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
     tools.iter().map(openai_responses_tool_payload).collect()
 }
 
+fn validate_responses_tool_search_configuration(tools: &[ToolDefinition]) -> Result<()> {
+    let tool_search_count = tools
+        .iter()
+        .filter(|tool| tool.input_json_schema.is_none() && tool.name == "tool_search")
+        .count();
+    if tool_search_count > 1 {
+        return Err(AgentsError::message(
+            "Only one ToolSearchTool() is allowed when using OpenAI Responses models.",
+        ));
+    }
+
+    if tool_search_count == 0
+        && tools
+            .iter()
+            .any(|tool| tool.input_json_schema.is_some() && tool.defer_loading)
+    {
+        return Err(AgentsError::message(
+            "Deferred-loading Responses tools require ToolSearchTool() when using OpenAI Responses models.",
+        ));
+    }
+
+    Ok(())
+}
+
 fn openai_chat_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
     tools.iter().map(openai_chat_tool_payload).collect()
 }
@@ -1496,6 +1521,7 @@ mod tests {
                             "required": ["city"]
                         }))
                         .with_defer_loading(true),
+                    crate::tools::tool_search_tool().definition,
                 ],
                 output_schema: None,
                 trace_id: None,
@@ -1519,6 +1545,7 @@ mod tests {
                 "defer_loading": true
             })
         );
+        assert_eq!(payload["tools"][1], json!({"type": "tool_search"}));
     }
 
     #[test]
@@ -1615,6 +1642,59 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn responses_payload_rejects_deferred_function_tool_without_tool_search() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("get_weather", "Get weather")
+                        .with_input_json_schema(json!({"type": "object"}))
+                        .with_defer_loading(true),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("deferred tools should require tool_search");
+
+        assert!(error.to_string().contains("require ToolSearchTool()"));
+    }
+
+    #[test]
+    fn responses_payload_rejects_duplicate_tool_search_tools() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    crate::tools::tool_search_tool().definition,
+                    crate::tools::tool_search_tool().definition,
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("duplicate tool_search tools should fail");
+
+        assert!(error.to_string().contains("Only one ToolSearchTool()"));
     }
 
     #[test]
