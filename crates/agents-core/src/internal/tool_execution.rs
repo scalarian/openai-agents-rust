@@ -1,7 +1,7 @@
 use crate::agent::Agent;
 use crate::errors::Result;
 use crate::exceptions::{ModelBehaviorError, UserError};
-use crate::items::{OutputItem, RunItem};
+use crate::items::{InputItem, OutputItem, RunItem, ToolApprovalItem};
 use crate::run_config::{RunConfig, ToolErrorFormatterArgs, ToolNotFoundBehavior};
 use crate::run_context::{ApprovalRecord, RunContextWrapper};
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
@@ -830,36 +830,84 @@ async fn execute_single_custom_tool(
     };
 
     if !approval_resolved && custom_tool_needs_approval(&custom_tool, context, &tool_call).await? {
-        let approval_id = Uuid::new_v4().to_string();
-        provider.finish_span(&mut span, true);
-        if let Some(recorder) = stream_recorder {
-            recorder
-                .push_lifecycle(
-                    "tool_approval_required",
-                    Some(serde_json::json!({
-                        "approval_id": approval_id,
-                        "tool_name": tool_call.name.clone(),
-                        "call_id": tool_call.id.clone(),
-                        "tool_type": "custom",
-                    })),
+        if let Some(on_approval) = &custom_tool.on_approval {
+            let approval_item = custom_tool_approval_item(&tool_call);
+            let decision = on_approval(context.clone(), approval_item).await?;
+            if decision.approve {
+                // Approval callback accepted the call; continue to invocation below.
+            } else {
+                let approval = ApprovalRecord {
+                    approved: false,
+                    reason: decision.reason,
+                    approval_id: None,
+                    call_id: Some(tool_call.id.clone()),
+                    tool_name: Some(tool_call.name.clone()),
+                    namespace: None,
+                };
+                let rejection_message = resolve_approval_rejection_message_for_tool_type(
+                    context, run_config, &tool_call, &approval, "custom",
                 )
-                .await;
+                .await?;
+                let run_item = RunItem::CustomToolCallOutput {
+                    output: rejection_message.clone(),
+                    call_id: Some(tool_call.id.clone()),
+                    tool_name: Some(tool_call.name.clone()),
+                };
+                new_items.push(run_item.clone());
+                if let SpanData::Function(data) = &mut span.data {
+                    data.output = Some("tool approval rejected".to_owned());
+                }
+                tool_results.push(FunctionToolResult {
+                    tool_name: tool_call.name.clone(),
+                    call_id: Some(tool_call.id.clone()),
+                    tool_arguments: Some(tool_call.arguments.clone()),
+                    qualified_name: Some(custom_tool.definition.name.clone()),
+                    output: ToolOutput::from(rejection_message),
+                    run_item: Some(run_item),
+                    interruptions: Vec::new(),
+                    agent_run_result: None,
+                });
+                provider.finish_span(&mut span, true);
+                return Ok(SingleToolExecutionOutcome {
+                    new_items,
+                    tool_results,
+                    input_guardrail_results: Vec::new(),
+                    output_guardrail_results: Vec::new(),
+                    interruptions: Vec::new(),
+                });
+            }
+        } else {
+            let approval_id = Uuid::new_v4().to_string();
+            provider.finish_span(&mut span, true);
+            if let Some(recorder) = stream_recorder {
+                recorder
+                    .push_lifecycle(
+                        "tool_approval_required",
+                        Some(serde_json::json!({
+                            "approval_id": approval_id,
+                            "tool_name": tool_call.name.clone(),
+                            "call_id": tool_call.id.clone(),
+                            "tool_type": "custom",
+                        })),
+                    )
+                    .await;
+            }
+            return Ok(SingleToolExecutionOutcome {
+                new_items,
+                tool_results,
+                input_guardrail_results: Vec::new(),
+                output_guardrail_results: Vec::new(),
+                interruptions: vec![RunInterruption {
+                    kind: Some(RunInterruptionKind::ToolApproval),
+                    approval_id: Some(approval_id),
+                    call_id: Some(tool_call.id.clone()),
+                    tool_name: Some(tool_call.name.clone()),
+                    namespace: None,
+                    tool_origin: None,
+                    reason: Some("tool approval required".to_owned()),
+                }],
+            });
         }
-        return Ok(SingleToolExecutionOutcome {
-            new_items,
-            tool_results,
-            input_guardrail_results: Vec::new(),
-            output_guardrail_results: Vec::new(),
-            interruptions: vec![RunInterruption {
-                kind: Some(RunInterruptionKind::ToolApproval),
-                approval_id: Some(approval_id),
-                call_id: Some(tool_call.id.clone()),
-                tool_name: Some(tool_call.name.clone()),
-                namespace: None,
-                tool_origin: None,
-                reason: Some("tool approval required".to_owned()),
-            }],
-        });
     }
 
     let output = match custom_tool
@@ -1295,6 +1343,19 @@ fn custom_tool_output_text(output: &ToolOutput) -> String {
     match output {
         ToolOutput::Text(value) => value.text.clone(),
         other => serde_json::to_string(other).unwrap_or_else(|_| String::new()),
+    }
+}
+
+fn custom_tool_approval_item(tool_call: &ToolCall) -> ToolApprovalItem {
+    ToolApprovalItem {
+        raw_item: InputItem::Json {
+            value: serde_json::json!({
+                "type": "custom_tool_call",
+                "call_id": tool_call.id.clone(),
+                "name": tool_call.name.clone(),
+                "input": tool_call.arguments.clone(),
+            }),
+        },
     }
 }
 

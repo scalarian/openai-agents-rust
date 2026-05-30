@@ -2314,7 +2314,9 @@ mod tests {
     use crate::run_config::{ReasoningItemIdPolicy, ToolNotFoundBehavior};
     use crate::run_context::{RunContext, RunContextWrapper};
     use crate::session::MemorySession;
-    use crate::tool::{ToolOrigin, ToolOutput, custom_tool, function_tool};
+    use crate::tool::{
+        CustomToolOnApprovalFunctionResult, ToolOrigin, ToolOutput, custom_tool, function_tool,
+    };
 
     use super::*;
 
@@ -3528,6 +3530,73 @@ mod tests {
             InputItem::Json { value }
                 if value.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
                     && value.get("output").and_then(Value::as_str) == Some("HELLO")
+        )));
+    }
+
+    #[tokio::test]
+    async fn custom_tool_on_approval_can_auto_reject() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::CustomToolCall {
+                call_id: "call-custom".to_owned(),
+                tool_name: "raw_editor".to_owned(),
+                input: "hello".to_owned(),
+            }],
+            "done",
+        ));
+        let invocations = Arc::new(Mutex::new(0usize));
+        let invocation_counter = invocations.clone();
+        let raw_editor = custom_tool("raw_editor", "Edit raw text.", move |_ctx, _input| {
+            let invocation_counter = invocation_counter.clone();
+            async move {
+                *invocation_counter
+                    .lock()
+                    .expect("custom invocation counter lock") += 1;
+                Ok::<_, AgentsError>("should not run")
+            }
+        })
+        .with_needs_approval(true)
+        .with_on_approval(|_context, approval_item| async move {
+            assert!(matches!(
+                approval_item.raw_item,
+                InputItem::Json { value }
+                    if value.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                        && value.get("call_id").and_then(Value::as_str) == Some("call-custom")
+                        && value.get("input").and_then(Value::as_str) == Some("hello")
+            ));
+            Ok(CustomToolOnApprovalFunctionResult {
+                approve: false,
+                reason: Some("Not allowed".to_owned()),
+            })
+        });
+        let agent = Agent::builder("assistant").custom_tool(raw_editor).build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .run(&agent, "hello")
+            .await
+            .expect("run should continue after auto rejection");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert!(result.interruptions.is_empty());
+        assert_eq!(
+            *invocations.lock().expect("custom invocation counter lock"),
+            0
+        );
+        assert!(result.new_items.iter().any(|item| matches!(
+            item,
+            RunItem::CustomToolCallOutput {
+                output,
+                call_id,
+                ..
+            } if output == "Not allowed" && call_id.as_deref() == Some("call-custom")
+        )));
+        assert!(model.seen_inputs()[1].iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                    && value.get("output").and_then(Value::as_str) == Some("Not allowed")
         )));
     }
 

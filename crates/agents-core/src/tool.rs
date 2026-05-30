@@ -14,7 +14,7 @@ use crate::agent::Agent;
 use crate::computer::Computer;
 use crate::errors::{AgentsError, Result};
 use crate::function_schema::FunctionSchema;
-use crate::items::{OutputItem, RunItem};
+use crate::items::{OutputItem, RunItem, ToolApprovalItem};
 use crate::run_config::ToolErrorFormatterArgs;
 use crate::run_context::{RunContext, RunContextWrapper};
 use crate::tool_context::ToolContext;
@@ -324,6 +324,14 @@ pub type CustomToolApprovalFunction = Arc<
         + Send
         + Sync,
 >;
+pub type CustomToolOnApprovalFunction = Arc<
+    dyn Fn(
+            RunContextWrapper<RunContext>,
+            ToolApprovalItem,
+        ) -> BoxFuture<'static, Result<CustomToolOnApprovalFunctionResult>>
+        + Send
+        + Sync,
+>;
 pub type ToolEnabledFunction =
     Arc<dyn Fn(RunContextWrapper<RunContext>, Agent) -> BoxFuture<'static, bool> + Send + Sync>;
 pub type ToolApprovalFunction = Arc<
@@ -332,11 +340,18 @@ pub type ToolApprovalFunction = Arc<
         + Sync,
 >;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CustomToolOnApprovalFunctionResult {
+    pub approve: bool,
+    pub reason: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct CustomTool {
     pub definition: ToolDefinition,
     pub needs_approval: bool,
     pub needs_approval_function: Option<CustomToolApprovalFunction>,
+    pub on_approval: Option<CustomToolOnApprovalFunction>,
     executor: CustomToolExecutor,
 }
 
@@ -348,6 +363,10 @@ impl std::fmt::Debug for CustomTool {
             .field(
                 "needs_approval_function",
                 &self.needs_approval_function.as_ref().map(|_| "<function>"),
+            )
+            .field(
+                "on_approval",
+                &self.on_approval.as_ref().map(|_| "<function>"),
             )
             .finish()
     }
@@ -362,6 +381,7 @@ impl CustomTool {
             definition,
             needs_approval: false,
             needs_approval_function: None,
+            on_approval: None,
             executor,
         }
     }
@@ -394,6 +414,19 @@ impl CustomTool {
         self.needs_approval_function = Some(Arc::new(move |context, input, call_id| {
             let needs_approval = needs_approval.clone();
             needs_approval(context, input, call_id).boxed()
+        }));
+        self
+    }
+
+    pub fn with_on_approval<F, Fut>(mut self, on_approval: F) -> Self
+    where
+        F: Fn(RunContextWrapper<RunContext>, ToolApprovalItem) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<CustomToolOnApprovalFunctionResult>> + Send + 'static,
+    {
+        let on_approval = Arc::new(on_approval);
+        self.on_approval = Some(Arc::new(move |context, approval_item| {
+            let on_approval = on_approval.clone();
+            on_approval(context, approval_item).boxed()
         }));
         self
     }
