@@ -53,6 +53,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | hosted MCP human in the loop | approval interruption and resume for hosted MCP calls | [hosted_mcp_human_in_the_loop.rs](../crates/openai-agents/examples/hosted_mcp_human_in_the_loop.rs) |
 | hosted MCP on approval | hosted MCP approval callback flow | [hosted_mcp_on_approval.rs](../crates/openai-agents/examples/hosted_mcp_on_approval.rs) |
 | hosted MCP simple | upstream-named hosted MCP simple entry point | [hosted_mcp_simple.rs](../crates/openai-agents/examples/hosted_mcp_simple.rs) |
+| HITL session scenario | approval resume across memory, file, and OpenAI sessions | [hitl_session_scenario.rs](../crates/openai-agents/examples/hitl_session_scenario.rs) |
 | hosted mcp | hosted MCP tool payload configuration for Responses models | [hosted_mcp.rs](../crates/openai-agents/examples/hosted_mcp.rs) |
 | human in the loop | approval-required tool calls with saved run state | [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) |
 | human in the loop custom rejection | custom model-visible rejection text for denied tool calls | [human_in_the_loop_custom_rejection.rs](../crates/openai-agents/examples/human_in_the_loop_custom_rejection.rs) |
