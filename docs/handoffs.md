@@ -36,6 +36,8 @@ That matters when you want to avoid blindly forwarding the entire transcript int
 
 Start with explicit handoffs only when ownership of the conversation truly changes. Otherwise prefer a specialist tool.
 
+Runnable examples: [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) for a minimal transfer and [routing.rs](../crates/openai-agents/examples/routing.rs) for streamed triage to a specialist.
+
 ## Read Next
 
 - [multi_agent.md](multi_agent.md)

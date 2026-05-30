@@ -29,6 +29,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | usage tracking | token usage from a completed run | [usage_tracking.rs](../crates/openai-agents/examples/usage_tracking.rs) |
 | realtime session | long-lived realtime interaction | [realtime_session.rs](../crates/openai-agents/examples/realtime_session.rs) |
 | retry | runner-managed model retry settings | [retry.rs](../crates/openai-agents/examples/retry.rs) |
+| routing | streamed triage handoff to a specialist agent | [routing.rs](../crates/openai-agents/examples/routing.rs) |
 | voice pipeline | STT -> workflow -> TTS flow | [voice_pipeline.rs](../crates/openai-agents/examples/voice_pipeline.rs) |
 
 ## Read By Goal
