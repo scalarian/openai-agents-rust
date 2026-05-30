@@ -109,6 +109,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | non-strict output type | structured output validation with non-strict and custom schemas | [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs) |
 | OpenAI session example | upstream-named OpenAI session entry point | [openai_session_example.rs](../crates/openai-agents/examples/openai_session_example.rs) |
 | OpenAI session HITL example | upstream-named OpenAI session HITL entry point | [openai_session_hitl_example.rs](../crates/openai-agents/examples/openai_session_hitl_example.rs) |
+| OpenAI session HITL | OpenAI conversation-aware session with approval resume | [openai_session_hitl.rs](../crates/openai-agents/examples/openai_session_hitl.rs) |
 | openai session | OpenAI conversation-aware session continuation metadata | [openai_session.rs](../crates/openai-agents/examples/openai_session.rs) |
 | output guardrails | upstream-named output guardrail entry point | [output_guardrails.rs](../crates/openai-agents/examples/output_guardrails.rs) |
 | output guardrail | final output tripwire handling | [output_guardrail.rs](../crates/openai-agents/examples/output_guardrail.rs) |
