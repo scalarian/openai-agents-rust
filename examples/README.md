@@ -12,6 +12,7 @@ cargo run -p openai-agents-rs --example agents_as_tools_conditional
 cargo run -p openai-agents-rs --example agents_as_tools_streaming
 cargo run -p openai-agents-rs --example agents_as_tools_structured
 cargo run -p openai-agents-rs --example advanced_sqlite_session
+cargo run -p openai-agents-rs --example async_sqlite_session
 cargo run -p openai-agents-rs --example basic_run
 cargo run -p openai-agents-rs --example code_interpreter
 cargo run -p openai-agents-rs --example compaction_session
@@ -75,6 +76,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `agents_as_tools_streaming` | stream events emitted by a nested agent tool | [docs/streaming.md](../docs/streaming.md) |
 | `agents_as_tools_structured` | structured input for agent-as-tool calls | [docs/agents.md](../docs/agents.md) |
 | `advanced_sqlite_session` | extension SQLite session with custom table names and tool history | [docs/sessions/memory.md](../docs/sessions/memory.md) |
+| `async_sqlite_session` | async-friendly extension wrapper over SQLite-backed session memory | [docs/sessions/memory.md](../docs/sessions/memory.md) |
 | `basic_run` | the smallest end-to-end facade call | [docs/quickstart.md](../docs/quickstart.md) |
 | `code_interpreter` | hosted code interpreter tool configuration and streamed call items | [docs/tools.md](../docs/tools.md) |
 | `compaction_session` | automatic and manual OpenAI Responses session compaction | [docs/sessions/README.md](../docs/sessions/README.md) |
