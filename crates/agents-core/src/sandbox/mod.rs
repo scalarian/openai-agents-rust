@@ -1387,6 +1387,7 @@ fn apply_sandbox_tool_overrides(tool: &mut FunctionTool, existing: &FunctionTool
     tool.tool_input_guardrails = existing.tool_input_guardrails.clone();
     tool.tool_output_guardrails = existing.tool_output_guardrails.clone();
     tool.needs_approval = existing.needs_approval;
+    tool.needs_approval_function = existing.needs_approval_function.clone();
     tool.timeout_seconds = existing.timeout_seconds;
     tool.defer_loading = existing.defer_loading;
     tool.definition.defer_loading = existing.definition.defer_loading;

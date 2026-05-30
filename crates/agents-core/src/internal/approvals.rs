@@ -1,5 +1,4 @@
 use crate::items::{OutputItem, RunItem};
-use crate::run_context::ApprovalRecord;
 use crate::run_state::{RunInterruption, RunInterruptionKind};
 use crate::tool::ToolOrigin;
 
@@ -10,16 +9,13 @@ pub(crate) fn append_approval_error_output(
     tool_name: String,
     call_id: String,
     namespace: Option<String>,
-    approval: Option<&ApprovalRecord>,
+    message: impl Into<String>,
     tool_origin: Option<ToolOrigin>,
 ) {
-    let message = approval
-        .and_then(|approval| approval.reason.as_deref())
-        .unwrap_or(REJECTION_MESSAGE);
     items.push(RunItem::ToolCallOutput {
         tool_name,
         output: OutputItem::Text {
-            text: message.to_owned(),
+            text: message.into(),
         },
         call_id: Some(call_id),
         namespace,

@@ -8,9 +8,10 @@ use agents_core::{
     RunConfig, RunInterruptionKind, RunItem, Runner, Usage, function_tool,
 };
 use async_trait::async_trait;
+use futures::FutureExt;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Clone, Default)]
 struct ApprovalModel {
@@ -284,6 +285,98 @@ async fn runner_interrupts_and_resumes_tool_approval() {
 }
 
 #[tokio::test]
+async fn dynamic_function_tool_approval_receives_parsed_arguments() {
+    let provider = Arc::new(ApprovalProvider {
+        model: Arc::new(ApprovalModel::default()),
+    });
+    let seen = Arc::new(Mutex::new(Vec::<(Value, String)>::new()));
+    let seen_for_tool = seen.clone();
+    let search_tool =
+        function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval_function(move |_ctx, args, call_id| {
+            let seen = seen_for_tool.clone();
+            async move {
+                seen.lock()
+                    .expect("dynamic approval observations lock")
+                    .push((args.clone(), call_id));
+                Ok(args.get("query").and_then(Value::as_str) == Some("rust"))
+            }
+        });
+    let agent = Agent::builder("assistant")
+        .function_tool(search_tool)
+        .build();
+
+    let initial = Runner::new()
+        .with_model_provider(provider.clone())
+        .run(&agent, "hello")
+        .await
+        .expect("initial run should succeed");
+
+    assert!(initial.final_output.is_none());
+    assert_eq!(initial.interruptions.len(), 1);
+    assert_eq!(
+        seen.lock()
+            .expect("dynamic approval observations lock")
+            .as_slice(),
+        &[(json!({"query": "rust"}), "call-1".to_owned())]
+    );
+
+    let mut state = initial
+        .durable_state()
+        .cloned()
+        .expect("state should exist");
+    state.approve_for_tool(
+        "call-1",
+        Some("search".to_owned()),
+        Some("approved".to_owned()),
+    );
+
+    let resumed = Runner::new()
+        .with_model_provider(provider)
+        .resume_with_agent(&state, &agent)
+        .await
+        .expect("resume should succeed");
+
+    assert_eq!(resumed.final_output.as_deref(), Some("final:result:rust"));
+}
+
+#[tokio::test]
+async fn dynamic_function_tool_approval_can_skip_interruption() {
+    let provider = Arc::new(ApprovalProvider {
+        model: Arc::new(ApprovalModel::default()),
+    });
+    let search_tool =
+        function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval_function(|_ctx, _args, _call_id| async move { Ok(false) });
+    let agent = Agent::builder("assistant")
+        .function_tool(search_tool)
+        .build();
+
+    let result = Runner::new()
+        .with_model_provider(provider)
+        .run(&agent, "hello")
+        .await
+        .expect("run should succeed");
+
+    assert!(result.interruptions.is_empty());
+    assert_eq!(result.final_output.as_deref(), Some("final:result:rust"));
+}
+
+#[tokio::test]
 async fn rejected_resume_does_not_recheck_current_approval_flag() {
     let provider = Arc::new(RejectionResumeProvider {
         model: Arc::new(RejectionResumeModel::default()),
@@ -337,6 +430,62 @@ async fn rejected_resume_does_not_recheck_current_approval_flag() {
 
     assert_eq!(executions.load(Ordering::SeqCst), 0);
     assert_eq!(resumed.final_output.as_deref(), Some("final:denied"));
+}
+
+#[tokio::test]
+async fn rejected_approval_uses_tool_error_formatter_when_reason_is_absent() {
+    let provider = Arc::new(RejectionResumeProvider {
+        model: Arc::new(RejectionResumeModel::default()),
+    });
+    let search_tool =
+        function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+    let agent = Agent::builder("assistant")
+        .function_tool(search_tool)
+        .build();
+    let runner = Runner::new()
+        .with_model_provider(provider)
+        .with_config(RunConfig {
+            tool_error_formatter: Some(Arc::new(|args| {
+                async move {
+                    Ok(Some(format!(
+                        "{} denied by formatter ({})",
+                        args.tool_name, args.call_id
+                    )))
+                }
+                .boxed()
+            })),
+            ..RunConfig::default()
+        });
+
+    let initial = runner
+        .run(&agent, "hello")
+        .await
+        .expect("initial run should interrupt");
+    assert_eq!(initial.interruptions.len(), 1);
+
+    let mut state = initial
+        .durable_state()
+        .cloned()
+        .expect("state should exist");
+    state.reject_for_tool("call-1", Some("search".to_owned()), None);
+
+    let resumed = runner
+        .resume_with_agent(&state, &agent)
+        .await
+        .expect("rejected approval should resume");
+
+    assert_eq!(
+        resumed.final_output.as_deref(),
+        Some("final:search denied by formatter (call-1)")
+    );
 }
 
 #[tokio::test]

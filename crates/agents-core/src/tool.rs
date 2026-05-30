@@ -288,6 +288,11 @@ type ToolExecutor =
     Arc<dyn Fn(ToolContext, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync>;
 pub type ToolEnabledFunction =
     Arc<dyn Fn(RunContextWrapper<RunContext>, Agent) -> BoxFuture<'static, bool> + Send + Sync>;
+pub type ToolApprovalFunction = Arc<
+    dyn Fn(RunContextWrapper<RunContext>, Value, String) -> BoxFuture<'static, Result<bool>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Clone)]
 pub struct FunctionTool {
@@ -298,6 +303,7 @@ pub struct FunctionTool {
     pub tool_input_guardrails: Vec<ToolInputGuardrail>,
     pub tool_output_guardrails: Vec<ToolOutputGuardrail>,
     pub needs_approval: bool,
+    pub needs_approval_function: Option<ToolApprovalFunction>,
     pub timeout_seconds: Option<f64>,
     pub defer_loading: bool,
     pub tool_origin: Option<ToolOrigin>,
@@ -317,6 +323,10 @@ impl std::fmt::Debug for FunctionTool {
             .field("tool_input_guardrails", &self.tool_input_guardrails.len())
             .field("tool_output_guardrails", &self.tool_output_guardrails.len())
             .field("needs_approval", &self.needs_approval)
+            .field(
+                "needs_approval_function",
+                &self.needs_approval_function.as_ref().map(|_| "<function>"),
+            )
             .field("timeout_seconds", &self.timeout_seconds)
             .field("defer_loading", &self.defer_loading)
             .field("tool_origin", &self.tool_origin)
@@ -334,6 +344,7 @@ impl FunctionTool {
             tool_input_guardrails: Vec::new(),
             tool_output_guardrails: Vec::new(),
             needs_approval: false,
+            needs_approval_function: None,
             timeout_seconds: None,
             defer_loading: false,
             tool_origin: None,
@@ -364,6 +375,23 @@ impl FunctionTool {
 
     pub fn with_needs_approval(mut self, needs_approval: bool) -> Self {
         self.needs_approval = needs_approval;
+        if !needs_approval {
+            self.needs_approval_function = None;
+        }
+        self
+    }
+
+    pub fn with_needs_approval_function<F, Fut>(mut self, needs_approval: F) -> Self
+    where
+        F: Fn(RunContextWrapper<RunContext>, Value, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<bool>> + Send + 'static,
+    {
+        let needs_approval = Arc::new(needs_approval);
+        self.needs_approval = true;
+        self.needs_approval_function = Some(Arc::new(move |context, arguments, call_id| {
+            let needs_approval = needs_approval.clone();
+            needs_approval(context, arguments, call_id).boxed()
+        }));
         self
     }
 

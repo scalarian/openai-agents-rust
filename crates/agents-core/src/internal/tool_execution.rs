@@ -94,7 +94,7 @@ pub(crate) async fn execute_local_function_tools_with_runtime_tools(
                 ToolExecutionPlan::Execute {
                     function_tool,
                     ..
-                } if function_tool.needs_approval
+                } if function_tool.needs_approval || function_tool.needs_approval_function.is_some()
             )
         })
         || run_config
@@ -395,12 +395,15 @@ async fn execute_single_function_tool(
     let approval_resolved = if let Some((interruption, approval)) = approved_execution {
         if approval_decision_matches_tool_call(interruption, approval, &tool_call) {
             if !approval.approved {
+                let rejection_message =
+                    resolve_approval_rejection_message(context, run_config, &tool_call, approval)
+                        .await?;
                 append_approval_error_output(
                     &mut new_items,
                     tool_call.name.clone(),
                     tool_call.id.clone(),
                     tool_call.namespace.clone(),
-                    Some(approval),
+                    rejection_message.clone(),
                     get_function_tool_origin(&function_tool),
                 );
                 if let SpanData::Function(data) = &mut span.data {
@@ -411,12 +414,7 @@ async fn execute_single_function_tool(
                     call_id: Some(tool_call.id.clone()),
                     tool_arguments: Some(tool_call.arguments.clone()),
                     qualified_name: Some(function_tool.qualified_name()),
-                    output: ToolOutput::from(
-                        approval
-                            .reason
-                            .as_deref()
-                            .unwrap_or(super::approvals::REJECTION_MESSAGE),
-                    ),
+                    output: ToolOutput::from(rejection_message),
                     run_item: new_items.last().cloned(),
                     interruptions: Vec::new(),
                     agent_run_result: None,
@@ -438,7 +436,9 @@ async fn execute_single_function_tool(
         false
     };
 
-    if function_tool.needs_approval && !approval_resolved {
+    if !approval_resolved
+        && function_tool_needs_approval(&function_tool, context, &tool_call).await?
+    {
         let approval_id = Uuid::new_v4().to_string();
         provider.finish_span(&mut span, true);
         if let Some(recorder) = stream_recorder {
@@ -681,6 +681,65 @@ fn approval_decision_matches_tool_call(
         && interruption.call_id.as_deref() == Some(tool_call.id.as_str())
         && interruption.tool_name.as_deref() == Some(tool_call.name.as_str())
         && interruption.namespace == tool_call.namespace
+}
+
+async fn function_tool_needs_approval(
+    function_tool: &FunctionTool,
+    context: &RunContextWrapper,
+    tool_call: &ToolCall,
+) -> Result<bool> {
+    let Some(checker) = &function_tool.needs_approval_function else {
+        return Ok(function_tool.needs_approval);
+    };
+
+    let arguments = parse_approval_arguments(&tool_call.arguments);
+    match checker(context.clone(), arguments, tool_call.id.clone()).await {
+        Ok(needs_approval) => Ok(needs_approval),
+        Err(_) => Ok(true),
+    }
+}
+
+fn parse_approval_arguments(arguments: &str) -> serde_json::Value {
+    if arguments.is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::from_str(arguments).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+async fn resolve_approval_rejection_message(
+    context: &RunContextWrapper,
+    run_config: &RunConfig,
+    tool_call: &ToolCall,
+    approval: &ApprovalRecord,
+) -> Result<String> {
+    if let Some(reason) = approval
+        .reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        return Ok(reason.to_owned());
+    }
+
+    let default_message = super::approvals::REJECTION_MESSAGE.to_owned();
+    let Some(formatter) = &run_config.tool_error_formatter else {
+        return Ok(default_message);
+    };
+
+    let formatted = formatter(ToolErrorFormatterArgs {
+        kind: "approval_rejected",
+        tool_type: "function",
+        tool_name: tool_call.name.clone(),
+        call_id: tool_call.id.clone(),
+        default_message: default_message.clone(),
+        run_context: context.clone(),
+    })
+    .await;
+
+    Ok(formatted
+        .ok()
+        .flatten()
+        .filter(|message| !message.is_empty())
+        .unwrap_or(default_message))
 }
 
 fn reject_disabled_function_tool_calls(
