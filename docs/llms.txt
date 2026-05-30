@@ -24,6 +24,10 @@ Compact export of the markdown docs tree.
   Use this page when you want to discover tools and resources from Model Context Protocol servers instead of baking every tool into the process.
 - models/README.md: Models
   Use this section when you want to understand how model selection works, what the default OpenAI path does, and where model-level settings belong.
+- models/index.md: Models Index
+  The canonical Rust models guide is [README.md](README.md).
+- models/litellm.md: LiteLLM And AnyLLM
+  Use this page when you want to route model calls through a LiteLLM-compatible or any-llm-compatible gateway.
 - models/openai.md: OpenAI Models
   Use this page when you want the OpenAI-specific runtime behavior: default provider resolution, hosted tools, Responses, Chat Completions, and conversation-aware sessions.
 - models/providers.md: Model Providers

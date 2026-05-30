@@ -28,3 +28,4 @@ Use `set_default_agent_runner(...)` when facade calls such as `run(...)` should 
 
 - [settings.md](settings.md)
 - [openai.md](openai.md)
+- [litellm.md](litellm.md)
