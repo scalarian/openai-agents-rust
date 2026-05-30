@@ -279,7 +279,7 @@ impl OpenAIResponsesCompactionSession {
     }
 
     async fn compact_with_force(&self, force: bool) -> Result<()> {
-        let items = sanitize_compaction_items(&self.inner.get_items().await?);
+        let items = sanitize_compaction_items(&self.inner.get_items().await?)?;
         let candidate_indices = items
             .iter()
             .enumerate()
@@ -326,7 +326,7 @@ impl OpenAIResponsesCompactionSession {
         previous_response_id: String,
         force: bool,
     ) -> Result<()> {
-        let items = sanitize_compaction_items(&self.inner.get_items().await?);
+        let items = sanitize_compaction_items(&self.inner.get_items().await?)?;
         let candidates = select_compaction_candidate_items(&items);
         if !force && candidates.len() < self.compaction_threshold {
             return Ok(());
@@ -526,25 +526,106 @@ impl OpenAIResponsesCompactionAwareSession for OpenAIResponsesCompactionSession 
     }
 }
 
-fn sanitize_compaction_items(items: &[InputItem]) -> Vec<InputItem> {
+fn sanitize_compaction_items(items: &[InputItem]) -> Result<Vec<InputItem>> {
     items.iter().map(sanitize_compaction_item).collect()
 }
 
-fn sanitize_compaction_item(item: &InputItem) -> InputItem {
+fn sanitize_compaction_item(item: &InputItem) -> Result<InputItem> {
     match item {
-        InputItem::Text { .. } => item.clone(),
+        InputItem::Text { .. } => Ok(item.clone()),
         InputItem::Json { value } => {
             let Some(object) = value.as_object() else {
-                return item.clone();
+                return Ok(item.clone());
             };
             let mut sanitized = object.clone();
             sanitized.remove(TOOL_CALL_SESSION_DESCRIPTION_KEY);
             sanitized.remove(TOOL_CALL_SESSION_TITLE_KEY);
-            InputItem::Json {
-                value: Value::Object(sanitized),
+
+            if sanitized.get("type").and_then(Value::as_str) == Some("message")
+                && sanitized.get("role").and_then(Value::as_str) == Some("user")
+                && let Some(Value::Array(content)) = sanitized.get("content")
+            {
+                let normalized_content = content
+                    .iter()
+                    .map(normalize_compaction_user_content_item)
+                    .collect::<Result<Vec<_>>>()?;
+                sanitized.insert("content".to_owned(), Value::Array(normalized_content));
             }
+
+            Ok(InputItem::Json {
+                value: Value::Object(sanitized),
+            })
         }
     }
+}
+
+fn normalize_compaction_user_content_item(item: &Value) -> Result<Value> {
+    let Some(object) = item.as_object() else {
+        return Ok(item.clone());
+    };
+
+    match object.get("type").and_then(Value::as_str) {
+        Some("input_image") => normalize_compaction_input_image(object),
+        Some("input_file") => normalize_compaction_input_file(object),
+        _ => Ok(item.clone()),
+    }
+}
+
+fn normalize_compaction_input_image(object: &serde_json::Map<String, Value>) -> Result<Value> {
+    let mut normalized = serde_json::Map::new();
+    normalized.insert("type".to_owned(), Value::String("input_image".to_owned()));
+
+    if let Some(image_url) = non_empty_string_field(object, "image_url") {
+        normalized.insert("image_url".to_owned(), Value::String(image_url.to_owned()));
+    } else if let Some(file_id) = non_empty_string_field(object, "file_id") {
+        normalized.insert("file_id".to_owned(), Value::String(file_id.to_owned()));
+    } else {
+        return Err(agents_core::AgentsError::message(
+            "Compaction input_image item missing image_url or file_id.",
+        ));
+    }
+
+    if let Some(detail) = non_empty_string_field(object, "detail") {
+        normalized.insert("detail".to_owned(), Value::String(detail.to_owned()));
+    }
+
+    Ok(Value::Object(normalized))
+}
+
+fn normalize_compaction_input_file(object: &serde_json::Map<String, Value>) -> Result<Value> {
+    let mut normalized = serde_json::Map::new();
+    normalized.insert("type".to_owned(), Value::String("input_file".to_owned()));
+
+    if let Some(file_data) = non_empty_string_field(object, "file_data") {
+        normalized.insert("file_data".to_owned(), Value::String(file_data.to_owned()));
+    } else if let Some(file_url) = non_empty_string_field(object, "file_url") {
+        normalized.insert("file_url".to_owned(), Value::String(file_url.to_owned()));
+    } else if let Some(file_id) = non_empty_string_field(object, "file_id") {
+        normalized.insert("file_id".to_owned(), Value::String(file_id.to_owned()));
+    } else {
+        return Err(agents_core::AgentsError::message(
+            "Compaction input_file item missing file_data, file_url, or file_id.",
+        ));
+    }
+
+    if let Some(filename) = non_empty_string_field(object, "filename") {
+        normalized.insert("filename".to_owned(), Value::String(filename.to_owned()));
+    }
+    if let Some(detail) = non_empty_string_field(object, "detail") {
+        normalized.insert("detail".to_owned(), Value::String(detail.to_owned()));
+    }
+
+    Ok(Value::Object(normalized))
+}
+
+fn non_empty_string_field<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a str> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
 }
 
 fn is_user_like_item(item: &InputItem) -> bool {
@@ -798,6 +879,111 @@ mod tests {
         };
         assert!(json.get(TOOL_CALL_SESSION_DESCRIPTION_KEY).is_none());
         assert!(json.get(TOOL_CALL_SESSION_TITLE_KEY).is_none());
+    }
+
+    #[tokio::test]
+    async fn input_compaction_normalizes_user_image_and_file_messages() {
+        let session = OpenAIResponsesCompactionSession::new("session")
+            .with_compaction_threshold(1)
+            .with_mode(OpenAIResponsesCompactionMode::Input);
+        session
+            .add_items(vec![InputItem::Json {
+                value: serde_json::json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "analyze this input"},
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.com/image.png",
+                            "file_id": null,
+                            "detail": "auto"
+                        },
+                        {
+                            "type": "input_file",
+                            "file_url": "https://example.com/report.pdf",
+                            "file_id": null,
+                            "filename": "report.pdf",
+                            "detail": "high"
+                        }
+                    ]
+                }),
+            }])
+            .await
+            .expect("items should be stored");
+
+        session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                force: Some(true),
+                compaction_mode: Some("input".to_owned()),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect("compaction should succeed");
+
+        assert_eq!(
+            session.get_items().await.expect("items should load"),
+            vec![InputItem::Json {
+                value: serde_json::json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "analyze this input"},
+                        {
+                            "type": "input_image",
+                            "image_url": "https://example.com/image.png",
+                            "detail": "auto"
+                        },
+                        {
+                            "type": "input_file",
+                            "file_url": "https://example.com/report.pdf",
+                            "filename": "report.pdf",
+                            "detail": "high"
+                        }
+                    ]
+                }),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn input_compaction_preserves_history_when_user_content_normalization_fails() {
+        let session = OpenAIResponsesCompactionSession::new("session")
+            .with_compaction_threshold(1)
+            .with_mode(OpenAIResponsesCompactionMode::Input);
+        let history = vec![InputItem::Json {
+            value: serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "hello"},
+                    {"type": "input_image", "detail": "auto"}
+                ]
+            }),
+        }];
+        session
+            .add_items(history.clone())
+            .await
+            .expect("items should be stored");
+
+        let error = session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                force: Some(true),
+                compaction_mode: Some("input".to_owned()),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect_err("invalid compacted input should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Compaction input_image item missing image_url or file_id")
+        );
+        assert_eq!(
+            session.get_items().await.expect("items should load"),
+            history
+        );
     }
 
     #[tokio::test]
