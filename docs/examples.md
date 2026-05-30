@@ -91,6 +91,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | prompt template | static and dynamic reusable prompt config | [prompt_template.rs](../crates/openai-agents/examples/prompt_template.rs) |
 | reasoning content | reasoning items from normal and streamed runner output | [reasoning_content.rs](../crates/openai-agents/examples/reasoning_content.rs) |
 | reasoning content GPT OSS stream | optional local GPT-OSS reasoning stream smoke example | [reasoning_content_gpt_oss_stream.rs](../crates/openai-agents/examples/reasoning_content_gpt_oss_stream.rs) |
+| reasoning content runner example | upstream-named reasoning content Runner entry point | [reasoning_content_runner_example.rs](../crates/openai-agents/examples/reasoning_content_runner_example.rs) |
 | realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
 | sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
