@@ -3824,6 +3824,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_resets_tool_choice_after_custom_tool_use() {
+        let model = Arc::new(ToolChoiceCaptureModel::new(vec![
+            OutputItem::CustomToolCall {
+                call_id: "call-custom".to_owned(),
+                tool_name: "raw_editor".to_owned(),
+                input: "hello".to_owned(),
+            },
+        ]));
+        let raw_editor = custom_tool("raw_editor", "Edit raw text.", |_ctx, input| async move {
+            Ok::<_, AgentsError>(input.to_uppercase())
+        });
+        let agent = Agent::builder("assistant")
+            .model_settings(crate::ModelSettings {
+                tool_choice: Some("required".to_owned()),
+                ..crate::ModelSettings::default()
+            })
+            .custom_tool(raw_editor)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            model.seen_tool_choices(),
+            vec![Some("required".to_owned()), None]
+        );
+        assert_eq!(
+            result
+                .run_state
+                .as_ref()
+                .and_then(|state| state.tool_use_tracker.get("assistant"))
+                .cloned(),
+            Some(vec!["raw_editor".to_owned()])
+        );
+    }
+
+    #[tokio::test]
     async fn tool_not_found_behavior_uses_tool_error_formatter() {
         let model = Arc::new(TwoTurnModel::new(
             vec![OutputItem::ToolCall {
