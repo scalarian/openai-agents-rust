@@ -40,10 +40,12 @@ pub fn pretty_print_result(result: &RunResult) -> String {
 
 pub fn pretty_print_run_error_details(result: &RunErrorData) -> String {
     format!(
-        "RunErrorData:\n- Last agent: Agent(name=\"{}\", ...)\n- {} new item(s)\n- {} raw response(s)\n(See `RunErrorData` for more details)",
+        "RunErrorData:\n- Last agent: Agent(name=\"{}\", ...)\n- {} new item(s)\n- {} raw response(s)\n- {} input guardrail result(s)\n- {} output guardrail result(s)\n(See `RunErrorData` for more details)",
         result.last_agent.name,
         result.new_items.len(),
         result.raw_responses.len(),
+        result.input_guardrail_results.len(),
+        result.output_guardrail_results.len(),
     )
 }
 
@@ -75,4 +77,44 @@ pub fn pretty_print_run_result_streaming(result: &RunResultStreaming) -> String 
         result.new_items.len(),
         result.raw_responses.len(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::agent::Agent;
+    use crate::guardrail::{GuardrailFunctionOutput, InputGuardrailResult, OutputGuardrailResult};
+    use crate::run_error_handlers::RunErrorData;
+
+    use super::*;
+
+    #[test]
+    fn pretty_run_error_details_includes_guardrail_counts() {
+        let details = RunErrorData {
+            last_agent: Agent::builder("error_agent").build(),
+            input_guardrail_results: vec![InputGuardrailResult {
+                guardrail_name: "input-check".to_owned(),
+                output: GuardrailFunctionOutput::allow(None),
+            }],
+            output_guardrail_results: vec![
+                OutputGuardrailResult {
+                    guardrail_name: "output-check-a".to_owned(),
+                    agent_name: "error_agent".to_owned(),
+                    agent_output: Vec::new(),
+                    output: GuardrailFunctionOutput::allow(None),
+                },
+                OutputGuardrailResult {
+                    guardrail_name: "output-check-b".to_owned(),
+                    agent_name: "error_agent".to_owned(),
+                    agent_output: Vec::new(),
+                    output: GuardrailFunctionOutput::allow(None),
+                },
+            ],
+            ..RunErrorData::default()
+        };
+
+        let rendered = pretty_print_run_error_details(&details);
+
+        assert!(rendered.contains("1 input guardrail result(s)"));
+        assert!(rendered.contains("2 output guardrail result(s)"));
+    }
 }

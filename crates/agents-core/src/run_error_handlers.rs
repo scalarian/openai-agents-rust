@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::agent::Agent;
 use crate::exceptions::MaxTurnsExceeded;
+use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::ModelResponse;
 use crate::run_context::{RunContext, RunContextWrapper};
@@ -17,6 +18,8 @@ pub struct RunErrorData {
     pub history: Vec<InputItem>,
     pub output: Vec<OutputItem>,
     pub raw_responses: Vec<ModelResponse>,
+    pub input_guardrail_results: Vec<InputGuardrailResult>,
+    pub output_guardrail_results: Vec<OutputGuardrailResult>,
     pub last_agent: Agent,
 }
 

@@ -865,6 +865,8 @@ impl Runner {
                         history,
                         output: final_output_items.clone(),
                         raw_responses: raw_responses.clone(),
+                        input_guardrail_results: input_guardrail_results.clone(),
+                        output_guardrail_results: output_guardrail_results.clone(),
                         last_agent: current_agent.clone(),
                     },
                 })
