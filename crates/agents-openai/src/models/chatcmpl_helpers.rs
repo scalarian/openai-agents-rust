@@ -25,6 +25,7 @@ impl ChatCmplHelpers {
     pub fn tools_to_payload(tools: &[ToolDefinition]) -> Vec<Value> {
         tools
             .iter()
+            .filter(|tool| !matches!(tool.kind, agents_core::ToolDefinitionKind::Custom))
             .map(|tool| {
                 json!({
                     "type": "function",
@@ -176,6 +177,17 @@ mod tests {
 
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(tools[0]["type"], "function");
+    }
+
+    #[test]
+    fn skips_custom_tools_in_chat_payload_helper() {
+        let tools = ChatCmplHelpers::tools_to_payload(&[
+            ToolDefinition::new("search", "Search"),
+            ToolDefinition::custom("raw_editor", "Edit raw text."),
+        ]);
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "search");
     }
 
     #[test]
