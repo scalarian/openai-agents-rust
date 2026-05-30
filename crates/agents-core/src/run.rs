@@ -1751,14 +1751,14 @@ fn merge_run_states(previous: &RunState, next: &mut RunState) {
     session_items.extend(next.session_items.clone());
     next.session_items = session_items;
 
-    next.conversation_id = previous
+    next.conversation_id = next
         .conversation_id
         .clone()
-        .or(next.conversation_id.clone());
-    next.previous_response_id = previous
+        .or_else(|| previous.conversation_id.clone());
+    next.previous_response_id = next
         .previous_response_id
         .clone()
-        .or(next.previous_response_id.clone());
+        .or_else(|| previous.previous_response_id.clone());
     next.auto_previous_response_id =
         previous.auto_previous_response_id || next.auto_previous_response_id;
     next.reasoning_item_id_policy = previous.reasoning_item_id_policy;
@@ -2317,6 +2317,38 @@ mod tests {
     impl ModelProvider for AutoPreviousResponseProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ResponseIdSequenceModel {
+        seen_previous_response_ids: Arc<Mutex<Vec<Option<String>>>>,
+        response_ids: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    #[async_trait]
+    impl Model for ResponseIdSequenceModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.seen_previous_response_ids
+                .lock()
+                .expect("response id sequence capture lock")
+                .push(request.previous_response_id.clone());
+
+            let response_id = self
+                .response_ids
+                .lock()
+                .expect("response id sequence lock")
+                .remove(0);
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "done".to_owned(),
+                }],
+                usage: Usage::default(),
+                response_id,
+                request_id: None,
+            })
         }
     }
 
@@ -4428,6 +4460,107 @@ mod tests {
                 .and_then(|state| state.previous_response_id.as_deref()),
             Some("resp-auto-2")
         );
+    }
+
+    #[tokio::test]
+    async fn resume_advances_previous_response_id_from_resumed_response() {
+        let model = Arc::new(ResponseIdSequenceModel {
+            response_ids: Arc::new(Mutex::new(vec![
+                Some("resp-first".to_owned()),
+                Some("resp-resumed".to_owned()),
+            ])),
+            ..ResponseIdSequenceModel::default()
+        });
+        let provider = Arc::new(StaticProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant").build();
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                auto_previous_response_id: true,
+                ..RunConfig::default()
+            });
+
+        let first = runner
+            .run(&agent, "hello")
+            .await
+            .expect("first run should succeed");
+        let state = first
+            .durable_state()
+            .cloned()
+            .expect("first run should expose durable state");
+
+        let resumed = runner.resume(&state).await.expect("resume should succeed");
+
+        assert_eq!(
+            model
+                .seen_previous_response_ids
+                .lock()
+                .expect("response id sequence capture lock")
+                .as_slice(),
+            &[None, Some("resp-first".to_owned())]
+        );
+        assert_eq!(resumed.previous_response_id(), Some("resp-resumed"));
+        assert_eq!(
+            resumed
+                .durable_state()
+                .and_then(|state| state.previous_response_id.as_deref()),
+            Some("resp-resumed")
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_seeds_previous_response_id_from_latest_state_response_id() {
+        let model = Arc::new(ResponseIdSequenceModel {
+            response_ids: Arc::new(Mutex::new(vec![Some("resp-resumed".to_owned())])),
+            ..ResponseIdSequenceModel::default()
+        });
+        let provider = Arc::new(StaticProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant").build();
+        let context = RunContextWrapper::new(RunContext::default());
+        let mut state = RunState::new(&context, vec![InputItem::from("hello")], agent.clone(), 3)
+            .expect("run state should build");
+        state.auto_previous_response_id = true;
+        state.push_model_response(ModelResponse {
+            model: None,
+            output: Vec::new(),
+            usage: Usage::default(),
+            response_id: Some("resp-first".to_owned()),
+            request_id: None,
+        });
+        state.push_model_response(ModelResponse {
+            model: None,
+            output: Vec::new(),
+            usage: Usage::default(),
+            response_id: Some("resp-second".to_owned()),
+            request_id: None,
+        });
+        state.push_model_response(ModelResponse {
+            model: None,
+            output: Vec::new(),
+            usage: Usage::default(),
+            response_id: None,
+            request_id: None,
+        });
+
+        let resumed = Runner::new()
+            .with_model_provider(provider)
+            .resume(&state)
+            .await
+            .expect("resume should succeed");
+
+        assert_eq!(
+            model
+                .seen_previous_response_ids
+                .lock()
+                .expect("response id sequence capture lock")
+                .as_slice(),
+            &[Some("resp-second".to_owned())]
+        );
+        assert_eq!(resumed.previous_response_id(), Some("resp-resumed"));
     }
 
     #[tokio::test]
