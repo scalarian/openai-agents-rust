@@ -137,6 +137,28 @@ pub struct ToolCallOutputItem {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolSearchCallItem {
+    pub raw_item: InputItem,
+}
+
+impl ToolSearchCallItem {
+    pub fn to_input_item(&self) -> InputItem {
+        tool_search_item_to_input_item(&self.raw_item)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolSearchOutputItem {
+    pub raw_item: InputItem,
+}
+
+impl ToolSearchOutputItem {
+    pub fn to_input_item(&self) -> InputItem {
+        tool_search_item_to_input_item(&self.raw_item)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HandoffCallItem {
     pub raw_item: RunItem,
 }
@@ -159,8 +181,32 @@ pub struct MCPApprovalResponseItem {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MCPListToolsItem {
+    pub raw_item: InputItem,
+}
+
+impl MCPListToolsItem {
+    pub fn to_input_item(&self) -> InputItem {
+        self.raw_item.clone()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolApprovalItem {
     pub raw_item: InputItem,
+}
+
+fn tool_search_item_to_input_item(raw_item: &InputItem) -> InputItem {
+    match raw_item {
+        InputItem::Json { value } => {
+            let mut value = value.clone();
+            if let Some(object) = value.as_object_mut() {
+                object.remove("created_by");
+            }
+            InputItem::Json { value }
+        }
+        InputItem::Text { .. } => raw_item.clone(),
+    }
 }
 
 pub struct ItemHelpers;
@@ -302,5 +348,45 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn tool_search_items_strip_output_only_created_by_on_replay() {
+        let raw_item = InputItem::Json {
+            value: json!({
+                "type": "tool_search_output",
+                "call_id": "search-1",
+                "created_by": "server",
+                "results": [{"name": "lookup"}]
+            }),
+        };
+        let item = ToolSearchOutputItem { raw_item };
+
+        assert_eq!(
+            item.to_input_item(),
+            InputItem::Json {
+                value: json!({
+                    "type": "tool_search_output",
+                    "call_id": "search-1",
+                    "results": [{"name": "lookup"}]
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn mcp_list_tools_item_replays_raw_item() {
+        let raw_item = InputItem::Json {
+            value: json!({
+                "type": "mcp_list_tools",
+                "server_label": "docs",
+                "tools": [{"name": "lookup"}]
+            }),
+        };
+        let item = MCPListToolsItem {
+            raw_item: raw_item.clone(),
+        };
+
+        assert_eq!(item.to_input_item(), raw_item);
     }
 }

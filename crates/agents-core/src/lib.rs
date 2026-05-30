@@ -111,8 +111,9 @@ pub use handoff::{
 };
 pub use items::{
     CompactionItem, HandoffCallItem, HandoffOutputItem, InputItem, ItemHelpers,
-    MCPApprovalRequestItem, MCPApprovalResponseItem, MessageOutputItem, OutputItem, ReasoningItem,
-    RunItem, TResponseInputItem, ToolApprovalItem, ToolCallItem, ToolCallOutputItem,
+    MCPApprovalRequestItem, MCPApprovalResponseItem, MCPListToolsItem, MessageOutputItem,
+    OutputItem, ReasoningItem, RunItem, TResponseInputItem, ToolApprovalItem, ToolCallItem,
+    ToolCallOutputItem, ToolSearchCallItem, ToolSearchOutputItem,
 };
 pub use lifecycle::{AgentHooks, RunHooks, SharedAgentHooks, SharedRunHooks};
 pub use logger::{LOGGER_TARGET, enable_verbose_stdout_logging};
