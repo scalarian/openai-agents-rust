@@ -948,6 +948,7 @@ pub struct HostedSandboxClientOptionsBase {
     pub api_key: Option<String>,
     pub token: Option<String>,
     pub client_timeout_s: Option<u64>,
+    pub idle_timeout: Option<u64>,
     pub exposed_ports: Vec<u16>,
     pub interactive_pty: bool,
 }
@@ -960,6 +961,7 @@ pub struct HostedSandboxSessionStateBase {
     pub exposed_ports: Vec<u16>,
     pub interactive_pty: bool,
     pub start_state_preserved: bool,
+    pub idle_timeout: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1184,6 +1186,7 @@ macro_rules! define_hosted_sandbox_provider {
                 pub api_key: Option<String>,
                 pub token: Option<String>,
                 pub client_timeout_s: Option<u64>,
+                pub idle_timeout: Option<u64>,
                 pub exposed_ports: Vec<u16>,
                 pub interactive_pty: bool,
             }
@@ -1196,6 +1199,8 @@ macro_rules! define_hosted_sandbox_provider {
                 pub exposed_ports: Vec<u16>,
                 pub interactive_pty: bool,
                 pub start_state_preserved: bool,
+                #[serde(default)]
+                pub idle_timeout: Option<u64>,
             }
 
             impl Default for $state {
@@ -1212,6 +1217,7 @@ macro_rules! define_hosted_sandbox_provider {
                         exposed_ports: Vec::new(),
                         interactive_pty: false,
                         start_state_preserved: false,
+                        idle_timeout: None,
                     }
                 }
             }
@@ -1260,6 +1266,7 @@ macro_rules! define_hosted_sandbox_provider {
                             exposed_ports: self.options.exposed_ports.clone(),
                             interactive_pty: self.options.interactive_pty,
                             start_state_preserved: false,
+                            idle_timeout: self.options.idle_timeout,
                         },
                         resolved_auth: auth,
                     })
@@ -1295,6 +1302,7 @@ macro_rules! define_hosted_sandbox_provider {
                             exposed_ports: state.exposed_ports,
                             interactive_pty: state.interactive_pty,
                             start_state_preserved: true,
+                            idle_timeout: state.idle_timeout,
                         },
                         resolved_auth: auth,
                     })

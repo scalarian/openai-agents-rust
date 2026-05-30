@@ -276,6 +276,51 @@ fn main() {
 }
 
 #[test]
+fn modal_hosted_provider_preserves_idle_timeout() {
+    let program = r#"use openai_agents::extensions::{ModalSandboxClient, ModalSandboxClientOptions};
+
+fn main() {
+    let client = ModalSandboxClient::new(ModalSandboxClientOptions {
+        token: Some("modal-token".to_owned()),
+        idle_timeout: Some(60),
+        ..Default::default()
+    });
+    let session = client.create().expect("modal create should succeed");
+    assert_eq!(session.state().idle_timeout, Some(60));
+
+    let payload = client
+        .serialize_session_state(session.state())
+        .expect("state should serialize");
+    assert_eq!(payload["idle_timeout"].as_u64(), Some(60));
+
+    let resumed = client
+        .resume(session.state().clone())
+        .expect("modal resume should succeed");
+    assert_eq!(resumed.state().idle_timeout, Some(60));
+
+    let mut legacy_payload = payload;
+    legacy_payload
+        .as_object_mut()
+        .expect("serialized state should be an object")
+        .remove("idle_timeout");
+    let restored = client
+        .deserialize_session_state(legacy_payload)
+        .expect("legacy state without idle_timeout should deserialize");
+    assert_eq!(restored.idle_timeout, None);
+}
+"#;
+
+    let output = run_temp_crate(
+        "hosted-provider-modal-idle-timeout",
+        &["modal"],
+        program,
+        TempCrateMode::Run,
+        &[],
+    );
+    assert_command_success("modal", "idle timeout state roundtrip", &output);
+}
+
+#[test]
 fn hosted_provider_capabilities_preserve_ports_and_pty_flags() {
     let program = r#"use openai_agents::extensions::{
     E2BSandboxClient, E2BSandboxClientOptions, RunloopSandboxClient, RunloopSandboxClientOptions,
