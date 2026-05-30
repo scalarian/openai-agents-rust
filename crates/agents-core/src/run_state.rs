@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::agent::Agent;
@@ -26,9 +26,51 @@ pub struct RunStateContextSnapshot {
     pub context: Value,
     pub usage: Usage,
     pub turn_input: Vec<InputItem>,
+    #[serde(default, deserialize_with = "deserialize_approval_records")]
     pub approvals: HashMap<String, ApprovalRecord>,
     pub tool_input: Option<Value>,
     pub agent_tool_state_scope: Option<String>,
+}
+
+fn deserialize_approval_records<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HashMap<String, ApprovalRecord>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    let Value::Object(records) = value else {
+        return Ok(HashMap::new());
+    };
+
+    let approvals = records
+        .into_iter()
+        .filter_map(|(key, value)| approval_record_from_value(value).map(|record| (key, record)))
+        .collect();
+    Ok(approvals)
+}
+
+fn approval_record_from_value(value: Value) -> Option<ApprovalRecord> {
+    let Value::Object(record) = value else {
+        return None;
+    };
+    let approved = record.get("approved")?.as_bool()?;
+
+    Some(ApprovalRecord {
+        approved,
+        reason: string_field(&record, "reason"),
+        approval_id: string_field(&record, "approval_id"),
+        call_id: string_field(&record, "call_id"),
+        tool_name: string_field(&record, "tool_name"),
+        namespace: string_field(&record, "namespace"),
+    })
+}
+
+fn string_field(record: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    record
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 /// Current interruption state when a run pauses mid-flight.
@@ -478,6 +520,80 @@ mod tests {
         assert_eq!(restored_trace.workflow_name, "workflow");
         assert_eq!(restored_trace.group_id.as_deref(), Some("group-1"));
         assert_eq!(restored_trace.tracing_api_key, None);
+    }
+
+    #[test]
+    fn run_state_deserialization_skips_malformed_approvals() {
+        let context = RunContextWrapper::new(RunContext::default());
+        let state = RunState::new(
+            &context,
+            vec![InputItem::from("start")],
+            Agent::builder("router").build(),
+            Some(3),
+        )
+        .expect("run state should build");
+        let mut value = serde_json::to_value(&state).expect("state should serialize");
+
+        value["context_snapshot"]["approvals"] = json!(["not", "an", "approval", "mapping"]);
+        let restored = RunState::from_json_str(&value.to_string())
+            .expect("non-object approvals should be ignored");
+        assert!(restored.context_snapshot.approvals.is_empty());
+
+        value["context_snapshot"]["approvals"] = json!({
+            "approval-ok": {
+                "approved": true,
+                "reason": "looks good",
+                "approval_id": "approval-ok",
+                "call_id": "call-ok",
+                "tool_name": "search",
+                "namespace": 123
+            },
+            "not-a-record": ["bad"],
+            "bad-approved": {
+                "approved": {"not": "a bool"},
+                "approval_id": "bad-approved"
+            },
+            "approval-rejected": {
+                "approved": false,
+                "reason": 7,
+                "approval_id": "approval-rejected"
+            }
+        });
+        let restored = RunState::from_json_str(&value.to_string())
+            .expect("malformed approval records should be skipped");
+
+        assert_eq!(restored.context_snapshot.approvals.len(), 2);
+        let approved = restored
+            .context_snapshot
+            .approvals
+            .get("approval-ok")
+            .expect("valid approval should be restored");
+        assert!(approved.approved);
+        assert_eq!(approved.reason.as_deref(), Some("looks good"));
+        assert_eq!(approved.approval_id.as_deref(), Some("approval-ok"));
+        assert_eq!(approved.call_id.as_deref(), Some("call-ok"));
+        assert_eq!(approved.tool_name.as_deref(), Some("search"));
+        assert_eq!(approved.namespace, None);
+
+        let rejected = restored
+            .context_snapshot
+            .approvals
+            .get("approval-rejected")
+            .expect("valid rejection should be restored");
+        assert!(!rejected.approved);
+        assert_eq!(rejected.reason, None);
+        assert!(
+            !restored
+                .context_snapshot
+                .approvals
+                .contains_key("not-a-record")
+        );
+        assert!(
+            !restored
+                .context_snapshot
+                .approvals
+                .contains_key("bad-approved")
+        );
     }
 
     #[test]
