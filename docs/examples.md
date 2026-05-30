@@ -59,6 +59,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | image tool output | function tool returning an image output item | [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) |
 | input guardrails | upstream-named input guardrail entry point | [input_guardrails.rs](../crates/openai-agents/examples/input_guardrails.rs) |
 | input guardrail | local tripwire handling before model execution | [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs) |
+| lifecycle | run-level and agent-level lifecycle hooks | [lifecycle.rs](../crates/openai-agents/examples/lifecycle.rs) |
 | lifecycle hooks | run and agent lifecycle callbacks | [lifecycle_hooks.rs](../crates/openai-agents/examples/lifecycle_hooks.rs) |
 | LiteLLM auto | upstream-named multi-provider LiteLLM routing entry point | [litellm_auto.rs](../crates/openai-agents/examples/litellm_auto.rs) |
 | LiteLLM provider | upstream-named LiteLLM provider entry point | [litellm_provider.rs](../crates/openai-agents/examples/litellm_provider.rs) |
