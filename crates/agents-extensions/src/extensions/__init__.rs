@@ -6,7 +6,10 @@ mod realtime_transports;
 mod tool_output_trimmer;
 mod visualization;
 
-pub use handoff_filters::{remove_all_tools, remove_tool_types_from_input};
+pub use handoff_filters::{
+    remove_all_tools, remove_all_tools_from_handoff_input, remove_all_tools_handoff_filter,
+    remove_tool_types_from_input,
+};
 pub use handoff_prompt::{RECOMMENDED_PROMPT_PREFIX, prompt_with_handoff_instructions};
 pub use realtime_transports::{
     CloudflareRealtimeSocket, CloudflareRealtimeTransportLayer, CloudflareUpgradeRequest,

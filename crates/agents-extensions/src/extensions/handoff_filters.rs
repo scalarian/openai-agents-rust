@@ -1,4 +1,6 @@
-use agents_core::{InputItem, RunItem};
+use std::sync::Arc;
+
+use agents_core::{HandoffInputData, HandoffInputFilter, InputItem, RunItem};
 
 fn is_filtered_run_item(item: &RunItem) -> bool {
     matches!(
@@ -57,6 +59,23 @@ pub fn remove_all_tools(items: &[RunItem]) -> Vec<RunItem> {
         .filter(|item| !is_filtered_run_item(item))
         .cloned()
         .collect()
+}
+
+/// Removes tool, handoff, and reasoning items from all handoff input buckets.
+pub fn remove_all_tools_from_handoff_input(data: HandoffInputData) -> HandoffInputData {
+    HandoffInputData {
+        input_history: remove_tool_types_from_input(&data.input_history),
+        pre_handoff_items: remove_all_tools(&data.pre_handoff_items),
+        new_items: remove_all_tools(&data.new_items),
+        input_items: data
+            .input_items
+            .map(|input_items| remove_all_tools(&input_items)),
+    }
+}
+
+/// Returns a handoff input filter that removes tool, handoff, and reasoning items.
+pub fn remove_all_tools_handoff_filter() -> HandoffInputFilter {
+    Arc::new(|data| Box::pin(async move { remove_all_tools_from_handoff_input(data) }))
 }
 
 /// Removes tool and reasoning records from model input history.
@@ -131,5 +150,63 @@ mod tests {
             InputItem::Json { value }
                 if value.get("type").and_then(serde_json::Value::as_str) == Some("message")
         ));
+    }
+
+    #[test]
+    fn handoff_filter_preserves_and_filters_input_items() {
+        let keep_history = InputItem::from("history");
+        let keep_pre = RunItem::MessageOutput {
+            content: OutputItem::Text {
+                text: "pre".to_owned(),
+            },
+        };
+        let keep_new = RunItem::MessageOutput {
+            content: OutputItem::Text {
+                text: "new".to_owned(),
+            },
+        };
+        let keep_input = RunItem::MessageOutput {
+            content: OutputItem::Text {
+                text: "input".to_owned(),
+            },
+        };
+
+        let filtered = remove_all_tools_from_handoff_input(HandoffInputData {
+            input_history: vec![
+                keep_history.clone(),
+                InputItem::Json {
+                    value: json!({
+                        "type": "function_call",
+                        "call_id": "call-1",
+                    }),
+                },
+            ],
+            pre_handoff_items: vec![
+                keep_pre.clone(),
+                RunItem::ToolCall {
+                    tool_name: "search".to_owned(),
+                    arguments: json!({"q":"rust"}),
+                    call_id: Some("call-1".to_owned()),
+                    namespace: None,
+                },
+            ],
+            new_items: vec![
+                RunItem::HandoffOutput {
+                    source_agent: "triage".to_owned(),
+                },
+                keep_new.clone(),
+            ],
+            input_items: Some(vec![
+                RunItem::Reasoning {
+                    text: "thinking".to_owned(),
+                },
+                keep_input.clone(),
+            ]),
+        });
+
+        assert_eq!(filtered.input_history, vec![keep_history]);
+        assert_eq!(filtered.pre_handoff_items, vec![keep_pre]);
+        assert_eq!(filtered.new_items, vec![keep_new]);
+        assert_eq!(filtered.input_items, Some(vec![keep_input]));
     }
 }

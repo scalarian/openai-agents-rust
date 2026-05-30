@@ -14,7 +14,8 @@ pub use extensions::{
     ToolOutputTrimmer, TwilioInterruptDecision, TwilioOutboundMessage,
     TwilioRealtimeTransportAction, TwilioRealtimeTransportLayer, draw_graph, experimental,
     get_all_edges, get_all_nodes, get_main_graph, prompt_with_handoff_instructions,
-    remove_all_tools, remove_tool_types_from_input,
+    remove_all_tools, remove_all_tools_from_handoff_input, remove_all_tools_handoff_filter,
+    remove_tool_types_from_input,
 };
 pub use memory::{
     AdvancedSQLiteSession, AsyncSQLiteSession, DaprSession, DatabaseSession, EncryptedEnvelope,
