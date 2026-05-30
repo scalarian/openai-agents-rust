@@ -766,6 +766,7 @@ impl Runner {
                                 &context,
                                 custom_tool_calls,
                                 stream_recorder.as_ref(),
+                                None,
                             )
                             .await?,
                         );
@@ -1008,6 +1009,7 @@ impl Runner {
                         &context,
                         custom_tool_calls,
                         stream_recorder.as_ref(),
+                        None,
                     )
                     .await?,
                 );
@@ -1519,10 +1521,20 @@ impl Runner {
             message: "cannot resume a pending approval without a tool call id".to_owned(),
         })?;
 
-        let tool_call = internal_tool_execution::find_pending_tool_call(state, &call_id)
-            .ok_or_else(|| ModelBehaviorError {
+        let (tool_call, is_custom_tool) = if let Some(tool_call) =
+            internal_tool_execution::find_pending_tool_call(state, &call_id)
+        {
+            (tool_call, false)
+        } else if let Some(tool_call) =
+            internal_tool_execution::find_pending_custom_tool_call(state, &call_id)
+        {
+            (tool_call, true)
+        } else {
+            return Err(ModelBehaviorError {
                 message: format!("cannot find pending tool call `{call_id}` in run state"),
-            })?;
+            }
+            .into());
+        };
         let approval = state
             .approval(&approval_id)
             .cloned()
@@ -1543,15 +1555,27 @@ impl Runner {
         }
 
         let context = state.restore_context::<crate::run_context::RunContext>()?;
-        let tool_outcome = internal_tool_execution::execute_local_function_tools(
-            agent,
-            &self.config,
-            &context,
-            vec![tool_call],
-            stream_recorder.as_ref(),
-            Some((&interruption, &approval)),
-        )
-        .await?;
+        let tool_outcome = if is_custom_tool {
+            internal_tool_execution::execute_local_custom_tools(
+                agent,
+                &self.config,
+                &context,
+                vec![tool_call],
+                stream_recorder.as_ref(),
+                Some((&interruption, &approval)),
+            )
+            .await?
+        } else {
+            internal_tool_execution::execute_local_function_tools(
+                agent,
+                &self.config,
+                &context,
+                vec![tool_call],
+                stream_recorder.as_ref(),
+                Some((&interruption, &approval)),
+            )
+            .await?
+        };
         if !tool_outcome.interruptions.is_empty() {
             return Err(UserError {
                 message: "resumed approval unexpectedly produced another interruption".to_owned(),
@@ -3420,6 +3444,89 @@ mod tests {
             InputItem::Json { value }
                 if value.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
                     && value.get("call_id").and_then(Value::as_str) == Some("call-custom")
+                    && value.get("output").and_then(Value::as_str) == Some("HELLO")
+        )));
+    }
+
+    #[tokio::test]
+    async fn runner_interrupts_and_resumes_custom_tool_approval() {
+        let model = Arc::new(TwoTurnModel::new(
+            vec![OutputItem::CustomToolCall {
+                call_id: "call-custom".to_owned(),
+                tool_name: "raw_editor".to_owned(),
+                input: "hello".to_owned(),
+            }],
+            "done",
+        ));
+        let invocations = Arc::new(Mutex::new(0usize));
+        let invocation_counter = invocations.clone();
+        let raw_editor = custom_tool("raw_editor", "Edit raw text.", move |ctx, input| {
+            let invocation_counter = invocation_counter.clone();
+            async move {
+                *invocation_counter
+                    .lock()
+                    .expect("custom invocation counter lock") += 1;
+                assert_eq!(ctx.tool_arguments, "hello");
+                Ok::<_, AgentsError>(input.to_uppercase())
+            }
+        })
+        .with_needs_approval(true);
+        assert!(raw_editor.needs_approval);
+        let agent = Agent::builder("assistant").custom_tool(raw_editor).build();
+        let runner = Runner::new().with_model_provider(Arc::new(StaticProvider {
+            model: model.clone(),
+        }));
+
+        let initial = runner
+            .run(&agent, "hello")
+            .await
+            .expect("initial run should interrupt");
+
+        assert!(initial.final_output.is_none());
+        assert_eq!(
+            *invocations.lock().expect("custom invocation counter lock"),
+            0
+        );
+        assert!(matches!(
+            initial
+                .interruptions
+                .first()
+                .and_then(|step| step.kind.clone()),
+            Some(RunInterruptionKind::ToolApproval)
+        ));
+
+        let mut state = initial
+            .durable_state()
+            .cloned()
+            .expect("state should exist");
+        state.approve_for_tool(
+            "call-custom",
+            Some("raw_editor".to_owned()),
+            Some("approved".to_owned()),
+        );
+
+        let resumed = runner
+            .resume_with_agent(&state, &agent)
+            .await
+            .expect("resume should succeed");
+
+        assert_eq!(resumed.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            *invocations.lock().expect("custom invocation counter lock"),
+            1
+        );
+        assert!(resumed.new_items.iter().any(|item| matches!(
+            item,
+            RunItem::CustomToolCallOutput {
+                output,
+                call_id,
+                ..
+            } if output == "HELLO" && call_id.as_deref() == Some("call-custom")
+        )));
+        assert!(model.seen_inputs()[1].iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
                     && value.get("output").and_then(Value::as_str) == Some("HELLO")
         )));
     }

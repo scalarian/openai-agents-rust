@@ -146,6 +146,7 @@ pub(crate) async fn execute_local_custom_tools(
     context: &RunContextWrapper,
     tool_calls: Vec<ToolCall>,
     stream_recorder: Option<&StreamRecorder>,
+    approved_execution: Option<(&RunInterruption, &ApprovalRecord)>,
 ) -> Result<ToolExecutionOutcome> {
     let mut outcome = ToolExecutionOutcome::empty();
 
@@ -166,10 +167,22 @@ pub(crate) async fn execute_local_custom_tools(
             tool_call,
             custom_tool,
             stream_recorder,
+            approved_execution,
         )
         .await?;
+        let interrupted = !single.interruptions.is_empty();
         outcome.new_items.extend(single.new_items);
         outcome.tool_results.extend(single.tool_results);
+        outcome
+            .input_guardrail_results
+            .extend(single.input_guardrail_results);
+        outcome
+            .output_guardrail_results
+            .extend(single.output_guardrail_results);
+        outcome.interruptions.extend(single.interruptions);
+        if interrupted {
+            break;
+        }
     }
 
     Ok(outcome)
@@ -733,6 +746,7 @@ async fn execute_single_custom_tool(
     tool_call: ToolCall,
     custom_tool: CustomTool,
     stream_recorder: Option<&StreamRecorder>,
+    approved_execution: Option<(&RunInterruption, &ApprovalRecord)>,
 ) -> Result<SingleToolExecutionOutcome> {
     let mut new_items = Vec::new();
     let mut tool_results = Vec::new();
@@ -771,6 +785,82 @@ async fn execute_single_custom_tool(
             .await;
     }
     provider.start_span(&mut span, true);
+
+    let approval_resolved = if let Some((interruption, approval)) = approved_execution {
+        if approval_decision_matches_tool_call(interruption, approval, &tool_call) {
+            if !approval.approved {
+                let rejection_message = resolve_approval_rejection_message_for_tool_type(
+                    context, run_config, &tool_call, approval, "custom",
+                )
+                .await?;
+                let run_item = RunItem::CustomToolCallOutput {
+                    output: rejection_message.clone(),
+                    call_id: Some(tool_call.id.clone()),
+                    tool_name: Some(tool_call.name.clone()),
+                };
+                new_items.push(run_item.clone());
+                if let SpanData::Function(data) = &mut span.data {
+                    data.output = Some("tool approval rejected".to_owned());
+                }
+                tool_results.push(FunctionToolResult {
+                    tool_name: tool_call.name.clone(),
+                    call_id: Some(tool_call.id.clone()),
+                    tool_arguments: Some(tool_call.arguments.clone()),
+                    qualified_name: Some(custom_tool.definition.name.clone()),
+                    output: ToolOutput::from(rejection_message),
+                    run_item: Some(run_item),
+                    interruptions: Vec::new(),
+                    agent_run_result: None,
+                });
+                provider.finish_span(&mut span, true);
+                return Ok(SingleToolExecutionOutcome {
+                    new_items,
+                    tool_results,
+                    input_guardrail_results: Vec::new(),
+                    output_guardrail_results: Vec::new(),
+                    interruptions: Vec::new(),
+                });
+            }
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !approval_resolved && custom_tool_needs_approval(&custom_tool, context, &tool_call).await? {
+        let approval_id = Uuid::new_v4().to_string();
+        provider.finish_span(&mut span, true);
+        if let Some(recorder) = stream_recorder {
+            recorder
+                .push_lifecycle(
+                    "tool_approval_required",
+                    Some(serde_json::json!({
+                        "approval_id": approval_id,
+                        "tool_name": tool_call.name.clone(),
+                        "call_id": tool_call.id.clone(),
+                        "tool_type": "custom",
+                    })),
+                )
+                .await;
+        }
+        return Ok(SingleToolExecutionOutcome {
+            new_items,
+            tool_results,
+            input_guardrail_results: Vec::new(),
+            output_guardrail_results: Vec::new(),
+            interruptions: vec![RunInterruption {
+                kind: Some(RunInterruptionKind::ToolApproval),
+                approval_id: Some(approval_id),
+                call_id: Some(tool_call.id.clone()),
+                tool_name: Some(tool_call.name.clone()),
+                namespace: None,
+                tool_origin: None,
+                reason: Some("tool approval required".to_owned()),
+            }],
+        });
+    }
 
     let output = match custom_tool
         .invoke_raw(tool_context.clone(), tool_call.arguments.clone())
@@ -881,6 +971,27 @@ async fn function_tool_needs_approval(
     }
 }
 
+async fn custom_tool_needs_approval(
+    custom_tool: &CustomTool,
+    context: &RunContextWrapper,
+    tool_call: &ToolCall,
+) -> Result<bool> {
+    let Some(checker) = &custom_tool.needs_approval_function else {
+        return Ok(custom_tool.needs_approval);
+    };
+
+    match checker(
+        context.clone(),
+        tool_call.arguments.clone(),
+        tool_call.id.clone(),
+    )
+    .await
+    {
+        Ok(needs_approval) => Ok(needs_approval),
+        Err(_) => Ok(true),
+    }
+}
+
 fn parse_approval_arguments(arguments: &str) -> serde_json::Value {
     if arguments.is_empty() {
         return serde_json::json!({});
@@ -893,6 +1004,19 @@ async fn resolve_approval_rejection_message(
     run_config: &RunConfig,
     tool_call: &ToolCall,
     approval: &ApprovalRecord,
+) -> Result<String> {
+    resolve_approval_rejection_message_for_tool_type(
+        context, run_config, tool_call, approval, "function",
+    )
+    .await
+}
+
+async fn resolve_approval_rejection_message_for_tool_type(
+    context: &RunContextWrapper,
+    run_config: &RunConfig,
+    tool_call: &ToolCall,
+    approval: &ApprovalRecord,
+    tool_type: &'static str,
 ) -> Result<String> {
     if let Some(reason) = approval
         .reason
@@ -909,7 +1033,7 @@ async fn resolve_approval_rejection_message(
 
     let formatted = formatter(ToolErrorFormatterArgs {
         kind: "approval_rejected",
-        tool_type: "function",
+        tool_type,
         tool_name: tool_call.name.clone(),
         call_id: tool_call.id.clone(),
         default_message: default_message.clone(),
@@ -1223,6 +1347,26 @@ pub(crate) fn find_pending_tool_call(state: &RunState, call_id: &str) -> Option<
                 name: tool_name.clone(),
                 arguments: raw_tool_arguments(arguments),
                 namespace: namespace.clone(),
+            }),
+            _ => None,
+        })
+}
+
+pub(crate) fn find_pending_custom_tool_call(state: &RunState, call_id: &str) -> Option<ToolCall> {
+    state
+        .generated_items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RunItem::CustomToolCall {
+                tool_name,
+                input,
+                call_id: Some(existing_call_id),
+            } if existing_call_id == call_id => Some(ToolCall {
+                id: existing_call_id.clone(),
+                name: tool_name.clone(),
+                arguments: input.clone(),
+                namespace: None,
             }),
             _ => None,
         })

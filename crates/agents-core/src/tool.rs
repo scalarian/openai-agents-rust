@@ -319,6 +319,11 @@ type ToolExecutor =
     Arc<dyn Fn(ToolContext, Value) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync>;
 type CustomToolExecutor =
     Arc<dyn Fn(ToolContext, String) -> BoxFuture<'static, Result<ToolOutput>> + Send + Sync>;
+pub type CustomToolApprovalFunction = Arc<
+    dyn Fn(RunContextWrapper<RunContext>, String, String) -> BoxFuture<'static, Result<bool>>
+        + Send
+        + Sync,
+>;
 pub type ToolEnabledFunction =
     Arc<dyn Fn(RunContextWrapper<RunContext>, Agent) -> BoxFuture<'static, bool> + Send + Sync>;
 pub type ToolApprovalFunction = Arc<
@@ -330,6 +335,8 @@ pub type ToolApprovalFunction = Arc<
 #[derive(Clone)]
 pub struct CustomTool {
     pub definition: ToolDefinition,
+    pub needs_approval: bool,
+    pub needs_approval_function: Option<CustomToolApprovalFunction>,
     executor: CustomToolExecutor,
 }
 
@@ -337,6 +344,11 @@ impl std::fmt::Debug for CustomTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CustomTool")
             .field("definition", &self.definition)
+            .field("needs_approval", &self.needs_approval)
+            .field(
+                "needs_approval_function",
+                &self.needs_approval_function.as_ref().map(|_| "<function>"),
+            )
             .finish()
     }
 }
@@ -348,6 +360,8 @@ impl CustomTool {
         definition.input_json_schema = None;
         Self {
             definition,
+            needs_approval: false,
+            needs_approval_function: None,
             executor,
         }
     }
@@ -359,6 +373,28 @@ impl CustomTool {
 
     pub fn with_defer_loading(mut self, defer_loading: bool) -> Self {
         self.definition.defer_loading = defer_loading;
+        self
+    }
+
+    pub fn with_needs_approval(mut self, needs_approval: bool) -> Self {
+        self.needs_approval = needs_approval;
+        if !needs_approval {
+            self.needs_approval_function = None;
+        }
+        self
+    }
+
+    pub fn with_needs_approval_function<F, Fut>(mut self, needs_approval: F) -> Self
+    where
+        F: Fn(RunContextWrapper<RunContext>, String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<bool>> + Send + 'static,
+    {
+        let needs_approval = Arc::new(needs_approval);
+        self.needs_approval = true;
+        self.needs_approval_function = Some(Arc::new(move |context, input, call_id| {
+            let needs_approval = needs_approval.clone();
+            needs_approval(context, input, call_id).boxed()
+        }));
         self
     }
 

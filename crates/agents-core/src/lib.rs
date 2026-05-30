@@ -184,9 +184,9 @@ pub use stream_events::{
 };
 pub use strict_schema::ensure_strict_json_schema;
 pub use tool::{
-    ApplyPatchTool, ComputerProvider, ComputerTool, CustomTool, FunctionTool, FunctionToolResult,
-    HostedMCPTool, LocalShellCommandRequest, LocalShellExecutor, LocalShellTool,
-    MCPToolApprovalFunction, MCPToolApprovalFunctionResult, MCPToolApprovalRequest,
+    ApplyPatchTool, ComputerProvider, ComputerTool, CustomTool, CustomToolApprovalFunction,
+    FunctionTool, FunctionToolResult, HostedMCPTool, LocalShellCommandRequest, LocalShellExecutor,
+    LocalShellTool, MCPToolApprovalFunction, MCPToolApprovalFunctionResult, MCPToolApprovalRequest,
     ShellActionRequest, ShellCallData, ShellCallOutcome, ShellCommandOutput, ShellCommandRequest,
     ShellExecutor, ShellResult, ShellTool, ShellToolContainerAutoEnvironment,
     ShellToolContainerNetworkPolicy, ShellToolContainerNetworkPolicyAllowlist,
