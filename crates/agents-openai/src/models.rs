@@ -169,6 +169,7 @@ impl OpenAIResponsesModel {
             payload.insert("text".to_owned(), text_config);
         }
         apply_responses_model_settings(&mut payload, &request.settings)?;
+        apply_hosted_tool_includes(&mut payload, &request.tools);
         Ok(Value::Object(payload))
     }
 }
@@ -932,6 +933,33 @@ fn openai_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
     tools.iter().map(openai_tool_payload).collect()
 }
 
+fn apply_hosted_tool_includes(
+    payload: &mut serde_json::Map<String, Value>,
+    tools: &[ToolDefinition],
+) {
+    for include in tools
+        .iter()
+        .flat_map(|tool| tool.hosted_tool_includes.iter())
+    {
+        append_response_include(payload, include);
+    }
+}
+
+fn append_response_include(payload: &mut serde_json::Map<String, Value>, include: &str) {
+    let include_value = payload
+        .entry("include".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Value::Array(includes) = include_value else {
+        return;
+    };
+    if !includes
+        .iter()
+        .any(|existing| existing.as_str() == Some(include))
+    {
+        includes.push(Value::String(include.to_owned()));
+    }
+}
+
 fn openai_tool_payload(tool: &ToolDefinition) -> Value {
     if tool.input_json_schema.is_none() {
         let mut payload = serde_json::Map::new();
@@ -1395,6 +1423,53 @@ mod tests {
                 "search_context_size": "medium",
                 "external_web_access": false
             })
+        );
+    }
+
+    #[test]
+    fn responses_payload_includes_file_search_options_and_results_include() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let file_search =
+            crate::tools::file_search_tool_with_options(crate::tools::FileSearchToolOptions {
+                vector_store_ids: vec!["vs_123".to_owned()],
+                max_num_results: Some(3),
+                include_search_results: true,
+                ranking_options: Some(json!({"ranker": "auto"})),
+                filters: Some(json!({"type": "eq", "key": "region", "value": "west"})),
+            });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    response_include: vec!["reasoning".to_owned()],
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: vec![file_search.definition],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "file_search",
+                "vector_store_ids": ["vs_123"],
+                "max_num_results": 3,
+                "ranking_options": {"ranker": "auto"},
+                "filters": {"type": "eq", "key": "region", "value": "west"}
+            })
+        );
+        assert_eq!(
+            payload["include"],
+            json!(["reasoning", "file_search_call.results"])
         );
     }
 

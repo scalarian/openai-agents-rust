@@ -31,6 +31,8 @@ pub struct ToolDefinition {
     pub defer_loading: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hosted_tool_options: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosted_tool_includes: Vec<String>,
 }
 
 impl ToolDefinition {
@@ -43,6 +45,7 @@ impl ToolDefinition {
             input_json_schema: None,
             defer_loading: false,
             hosted_tool_options: BTreeMap::new(),
+            hosted_tool_includes: Vec::new(),
         }
     }
 
@@ -68,6 +71,16 @@ impl ToolDefinition {
 
     pub fn with_hosted_tool_options(mut self, options: BTreeMap<String, Value>) -> Self {
         self.hosted_tool_options = options;
+        self
+    }
+
+    pub fn with_hosted_tool_include(mut self, include: impl Into<String>) -> Self {
+        self.hosted_tool_includes.push(include.into());
+        self
+    }
+
+    pub fn with_hosted_tool_includes(mut self, includes: Vec<String>) -> Self {
+        self.hosted_tool_includes = includes;
         self
     }
 }
@@ -250,6 +263,16 @@ impl StaticTool {
 
     pub fn with_hosted_tool_options(mut self, options: BTreeMap<String, Value>) -> Self {
         self.definition = self.definition.with_hosted_tool_options(options);
+        self
+    }
+
+    pub fn with_hosted_tool_include(mut self, include: impl Into<String>) -> Self {
+        self.definition = self.definition.with_hosted_tool_include(include);
+        self
+    }
+
+    pub fn with_hosted_tool_includes(mut self, includes: Vec<String>) -> Self {
+        self.definition = self.definition.with_hosted_tool_includes(includes);
         self
     }
 }
