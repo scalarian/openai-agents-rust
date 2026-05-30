@@ -31,7 +31,7 @@ async fn main() -> Result<(), openai_agents::AgentsError> {
 }
 ```
 
-Runnable version: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs)
+Runnable versions: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) for a minimal stream and [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) for run-item events around a tool call.
 
 ## Event Families
 
