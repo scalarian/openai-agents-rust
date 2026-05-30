@@ -30,6 +30,58 @@ impl AsyncSQLiteSession {
             inner,
         })
     }
+
+    pub async fn open_with_settings(
+        session_id: impl Into<String>,
+        db_path: impl AsRef<Path>,
+        session_settings: SessionSettings,
+    ) -> Result<Self> {
+        let db_url = format!("sqlite://{}", db_path.as_ref().display());
+        Self::open_with_url_and_settings(session_id, &db_url, session_settings).await
+    }
+
+    pub async fn open_in_memory_with_settings(
+        session_id: impl Into<String>,
+        session_settings: SessionSettings,
+    ) -> Result<Self> {
+        Self::open_with_url_and_settings(session_id, "sqlite::memory:", session_settings).await
+    }
+
+    pub async fn open_with_url_and_settings(
+        session_id: impl Into<String>,
+        database_url: &str,
+        session_settings: SessionSettings,
+    ) -> Result<Self> {
+        Self::open_with_options(
+            session_id,
+            database_url,
+            "agent_sessions",
+            "agent_messages",
+            Some(session_settings),
+        )
+        .await
+    }
+
+    pub async fn open_with_options(
+        session_id: impl Into<String>,
+        database_url: &str,
+        sessions_table: impl Into<String>,
+        messages_table: impl Into<String>,
+        session_settings: Option<SessionSettings>,
+    ) -> Result<Self> {
+        let inner = SQLiteSession::open_with_options(
+            session_id,
+            database_url,
+            sessions_table,
+            messages_table,
+            session_settings,
+        )
+        .await?;
+        Ok(Self {
+            database_url: database_url.to_owned(),
+            inner,
+        })
+    }
 }
 
 #[async_trait]
@@ -67,5 +119,43 @@ impl Session for AsyncSQLiteSession {
 impl OpenAIResponsesCompactionAwareSession for AsyncSQLiteSession {
     async fn run_compaction(&self, args: Option<OpenAIResponsesCompactionArgs>) -> Result<()> {
         self.inner.run_compaction(args).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use agents_core::{InputItem, Session, SessionSettings};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn get_items_uses_configured_session_settings_limit() {
+        let session = AsyncSQLiteSession::open_in_memory_with_settings(
+            "async-settings-limit",
+            SessionSettings { limit: Some(2) },
+        )
+        .await
+        .expect("session should open");
+
+        session
+            .add_items(vec![
+                InputItem::from("one"),
+                InputItem::from("two"),
+                InputItem::from("three"),
+            ])
+            .await
+            .expect("items should store");
+
+        let default_limited = session.get_items().await.expect("items should load");
+        assert_eq!(
+            default_limited,
+            vec![InputItem::from("two"), InputItem::from("three")]
+        );
+
+        let explicit_limited = session
+            .get_items_with_limit(Some(1))
+            .await
+            .expect("items should load");
+        assert_eq!(explicit_limited, vec![InputItem::from("three")]);
     }
 }
