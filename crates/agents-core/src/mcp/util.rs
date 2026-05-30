@@ -176,8 +176,10 @@ impl MCPUtil {
             definition.description = format!("{title}: {}", definition.description);
         }
         if let Some(schema) = &tool.input_schema {
-            let strict = crate::strict_schema::ensure_strict_json_schema(schema.clone())?;
-            definition = definition.with_input_json_schema(strict);
+            let (input_schema, strict_json_schema) =
+                strict_or_fallback_mcp_input_schema(&tool.name, schema);
+            definition = definition.with_input_json_schema(input_schema);
+            definition.strict_json_schema = strict_json_schema;
         }
         if let Some(namespace) = &tool.namespace {
             definition = definition.with_namespace(namespace.clone());
@@ -317,6 +319,29 @@ impl MCPUtil {
     }
 }
 
+fn strict_or_fallback_mcp_input_schema(tool_name: &str, schema: &Value) -> (Value, bool) {
+    let mut fallback = schema.clone();
+    if fallback
+        .as_object()
+        .is_some_and(|object| !object.contains_key("properties"))
+        && let Some(object) = fallback.as_object_mut()
+    {
+        object.insert("properties".to_owned(), serde_json::json!({}));
+    }
+
+    match crate::strict_schema::ensure_strict_json_schema(fallback.clone()) {
+        Ok(strict) => (strict, true),
+        Err(error) => {
+            log::info!(
+                target: crate::LOGGER_TARGET,
+                "error converting MCP tool `{tool_name}` schema to strict mode: {}",
+                error.message
+            );
+            (fallback, false)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
@@ -418,6 +443,41 @@ mod tests {
             .await
             .expect("tool should run");
         assert!(matches!(output, ToolOutput::Text(_)));
+    }
+
+    #[test]
+    fn failed_mcp_strict_conversion_keeps_original_schema() {
+        let server = Arc::new(FakeServer {
+            state: Arc::new(FakeServerState::default()),
+        }) as Arc<dyn MCPServer>;
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "x": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        });
+        let tool = MCPTool {
+            name: "lookup".to_owned(),
+            input_schema: Some(schema.clone()),
+            ..MCPTool::default()
+        };
+
+        let function_tool = MCPUtil::to_function_tool(
+            server,
+            &tool,
+            None,
+            RunContextWrapper::new(RunContext::default()),
+        )
+        .expect("non-strict fallback should keep tool conversion successful");
+
+        assert!(!function_tool.definition.strict_json_schema);
+        assert_eq!(
+            function_tool.definition.input_json_schema.as_ref(),
+            Some(&schema)
+        );
     }
 
     #[tokio::test]
