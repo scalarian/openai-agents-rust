@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use openai_agents::{
     Agent, AgentsError, FunctionTool, InputItem, Model, ModelProvider, ModelRequest, ModelResponse,
     ModelSettings, OutputItem, Result as AgentsResult, RunItem, RunResult, Runner, ToolContext,
-    Usage, function_tool, tool_qualified_name, tool_search_tool,
+    Usage, function_tool, tool_search_tool, tool_trace_name,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -60,7 +60,7 @@ impl Model for ToolSearchModel {
                     call_id: "call-shipping-eta".to_owned(),
                     tool_name: "get_shipping_eta".to_owned(),
                     arguments: json!({"tracking_number": "ZX-123"}),
-                    namespace: None,
+                    namespace: Some("get_shipping_eta".to_owned()),
                 },
             ]
         } else if input_mentions(&request.input, "customer_42") {
@@ -371,7 +371,7 @@ fn print_result(title: &str, result: &RunResult, registered_paths: &[&str]) {
                 namespace,
                 ..
             } => {
-                let qualified = tool_qualified_name(tool_name, namespace.as_deref())
+                let qualified = tool_trace_name(tool_name, namespace.as_deref())
                     .unwrap_or_else(|| tool_name.clone());
                 println!("- tool_call: {qualified} {arguments}");
             }
@@ -381,7 +381,7 @@ fn print_result(title: &str, result: &RunResult, registered_paths: &[&str]) {
                 namespace,
                 ..
             } => {
-                let qualified = tool_qualified_name(tool_name, namespace.as_deref())
+                let qualified = tool_trace_name(tool_name, namespace.as_deref())
                     .unwrap_or_else(|| tool_name.clone());
                 println!("- tool_output: {qualified} {}", output_text(output));
             }

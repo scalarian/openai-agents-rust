@@ -1,3 +1,4 @@
+use crate::_tool_identity::is_reserved_synthetic_tool_namespace;
 use crate::agent::Agent;
 use crate::errors::Result;
 use crate::exceptions::{ModelBehaviorError, UserError};
@@ -197,10 +198,10 @@ async fn build_tool_execution_plans(
     let mut plans = Vec::new();
 
     for (order, tool_call) in tool_calls.into_iter().enumerate() {
-        let Some(function_tool) = runtime_tools.iter().find(|tool| {
-            tool.definition.name == tool_call.name
-                && tool.definition.namespace.as_deref() == tool_call.namespace.as_deref()
-        }) else {
+        let Some(function_tool) = runtime_tools
+            .iter()
+            .find(|tool| tool_matches_call(tool, &tool_call))
+        else {
             if run_config.tool_not_found_behavior == ToolNotFoundBehavior::ReturnErrorToModel {
                 let message =
                     resolve_tool_not_found_message(context, run_config, &tool_call).await?;
@@ -1128,8 +1129,21 @@ fn reject_disabled_function_tool_calls(
 }
 
 fn tool_matches_call(tool: &crate::tool::FunctionTool, tool_call: &ToolCall) -> bool {
-    tool.definition.name == tool_call.name
-        && tool.definition.namespace.as_deref() == tool_call.namespace.as_deref()
+    if tool.definition.name != tool_call.name {
+        return false;
+    }
+
+    let tool_namespace = tool.definition.namespace.as_deref();
+    let call_namespace = tool_call.namespace.as_deref();
+    if tool.definition.defer_loading && tool_namespace.is_none() {
+        return is_reserved_synthetic_tool_namespace(&tool_call.name, call_namespace);
+    }
+
+    if tool_namespace == call_namespace {
+        return true;
+    }
+
+    false
 }
 
 fn set_tool_error_on_span(
@@ -1235,12 +1249,15 @@ pub(crate) fn apply_tool_origins_to_run_items(
         if tool_origin.is_some() {
             continue;
         }
+        let tool_call = ToolCall {
+            id: String::new(),
+            name: tool_name.clone(),
+            arguments: String::new(),
+            namespace: namespace.clone(),
+        };
         *tool_origin = runtime_tools
             .iter()
-            .find(|tool| {
-                tool.definition.name == *tool_name
-                    && tool.definition.namespace.as_deref() == namespace.as_deref()
-            })
+            .find(|tool| tool_matches_call(tool, &tool_call))
             .and_then(get_function_tool_origin);
     }
 }
@@ -1594,6 +1611,88 @@ mod tests {
             "Tool `echo_tool` failed: Invalid JSON input for tool echo_tool"
         );
         assert!(!text.contains("SECRET_TOKEN_123"));
+    }
+
+    #[tokio::test]
+    async fn deferred_top_level_tool_call_matches_synthetic_namespace() {
+        let tool = function_tool(
+            "get_weather",
+            "Get weather",
+            |ctx: ToolContext, _args: serde_json::Value| async move {
+                Ok::<_, AgentsError>(format!(
+                    "{}|{}",
+                    ctx.qualified_tool_name(),
+                    ctx.tool_namespace.as_deref().unwrap_or_default()
+                ))
+            },
+        )
+        .expect("function tool should build")
+        .with_defer_loading(true);
+        let agent = Agent::builder("assistant").function_tool(tool).build();
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-weather".to_owned(),
+                name: "get_weather".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: Some("get_weather".to_owned()),
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("synthetic deferred namespace should execute");
+
+        let RunItem::ToolCallOutput {
+            output: OutputItem::Text { text },
+            namespace,
+            ..
+        } = &outcome.new_items[0]
+        else {
+            panic!("expected text tool-call output");
+        };
+        assert_eq!(text, "get_weather|get_weather");
+        assert_eq!(namespace.as_deref(), Some("get_weather"));
+    }
+
+    #[tokio::test]
+    async fn deferred_top_level_tool_call_requires_synthetic_namespace() {
+        let tool = function_tool(
+            "get_weather",
+            "Get weather",
+            |_ctx, _args: serde_json::Value| async move { Ok::<_, AgentsError>("should-not-run") },
+        )
+        .expect("function tool should build")
+        .with_defer_loading(true);
+        let agent = Agent::builder("assistant").function_tool(tool).build();
+
+        let error = match execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-weather".to_owned(),
+                name: "get_weather".to_owned(),
+                arguments: "{}".to_owned(),
+                namespace: None,
+            }],
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(_) => panic!("bare call should not resolve a deferred top-level tool"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("model requested unknown local function tool `get_weather`")
+        );
     }
 
     #[tokio::test]
