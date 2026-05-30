@@ -1,6 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agents_core::{AgentsError, InputItem, Result, Session, SessionSettings};
+use agents_core::{
+    AgentsError, InputItem, Result, Session, SessionSettings, memory::resolve_session_limit,
+};
 use async_trait::async_trait;
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
@@ -61,14 +63,36 @@ where
     }
 
     async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
-        let items = self.inner.get_items_with_limit(limit).await?;
-        let mut decrypted = Vec::new();
-        for item in items {
-            if let Some(value) = self.try_decrypt_item(item)? {
-                decrypted.push(value);
+        let effective_limit = resolve_session_limit(limit, self.session_settings());
+        if let Some(effective_limit) = effective_limit {
+            if effective_limit == 0 {
+                return Ok(Vec::new());
+            }
+
+            let mut window = effective_limit;
+            loop {
+                let items = self.inner.get_items_with_limit(Some(window)).await?;
+                let item_count = items.len();
+                let decrypted = self.decrypt_valid_items(items)?;
+                if decrypted.len() >= effective_limit {
+                    return Ok(decrypted[decrypted.len() - effective_limit..].to_vec());
+                }
+                if item_count < window {
+                    return Ok(decrypted);
+                }
+                let Some(next_window) = window.checked_mul(2) else {
+                    let items = self.inner.get_items_with_limit(None).await?;
+                    let decrypted = self.decrypt_valid_items(items)?;
+                    return Ok(
+                        decrypted[decrypted.len().saturating_sub(effective_limit)..].to_vec()
+                    );
+                };
+                window = next_window;
             }
         }
-        Ok(decrypted)
+
+        let items = self.inner.get_items_with_limit(None).await?;
+        self.decrypt_valid_items(items)
     }
 
     async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -100,6 +124,16 @@ impl<S> EncryptedSession<S>
 where
     S: Session + Send + Sync,
 {
+    fn decrypt_valid_items(&self, items: Vec<InputItem>) -> Result<Vec<InputItem>> {
+        let mut decrypted = Vec::new();
+        for item in items {
+            if let Some(value) = self.try_decrypt_item(item)? {
+                decrypted.push(value);
+            }
+        }
+        Ok(decrypted)
+    }
+
     fn encrypt_item(&self, item: InputItem, nonce: u64) -> Result<InputItem> {
         let _ = nonce;
         let plaintext =
@@ -252,7 +286,7 @@ fn decode_hex_nibble(value: u8) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
-    use agents_core::MemorySession;
+    use agents_core::{MemorySession, SessionSettings};
     use serde_json::json;
 
     use super::*;
@@ -307,5 +341,62 @@ mod tests {
         let session = EncryptedSession::new(inner, "secret");
         let items = session.get_items().await.expect("items should decrypt");
         assert_eq!(items, vec![InputItem::from("hello legacy")]);
+    }
+
+    #[tokio::test]
+    async fn limit_counts_valid_items_after_expired_envelopes() {
+        let inner = MemorySession::new("session");
+        let session = EncryptedSession::new(inner.clone(), "secret").with_ttl_seconds(1);
+        session
+            .add_items(vec![InputItem::from("older valid")])
+            .await
+            .expect("valid item should save");
+
+        let mut expired = session
+            .encrypt_item(InputItem::from("expired"), 0)
+            .expect("expired fixture should encrypt");
+        if let InputItem::Json { value } = &mut expired {
+            value["created_at_ms"] = json!(0);
+        }
+        inner
+            .add_items(vec![expired])
+            .await
+            .expect("expired item should save");
+
+        let all_items = session.get_items().await.expect("all items should decrypt");
+        assert_eq!(all_items, vec![InputItem::from("older valid")]);
+
+        let limited = session
+            .get_items_with_limit(Some(1))
+            .await
+            .expect("limited items should decrypt");
+        assert_eq!(limited, vec![InputItem::from("older valid")]);
+    }
+
+    #[tokio::test]
+    async fn session_settings_limit_counts_valid_items_after_expired_envelopes() {
+        let inner = MemorySession::new("session").with_settings(SessionSettings { limit: Some(2) });
+        let session = EncryptedSession::new(inner.clone(), "secret").with_ttl_seconds(1);
+        session
+            .add_items(vec![InputItem::from("valid 0"), InputItem::from("valid 1")])
+            .await
+            .expect("valid items should save");
+
+        let mut expired = session
+            .encrypt_item(InputItem::from("expired"), 0)
+            .expect("expired fixture should encrypt");
+        if let InputItem::Json { value } = &mut expired {
+            value["created_at_ms"] = json!(0);
+        }
+        inner
+            .add_items(vec![expired])
+            .await
+            .expect("expired item should save");
+
+        let items = session.get_items().await.expect("items should decrypt");
+        assert_eq!(
+            items,
+            vec![InputItem::from("valid 0"), InputItem::from("valid 1")]
+        );
     }
 }
