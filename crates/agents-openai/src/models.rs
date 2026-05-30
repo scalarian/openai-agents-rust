@@ -459,9 +459,7 @@ impl Model for OpenAIResponsesWsModel {
                         payload
                     )));
                 }
-                Some("response.completed")
-                | Some("response.failed")
-                | Some("response.incomplete") => {
+                Some("response.completed") => {
                     let response_payload = payload.get("response").ok_or_else(|| {
                         AgentsError::message(
                             "responses websocket terminal event omitted response payload",
@@ -482,10 +480,43 @@ impl Model for OpenAIResponsesWsModel {
                         request_id,
                     ));
                 }
+                Some("response.failed") | Some("response.incomplete") => {
+                    let event_type = payload
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    return Err(AgentsError::message(format_response_terminal_failure(
+                        event_type,
+                        payload.get("response"),
+                    )));
+                }
                 _ => continue,
             }
         }
     }
+}
+
+fn format_response_terminal_failure(event_type: &str, response: Option<&Value>) -> String {
+    let mut message = format!("Responses stream ended with terminal event `{event_type}`.");
+    let Some(response) = response else {
+        return message;
+    };
+
+    let mut details = Vec::new();
+    if let Some(status) = response.get("status").and_then(Value::as_str) {
+        details.push(format!("status={status}"));
+    }
+    if let Some(error) = response.get("error") {
+        details.push(format!("error={error}"));
+    }
+    if let Some(incomplete_details) = response.get("incomplete_details") {
+        details.push(format!("incomplete_details={incomplete_details}"));
+    }
+
+    if !details.is_empty() {
+        message = format!("{message} {}.", details.join("; "));
+    }
+    message
 }
 
 fn make_websocket_ping_interval(
@@ -2087,5 +2118,71 @@ mod tests {
                 .any(|(name, value)| name.eq_ignore_ascii_case("x-test-header")
                     && value == "present")
         );
+    }
+
+    #[tokio::test]
+    async fn websocket_model_rejects_failed_terminal_response_event() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("socket should accept");
+            let mut ws_stream = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("websocket handshake should succeed");
+
+            ws_stream
+                .next()
+                .await
+                .expect("request frame should arrive")
+                .expect("request frame should be readable");
+            ws_stream
+                .send(Message::Text(
+                    json!({
+                        "type": "response.failed",
+                        "response": {
+                            "id": "resp_failed_123",
+                            "status": "failed",
+                            "error": {
+                                "code": "rate_limit_exceeded",
+                                "message": "try later"
+                            }
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("failed terminal event should send");
+        });
+
+        let model = OpenAIResponsesWsModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned()))
+                .with_base_url("http://127.0.0.1:1")
+                .with_websocket_base_url(format!("ws://{address}")),
+        );
+
+        let error = model
+            .generate(ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .await
+            .expect_err("failed terminal event should reject the response");
+
+        server.await.expect("server task should finish");
+        let message = error.to_string();
+        assert!(message.contains("response.failed"));
+        assert!(message.contains("status=failed"));
+        assert!(message.contains("rate_limit_exceeded"));
     }
 }
