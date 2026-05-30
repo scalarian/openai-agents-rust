@@ -12,6 +12,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | agents as tools conditional | dynamically enabled agent tools | [agents_as_tools_conditional.rs](../crates/openai-agents/examples/agents_as_tools_conditional.rs) |
 | agents as tools streaming | stream events emitted by a nested agent tool | [agents_as_tools_streaming.rs](../crates/openai-agents/examples/agents_as_tools_streaming.rs) |
 | agents as tools structured | structured input for agent-as-tool calls | [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs) |
+| advanced sqlite session example | upstream-named advanced SQLite session entry point | [advanced_sqlite_session_example.rs](../crates/openai-agents/examples/advanced_sqlite_session_example.rs) |
 | advanced sqlite session | extension SQLite session with custom table names and tool history | [advanced_sqlite_session.rs](../crates/openai-agents/examples/advanced_sqlite_session.rs) |
 | async sqlite session | async-friendly extension wrapper over SQLite-backed session memory | [async_sqlite_session.rs](../crates/openai-agents/examples/async_sqlite_session.rs) |
 | auto mode | deterministic fallback inputs and confirmations for automated example runs | [auto_mode.rs](../crates/openai-agents/examples/auto_mode.rs) |
