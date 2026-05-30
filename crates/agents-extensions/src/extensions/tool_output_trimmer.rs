@@ -174,8 +174,9 @@ impl ToolOutputTrimmer {
 
     fn trim_function_call_output(&self, item: &Value, tool_names: &[String]) -> Option<InputItem> {
         let output = item.get("output").cloned().unwrap_or(Value::Null);
-        let output_str = self.serialize_json_like(&output);
-        if output_str.len() <= self.max_output_chars {
+        let output_str = self.output_to_string(&output);
+        let output_chars = output_str.chars().count();
+        if output_chars <= self.max_output_chars {
             return None;
         }
 
@@ -189,10 +190,9 @@ impl ToolOutputTrimmer {
             .collect::<String>();
         let summary = format!(
             "[Trimmed: {tool_name} output - {} chars -> {} char preview]\n{preview}...",
-            output_str.len(),
-            self.preview_chars
+            output_chars, self.preview_chars
         );
-        if summary.len() >= output_str.len() {
+        if summary.chars().count() >= output_chars {
             return None;
         }
 
@@ -207,14 +207,22 @@ impl ToolOutputTrimmer {
         let mut trimmed = item.as_object()?.clone();
         if let Some(results) = item.get("results") {
             let serialized = self.serialize_json_like(results);
-            if serialized.len() <= self.max_output_chars {
+            let serialized_chars = serialized.chars().count();
+            if serialized_chars <= self.max_output_chars {
                 return None;
             }
             let preview = serialized
                 .chars()
                 .take(self.preview_chars)
                 .collect::<String>();
-            trimmed.insert("results".to_owned(), json!([{ "text": preview }]));
+            let summary = format!(
+                "[Trimmed: tool_search output - {} chars -> {} char preview]\n{preview}...",
+                serialized_chars, self.preview_chars
+            );
+            if summary.chars().count() >= serialized_chars {
+                return None;
+            }
+            trimmed.insert("results".to_owned(), json!([{ "text": summary }]));
             return Some(InputItem::Json {
                 value: Value::Object(trimmed),
             });
@@ -222,7 +230,8 @@ impl ToolOutputTrimmer {
 
         let tools = item.get("tools")?.as_array()?;
         let original = self.serialize_json_like(&Value::Array(tools.clone()));
-        if original.len() <= self.max_output_chars {
+        let original_chars = original.chars().count();
+        if original_chars <= self.max_output_chars {
             return None;
         }
 
@@ -230,6 +239,10 @@ impl ToolOutputTrimmer {
             .iter()
             .map(|tool| self.trim_tool_search_tool(tool))
             .collect::<Vec<_>>();
+        let trimmed_serialized = self.serialize_json_like(&Value::Array(trimmed_tools.clone()));
+        if trimmed_serialized.chars().count() >= original_chars {
+            return None;
+        }
         trimmed.insert("tools".to_owned(), Value::Array(trimmed_tools));
         Some(InputItem::Json {
             value: Value::Object(trimmed),
@@ -311,6 +324,13 @@ impl ToolOutputTrimmer {
         trimmed
     }
 
+    fn output_to_string(&self, value: &Value) -> String {
+        match value {
+            Value::String(text) => text.clone(),
+            _ => self.serialize_json_like(value),
+        }
+    }
+
     fn serialize_json_like(&self, value: &Value) -> String {
         serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
     }
@@ -327,6 +347,10 @@ fn extract_tool_names(value: &Value) -> Vec<String> {
     let mut names = Vec::new();
     if let Some(name) = name {
         if let Some(namespace) = namespace {
+            if namespace == name {
+                names.push(name);
+                return names;
+            }
             names.push(format!("{namespace}.{name}"));
         }
         names.push(name);
@@ -491,5 +515,166 @@ mod tests {
                 .expect("short output should be text"),
             large
         );
+    }
+
+    #[test]
+    fn synthetic_same_name_namespace_uses_bare_display_name() {
+        let large = "x".repeat(1000);
+        let trimmer = ToolOutputTrimmer {
+            trimmable_tools: Some(BTreeSet::from(["get_weather".to_owned()])),
+            ..ToolOutputTrimmer::default()
+        };
+        let data = CallModelData {
+            model_data: ModelInputData {
+                input: vec![
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"older"}),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"function_call",
+                            "call_id":"call-weather",
+                            "name":"get_weather",
+                            "namespace":"get_weather"
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"function_call_output",
+                            "call_id":"call-weather",
+                            "output": large
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"middle"}),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"recent"}),
+                    },
+                ],
+                instructions: None,
+            },
+            agent: Agent::builder("assistant").build(),
+            context: None::<()>,
+        };
+
+        let trimmed = trimmer.apply(&data).expect("trimmer should succeed");
+        let InputItem::Json { value } = &trimmed.input[2] else {
+            panic!("expected output item");
+        };
+        let output = value
+            .get("output")
+            .and_then(Value::as_str)
+            .expect("trimmed output should be text");
+        assert!(output.contains("get_weather output"));
+        assert!(!output.contains("get_weather.get_weather"));
+    }
+
+    #[test]
+    fn legacy_tool_search_results_use_trimmed_summary() {
+        let large = "x".repeat(2000);
+        let trimmer = ToolOutputTrimmer {
+            max_output_chars: 400,
+            preview_chars: 80,
+            ..ToolOutputTrimmer::default()
+        };
+        let data = CallModelData {
+            model_data: ModelInputData {
+                input: vec![
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"older"}),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"tool_search_call",
+                            "call_id":"tool-search-1",
+                            "arguments":{"query":"profile"}
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"tool_search_output",
+                            "call_id":"tool-search-1",
+                            "results":[{"text": large}]
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"middle"}),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"recent"}),
+                    },
+                ],
+                instructions: None,
+            },
+            agent: Agent::builder("assistant").build(),
+            context: None::<()>,
+        };
+
+        let trimmed = trimmer.apply(&data).expect("trimmer should succeed");
+        let InputItem::Json { value } = &trimmed.input[2] else {
+            panic!("expected output item");
+        };
+        let summary = value
+            .get("results")
+            .and_then(Value::as_array)
+            .and_then(|results| results.first())
+            .and_then(|result| result.get("text"))
+            .and_then(Value::as_str)
+            .expect("trimmed search output should keep text result");
+        assert!(summary.starts_with("[Trimmed: tool_search output"));
+    }
+
+    #[test]
+    fn tool_search_definitions_are_left_untouched_without_savings() {
+        let trimmer = ToolOutputTrimmer {
+            max_output_chars: 1,
+            preview_chars: 200,
+            ..ToolOutputTrimmer::default()
+        };
+        let tool = json!({
+            "type":"function",
+            "name":"lookup_account",
+            "description":"short",
+            "parameters":{"type":"object"}
+        });
+        let data = CallModelData {
+            model_data: ModelInputData {
+                input: vec![
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"older"}),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"tool_search_call",
+                            "call_id":"tool-search-1",
+                            "arguments":{"query":"profile"}
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({
+                            "type":"tool_search_output",
+                            "call_id":"tool-search-1",
+                            "tools":[tool.clone()]
+                        }),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"middle"}),
+                    },
+                    InputItem::Json {
+                        value: json!({"role":"user","content":"recent"}),
+                    },
+                ],
+                instructions: None,
+            },
+            agent: Agent::builder("assistant").build(),
+            context: None::<()>,
+        };
+
+        let result = trimmer.apply(&data).expect("trimmer should succeed");
+        let InputItem::Json { value } = &result.input[2] else {
+            panic!("expected output item");
+        };
+        assert_eq!(value.get("tools"), Some(&json!([tool])));
     }
 }
