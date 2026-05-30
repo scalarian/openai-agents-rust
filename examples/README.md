@@ -14,6 +14,7 @@ cargo run -p openai-agents-rs --example agents_as_tools_structured
 cargo run -p openai-agents-rs --example basic_run
 cargo run -p openai-agents-rs --example code_interpreter
 cargo run -p openai-agents-rs --example compaction_session
+cargo run -p openai-agents-rs --example compaction_session_stateless
 cargo run -p openai-agents-rs --example custom_agent_model
 cargo run -p openai-agents-rs --example custom_model_provider
 cargo run -p openai-agents-rs --example default_model_provider
@@ -70,6 +71,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `basic_run` | the smallest end-to-end facade call | [docs/quickstart.md](../docs/quickstart.md) |
 | `code_interpreter` | hosted code interpreter tool configuration and streamed call items | [docs/tools.md](../docs/tools.md) |
 | `compaction_session` | automatic and manual OpenAI Responses session compaction | [docs/sessions/README.md](../docs/sessions/README.md) |
+| `compaction_session_stateless` | auto compaction for `store=false` Responses runs | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `custom_agent_model` | per-agent model name resolved by a custom provider | [docs/models/providers.md](../docs/models/providers.md) |
 | `custom_model_provider` | per-run custom model provider selection | [docs/models/providers.md](../docs/models/providers.md) |
 | `default_model_provider` | global default runner model provider | [docs/models/providers.md](../docs/models/providers.md) |

@@ -7,7 +7,7 @@ Use this section when you want state to survive across turns, runs, or process b
 - [memory.md](memory.md): in-memory and SQLite-backed session basics
 - [openai.md](openai.md): OpenAI conversation-aware sessions and compaction
 
-The runnable [compaction_session.rs](../../crates/openai-agents/examples/compaction_session.rs) example shows automatic and manual OpenAI Responses compaction.
+The runnable [compaction_session.rs](../../crates/openai-agents/examples/compaction_session.rs) and [compaction_session_stateless.rs](../../crates/openai-agents/examples/compaction_session_stateless.rs) examples show automatic, manual, and `store=false` OpenAI Responses compaction.
 
 ## What Sessions Are For
 
