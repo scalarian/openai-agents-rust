@@ -2178,6 +2178,7 @@ Use this section when you want state to survive across turns, runs, or process b
 
 ## In This Section
 
+- [index.md](index.md): upstream-compatible entry point for this section
 - [memory.md](memory.md): in-memory and SQLite-backed session basics
 - [openai.md](openai.md): OpenAI conversation-aware sessions and compaction
 - [advanced_sqlite_session.md](advanced_sqlite_session.md): extension SQLite sessions with custom database URLs and table names
@@ -2326,6 +2327,24 @@ Content-based queries on the underlying session see encrypted envelopes, not pla
 - [README.md](README.md)
 - [memory.md](memory.md)
 - [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [sqlalchemy_session.md](sqlalchemy_session.md)
+
+
+## sessions/index.md
+
+# Sessions Index
+
+The canonical Rust sessions guide is [README.md](README.md).
+
+This file exists for path parity with upstream docs that link to `sessions/index.md`.
+
+## Read Next
+
+- [README.md](README.md)
+- [memory.md](memory.md)
+- [openai.md](openai.md)
+- [advanced_sqlite_session.md](advanced_sqlite_session.md)
+- [encrypted_session.md](encrypted_session.md)
 - [sqlalchemy_session.md](sqlalchemy_session.md)
 
 

@@ -4,6 +4,7 @@ Use this section when you want state to survive across turns, runs, or process b
 
 ## In This Section
 
+- [index.md](index.md): upstream-compatible entry point for this section
 - [memory.md](memory.md): in-memory and SQLite-backed session basics
 - [openai.md](openai.md): OpenAI conversation-aware sessions and compaction
 - [advanced_sqlite_session.md](advanced_sqlite_session.md): extension SQLite sessions with custom database URLs and table names

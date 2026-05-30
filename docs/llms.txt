@@ -78,6 +78,8 @@ Compact export of the markdown docs tree.
   `AdvancedSQLiteSession` is an extension session for SQLite-backed local conversation state with configurable database URLs and table names.
 - sessions/encrypted_session.md: Encrypted Sessions
   `EncryptedSession` wraps any session implementation and stores encrypted envelopes in the underlying session. Reads decrypt valid envelopes back into normal input items before replay.
+- sessions/index.md: Sessions Index
+  The canonical Rust sessions guide is [README.md](README.md).
 - sessions/memory.md: Memory And SQLite Sessions
   Use this page when you need a local session backend without OpenAI-specific conversation semantics.
 - sessions/openai.md: OpenAI Sessions
