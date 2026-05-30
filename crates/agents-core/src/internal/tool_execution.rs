@@ -1308,11 +1308,12 @@ async fn resolve_function_tool_error_output(
     kind: &'static str,
     default_message: String,
 ) -> Result<Option<ToolOutput>> {
+    let tool_name = tool_call_display_name(tool_call);
     if let Some(formatter) = &run_config.tool_error_formatter {
         return formatter(ToolErrorFormatterArgs {
             kind,
             tool_type: "function",
-            tool_name: tool_call.name.clone(),
+            tool_name,
             call_id: tool_call.id.clone(),
             default_message,
             run_context: context.clone(),
@@ -1324,7 +1325,7 @@ async fn resolve_function_tool_error_output(
     let args = ToolErrorFormatterArgs {
         kind,
         tool_type: "function",
-        tool_name: tool_call.name.clone(),
+        tool_name,
         call_id: tool_call.id.clone(),
         default_message,
         run_context: context.clone(),
@@ -1952,6 +1953,41 @@ mod tests {
             &["billing.lookup_account denied call-billing"],
         );
         assert_eq!(invocations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn function_tool_error_output_uses_qualified_display_name() {
+        let mut tool = function_tool(
+            "lookup_account",
+            "Lookup",
+            |_ctx, _args: serde_json::Value| async move { Ok::<_, AgentsError>("should-not-run") },
+        )
+        .expect("function tool should build");
+        tool.definition.namespace = Some("billing".to_owned());
+        let agent = Agent::builder("assistant").function_tool(tool).build();
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &RunContextWrapper::new(RunContext::default()),
+            vec![ToolCall {
+                id: "call-billing".to_owned(),
+                name: "lookup_account".to_owned(),
+                arguments: "[]".to_owned(),
+                namespace: Some("billing".to_owned()),
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("invalid JSON should be returned to the model by default");
+
+        assert_tool_text_outputs(
+            &outcome.new_items,
+            &[
+                "Tool `billing.lookup_account` failed: Invalid JSON input for tool lookup_account: expected a JSON object",
+            ],
+        );
     }
 
     #[tokio::test]
