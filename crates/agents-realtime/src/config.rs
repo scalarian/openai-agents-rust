@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use agents_core::tool::ToolDefinition;
+
 use crate::RealtimeAudioFormat;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -415,6 +417,41 @@ impl RealtimeModelTracingConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeSessionTool {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+impl RealtimeSessionTool {
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: Value,
+    ) -> Self {
+        Self {
+            kind: "function".to_owned(),
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+
+    pub fn from_tool_definition(definition: &ToolDefinition) -> Self {
+        Self::function(
+            definition.name.clone(),
+            definition.description.clone(),
+            definition
+                .input_json_schema
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({})),
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeSessionModelSettings {
     pub model_name: Option<String>,
@@ -431,6 +468,8 @@ pub struct RealtimeSessionModelSettings {
     pub input_audio_noise_reduction: Option<RealtimeInputAudioNoiseReductionConfig>,
     pub turn_detection: Option<RealtimeTurnDetectionConfig>,
     pub tool_choice: Option<String>,
+    pub parallel_tool_calls: Option<bool>,
+    pub tools: Option<Vec<RealtimeSessionTool>>,
     pub tracing: Option<RealtimeModelTracingConfig>,
     #[serde(skip)]
     pub clear_voice: bool,
@@ -576,6 +615,8 @@ impl RealtimeSessionModelSettings {
                 .tool_choice
                 .clone()
                 .or_else(|| self.tool_choice.clone()),
+            parallel_tool_calls: update.parallel_tool_calls.or(self.parallel_tool_calls),
+            tools: update.tools.clone().or_else(|| self.tools.clone()),
             tracing: match (&self.tracing, &update.tracing) {
                 (Some(current), Some(next)) => Some(current.merge(next)),
                 (None, Some(next)) => Some(next.clone()),

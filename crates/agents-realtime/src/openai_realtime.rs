@@ -262,6 +262,18 @@ impl OpenAIRealtimeWebSocketModel {
         if let Some(tool_choice) = &settings.tool_choice {
             session.insert("tool_choice".to_owned(), Value::String(tool_choice.clone()));
         }
+        if let Some(parallel_tool_calls) = settings.parallel_tool_calls {
+            session.insert(
+                "parallel_tool_calls".to_owned(),
+                Value::Bool(parallel_tool_calls),
+            );
+        }
+        if let Some(tools) = &settings.tools {
+            session.insert(
+                "tools".to_owned(),
+                serde_json::to_value(tools).unwrap_or(Value::Null),
+            );
+        }
         if let Some(tracing) = settings.tracing.as_ref().and_then(Self::config_payload) {
             session.insert("tracing".to_owned(), tracing);
         }
@@ -629,6 +641,35 @@ mod tests {
 
         let payload = model.session_payload_from_settings(&RealtimeSessionModelSettings::default());
         assert!(payload.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn session_payload_passes_tools_and_parallel_tool_calls() {
+        let model = OpenAIRealtimeWebSocketModel::default();
+        let payload = model.session_payload_from_settings(&RealtimeSessionModelSettings {
+            parallel_tool_calls: Some(false),
+            tools: Some(vec![crate::RealtimeSessionTool::function(
+                "lookup_faq",
+                "Lookup airline FAQs.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string" }
+                    },
+                    "required": ["question"],
+                    "additionalProperties": false
+                }),
+            )]),
+            ..RealtimeSessionModelSettings::default()
+        });
+
+        assert_eq!(
+            payload.get("parallel_tool_calls"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(payload["tools"][0]["type"], "function");
+        assert_eq!(payload["tools"][0]["name"], "lookup_faq");
+        assert_eq!(payload["tools"][0]["parameters"]["required"][0], "question");
     }
 
     #[tokio::test]

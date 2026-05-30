@@ -28,9 +28,7 @@ impl RealtimeRunner {
 
     pub async fn run(&self) -> Result<RealtimeSession> {
         let mut effective_agent = self.agent.clone();
-        if self.config.model_settings.is_some() {
-            effective_agent.model_settings = self.config.model_settings.clone();
-        }
+        effective_agent.model_settings = Some(self.model_settings_for_agent(&effective_agent));
         let model_name = self
             .config
             .model_settings
@@ -54,10 +52,29 @@ impl RealtimeRunner {
             }))
             .await;
         session.connect(Some(effective_agent.clone())).await?;
-        if effective_agent.model_settings.is_some() {
-            session.update_agent(effective_agent).await?;
-        }
+        session.update_agent(effective_agent).await?;
         Ok(session)
+    }
+
+    fn model_settings_for_agent(
+        &self,
+        agent: &RealtimeAgent,
+    ) -> crate::config::RealtimeSessionModelSettings {
+        let mut settings = agent.model_settings.clone().unwrap_or_default();
+        if settings.instructions.is_none() {
+            settings.instructions = agent.instructions.clone();
+        }
+
+        let session_tools = agent.session_tools();
+        if settings.tools.is_none() {
+            settings.tools = Some(session_tools);
+        }
+
+        if let Some(update) = &self.config.model_settings {
+            settings = settings.merge(update);
+        }
+
+        settings.normalize_effective()
     }
 
     pub async fn run_text_turn(

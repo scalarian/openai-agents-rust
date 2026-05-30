@@ -24,7 +24,7 @@ pub use config::{
     RealtimeClientMessage, RealtimeCustomVoice, RealtimeGuardrailsSettings,
     RealtimeInputAudioNoiseReductionConfig, RealtimeInputAudioTranscriptionConfig,
     RealtimeMaxOutputTokens, RealtimeModelTracingConfig, RealtimeRunConfig,
-    RealtimeSessionModelSettings, RealtimeTurnDetectionConfig, RealtimeVoice,
+    RealtimeSessionModelSettings, RealtimeSessionTool, RealtimeTurnDetectionConfig, RealtimeVoice,
 };
 pub use events::{
     RealtimeAgentEndEvent, RealtimeAgentStartEvent, RealtimeErrorEvent, RealtimeEvent,
@@ -32,7 +32,7 @@ pub use events::{
     RealtimeSessionClosedEvent, RealtimeSessionUpdatedEvent, RealtimeToolApprovalRequired,
     RealtimeToolEnd, RealtimeToolStart, RealtimeTranscriptDeltaEvent,
 };
-pub use handoffs::realtime_handoff;
+pub use handoffs::{IntoRealtimeHandoff, realtime_handoff, realtime_handoff_with_tool_name};
 pub use items::{
     AssistantAudio, AssistantMessageItem, AssistantText, InputAudio, InputImage, InputText,
     RealtimeItem, SystemMessageItem, ToolCallItem, ToolCallOutputItem, UserMessageItem,
@@ -77,6 +77,38 @@ mod tests {
         assert!(matches!(event, RealtimeEvent::TranscriptDelta(_)));
         assert_eq!(session.transcript().await, "hello");
         assert!(session.connected().await);
+    }
+
+    #[tokio::test]
+    async fn runner_projects_agent_tools_into_session_settings() {
+        let agent = RealtimeAgent::new("triage")
+            .with_instructions("Route airline support requests.")
+            .with_tool(agents_core::StaticTool::new(
+                "faq_lookup_tool",
+                "Lookup frequently asked questions.",
+            ))
+            .with_handoff(realtime_handoff_with_tool_name(
+                RealtimeAgent::new("Seat Booking Agent"),
+                "transfer_to_seat_booking_agent",
+            ));
+        let session = RealtimeRunner::new(agent)
+            .run()
+            .await
+            .expect("session should start");
+
+        let settings = session
+            .model_settings()
+            .await
+            .expect("settings should be applied");
+
+        assert_eq!(
+            settings.instructions.as_deref(),
+            Some("Route airline support requests.")
+        );
+        let tools = settings.tools.expect("tools should be projected");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "faq_lookup_tool");
+        assert_eq!(tools[1].name, "transfer_to_seat_booking_agent");
     }
 
     #[tokio::test]
