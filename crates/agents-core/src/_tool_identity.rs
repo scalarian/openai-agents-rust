@@ -127,7 +127,9 @@ pub fn get_function_tool_lookup_keys(definition: &ToolDefinition) -> Vec<Functio
     if let Some(key) =
         get_function_tool_lookup_key(&definition.name, definition.namespace.as_deref())
     {
-        if !matches!(key, FunctionToolLookupKey::DeferredTopLevel { .. }) {
+        if !(definition.defer_loading && definition.namespace.is_none())
+            && !matches!(key, FunctionToolLookupKey::DeferredTopLevel { .. })
+        {
             keys.push(key);
         }
     }
@@ -215,14 +217,61 @@ pub fn build_function_tool_lookup_map<'a, I>(
 where
     I: IntoIterator<Item = &'a ToolDefinition>,
 {
+    let tools = tools.into_iter().collect::<Vec<_>>();
+    validate_function_tool_lookup_configuration(&tools)?;
+
     let mut tool_map = HashMap::new();
     for definition in tools {
-        validate_function_tool_namespace_shape(&definition.name, definition.namespace.as_deref())?;
         for key in get_function_tool_lookup_keys(definition) {
             tool_map.insert(key, definition);
         }
     }
     Ok(tool_map)
+}
+
+fn validate_function_tool_lookup_configuration(
+    tools: &[&ToolDefinition],
+) -> std::result::Result<(), UserError> {
+    let mut qualified_name_owners: HashMap<String, Option<&str>> = HashMap::new();
+    let mut deferred_top_level_name_owners: HashMap<String, ()> = HashMap::new();
+
+    for definition in tools {
+        validate_function_tool_namespace_shape(&definition.name, definition.namespace.as_deref())?;
+
+        if definition.defer_loading && definition.namespace.is_none() {
+            let prior = deferred_top_level_name_owners.insert(definition.name.clone(), ());
+            if prior.is_some() {
+                return Err(UserError {
+                    message: format!(
+                        "ambiguous function tool configuration: the deferred top-level tool name `{}` is used by multiple tools",
+                        definition.name
+                    ),
+                });
+            }
+        }
+
+        let Some(qualified_name) = get_function_tool_qualified_name(definition) else {
+            continue;
+        };
+        let explicit_namespace = definition.namespace.as_deref();
+        let Some(prior_namespace) =
+            qualified_name_owners.insert(qualified_name.clone(), explicit_namespace)
+        else {
+            continue;
+        };
+
+        if explicit_namespace.is_none() && prior_namespace.is_none() {
+            continue;
+        }
+
+        return Err(UserError {
+            message: format!(
+                "ambiguous function tool configuration: the qualified name `{qualified_name}` is used by multiple tools"
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -254,6 +303,63 @@ mod tests {
         assert!(map.contains_key(&FunctionToolLookupKey::DeferredTopLevel {
             name: "search".to_owned(),
         }));
+        assert!(!map.contains_key(&FunctionToolLookupKey::Bare {
+            name: "search".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn deferred_top_level_lookup_keys_omit_bare_key() {
+        let tool = ToolDefinition::new("search", "Search").with_defer_loading(true);
+
+        assert_eq!(
+            get_function_tool_lookup_keys(&tool),
+            vec![FunctionToolLookupKey::DeferredTopLevel {
+                name: "search".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn lookup_map_rejects_duplicate_deferred_top_level_names() {
+        let first = ToolDefinition::new("search", "First").with_defer_loading(true);
+        let second = ToolDefinition::new("search", "Second").with_defer_loading(true);
+
+        let error = build_function_tool_lookup_map([&first, &second])
+            .expect_err("duplicate deferred tools should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("deferred top-level tool name `search`")
+        );
+    }
+
+    #[test]
+    fn lookup_map_rejects_dotted_top_level_namespace_collision() {
+        let top_level = ToolDefinition::new("crm.lookup", "Top-level lookup");
+        let namespaced = ToolDefinition::new("lookup", "Namespaced lookup").with_namespace("crm");
+
+        let error = build_function_tool_lookup_map([&top_level, &namespaced])
+            .expect_err("ambiguous qualified names should fail");
+
+        assert!(error.to_string().contains("qualified name `crm.lookup`"));
+    }
+
+    #[test]
+    fn lookup_map_allows_duplicate_bare_top_level_names_last_wins() {
+        let first = ToolDefinition::new("search", "First");
+        let second = ToolDefinition::new("search", "Second");
+        let map = build_function_tool_lookup_map([&first, &second])
+            .expect("duplicate bare top-level tools should keep last-wins behavior");
+
+        let owner = map
+            .get(&FunctionToolLookupKey::Bare {
+                name: "search".to_owned(),
+            })
+            .expect("bare lookup key should exist");
+
+        assert_eq!(owner.description, "Second");
     }
 
     #[test]
