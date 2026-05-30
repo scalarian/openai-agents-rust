@@ -30,6 +30,7 @@ cargo run -p openai-agents-rs --example file_search
 cargo run -p openai-agents-rs --example forcing_tool_use
 cargo run -p openai-agents-rs --example function_tools
 cargo run -p openai-agents-rs --example handoffs
+cargo run -p openai-agents-rs --example hosted_mcp
 cargo run -p openai-agents-rs --example human_in_the_loop
 cargo run -p openai-agents-rs --example human_in_the_loop_custom_rejection
 cargo run -p openai-agents-rs --example human_in_the_loop_stream
@@ -97,6 +98,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `forcing_tool_use` | required tool choice with stop-on-tool output | [docs/models/settings.md](../docs/models/settings.md) |
 | `function_tools` | typed local function tools with structured arguments | [docs/tools.md](../docs/tools.md) |
 | `handoffs` | control transfer between agents | [docs/handoffs.md](../docs/handoffs.md) |
+| `hosted_mcp` | hosted MCP tool payload configuration for Responses models | [docs/mcp.md](../docs/mcp.md) |
 | `human_in_the_loop` | approval-required tool calls with saved run state | [docs/human_in_the_loop.md](../docs/human_in_the_loop.md) |
 | `human_in_the_loop_custom_rejection` | custom model-visible rejection text for denied tool calls | [docs/human_in_the_loop.md](../docs/human_in_the_loop.md) |
 | `human_in_the_loop_stream` | streamed approval interruption and streamed resume | [docs/human_in_the_loop.md](../docs/human_in_the_loop.md) |
