@@ -84,6 +84,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | mcp streamable HTTP remote example | upstream-named MCP remote streamable HTTP entry point | [mcp_streamable_http_remote_example.rs](../crates/openai-agents/examples/mcp_streamable_http_remote_example.rs) |
 | mcp tool filter example | upstream-named MCP tool filter entry point | [mcp_tool_filter_example.rs](../crates/openai-agents/examples/mcp_tool_filter_example.rs) |
 | mcp tool filter | static MCP tool filtering before model-visible tool discovery | [mcp_tool_filter.rs](../crates/openai-agents/examples/mcp_tool_filter.rs) |
+| message filter | handoff input filtering that removes tool history | [message_filter.rs](../crates/openai-agents/examples/message_filter.rs) |
 | MongoDB session example | upstream-named MongoDB session entry point | [mongodb_session_example.rs](../crates/openai-agents/examples/mongodb_session_example.rs) |
 | mongodb session | MongoDB-backed extension session with shared client isolation | [mongodb_session.rs](../crates/openai-agents/examples/mongodb_session.rs) |
 | non-strict output type | structured output validation with non-strict and custom schemas | [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs) |
