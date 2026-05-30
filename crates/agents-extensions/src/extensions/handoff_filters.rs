@@ -7,6 +7,8 @@ fn is_filtered_run_item(item: &RunItem) -> bool {
         item,
         RunItem::ToolCall { .. }
             | RunItem::ToolCallOutput { .. }
+            | RunItem::CustomToolCall { .. }
+            | RunItem::CustomToolCallOutput { .. }
             | RunItem::HandoffCall { .. }
             | RunItem::HandoffOutput { .. }
             | RunItem::Reasoning { .. }
@@ -108,6 +110,16 @@ mod tests {
                 call_id: None,
                 namespace: None,
                 tool_origin: None,
+            },
+            RunItem::CustomToolCall {
+                tool_name: "raw_editor".to_owned(),
+                input: "hello".to_owned(),
+                call_id: Some("call-custom".to_owned()),
+            },
+            RunItem::CustomToolCallOutput {
+                output: "HELLO".to_owned(),
+                call_id: Some("call-custom".to_owned()),
+                tool_name: Some("raw_editor".to_owned()),
             },
             RunItem::Reasoning {
                 text: "thinking".to_owned(),
