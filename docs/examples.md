@@ -32,6 +32,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | default model provider | global default runner model provider | [default_model_provider.rs](../crates/openai-agents/examples/default_model_provider.rs) |
 | deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
 | dynamic system prompt | per-run agent instructions | [dynamic_system_prompt.rs](../crates/openai-agents/examples/dynamic_system_prompt.rs) |
+| encrypted session example | upstream-named encrypted session entry point | [encrypted_session_example.rs](../crates/openai-agents/examples/encrypted_session_example.rs) |
 | encrypted session | encrypted session wrapper over SQLite storage | [encrypted_session.rs](../crates/openai-agents/examples/encrypted_session.rs) |
 | file session | file-backed extension session rehydrated by session id | [file_session.rs](../crates/openai-agents/examples/file_session.rs) |
 | file search | hosted file search with vector store options and included results | [file_search.rs](../crates/openai-agents/examples/file_search.rs) |
