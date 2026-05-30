@@ -209,22 +209,25 @@ impl TraceProvider for DefaultTraceProvider {
         trace: Option<&Trace>,
         disabled: bool,
     ) -> Span {
+        let current_trace = self.get_current_trace();
+        let current_span = self.get_current_span();
+        let missing_active_trace = trace.is_none() && parent.is_none() && current_trace.is_none();
         let trace_id = trace
             .map(|trace| trace.id)
             .or_else(|| parent.map(|span| span.trace_id))
-            .or_else(|| self.get_current_trace().map(|trace| trace.id))
+            .or_else(|| current_trace.as_ref().map(|trace| trace.id))
             .unwrap_or_else(gen_trace_id);
         let metadata = trace
             .map(|trace| trace.metadata.clone())
             .or_else(|| parent.map(|span| span.metadata.clone()))
-            .or_else(|| self.get_current_trace().map(|trace| trace.metadata))
+            .or_else(|| current_trace.as_ref().map(|trace| trace.metadata.clone()))
             .unwrap_or_default();
         Span {
             id: span_id.unwrap_or_else(gen_span_id),
             trace_id,
             parent_id: parent
                 .map(|span| span.id)
-                .or_else(|| self.get_current_span().map(|span| span.id)),
+                .or_else(|| current_span.as_ref().map(|span| span.id)),
             metadata,
             name: name.to_owned(),
             started_at: None,
@@ -233,10 +236,11 @@ impl TraceProvider for DefaultTraceProvider {
             data: span_data,
             disabled: disabled
                 || *self.disabled.read().expect("trace disabled lock")
+                || missing_active_trace
                 || trace.is_some_and(|trace| trace.disabled)
                 || parent.is_some_and(|span| span.disabled)
-                || self.get_current_trace().is_some_and(|trace| trace.disabled)
-                || self.get_current_span().is_some_and(|span| span.disabled),
+                || current_trace.as_ref().is_some_and(|trace| trace.disabled)
+                || current_span.as_ref().is_some_and(|span| span.disabled),
         }
     }
 
@@ -286,5 +290,101 @@ impl TraceProvider for DefaultTraceProvider {
 
     fn force_flush(&self) {
         self.processors.force_flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use crate::tracing::scope::Scope;
+    use crate::tracing::span_data::AgentSpanData;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingProcessor {
+        spans: Mutex<Vec<Span>>,
+    }
+
+    impl TracingProcessor for RecordingProcessor {
+        fn on_trace_start(&self, _trace: &Trace) {}
+
+        fn on_trace_end(&self, _trace: &Trace) {}
+
+        fn on_span_start(&self, _span: &Span) {}
+
+        fn on_span_end(&self, span: &Span) {
+            self.spans
+                .lock()
+                .expect("recorded spans lock")
+                .push(span.clone());
+        }
+    }
+
+    fn agent_span_data(name: &str) -> SpanData {
+        SpanData::Agent(AgentSpanData {
+            name: name.to_owned(),
+            ..AgentSpanData::default()
+        })
+    }
+
+    #[test]
+    fn span_without_active_trace_is_disabled_and_not_exported() {
+        Scope::set_current_trace(None);
+        Scope::set_current_span(None);
+        let provider = DefaultTraceProvider::default();
+        let processor = Arc::new(RecordingProcessor::default());
+        provider.register_processor(processor.clone());
+
+        let mut span = provider.create_span(
+            "missing-trace",
+            agent_span_data("missing-trace"),
+            None,
+            None,
+            None,
+            false,
+        );
+
+        assert!(span.disabled);
+        provider.start_span(&mut span, true);
+        provider.finish_span(&mut span, true);
+
+        assert!(
+            processor
+                .spans
+                .lock()
+                .expect("recorded spans lock")
+                .is_empty()
+        );
+        assert!(provider.get_current_span().is_none());
+        Scope::set_current_trace(None);
+        Scope::set_current_span(None);
+    }
+
+    #[test]
+    fn span_with_current_trace_is_exported() {
+        Scope::set_current_trace(None);
+        Scope::set_current_span(None);
+        let provider = DefaultTraceProvider::default();
+        let processor = Arc::new(RecordingProcessor::default());
+        provider.register_processor(processor.clone());
+        let mut trace = provider.create_trace("active", None, None, None, None, false);
+        provider.start_trace(&mut trace, true);
+
+        let mut span =
+            provider.create_span("child", agent_span_data("child"), None, None, None, false);
+        provider.start_span(&mut span, true);
+        provider.finish_span(&mut span, true);
+        provider.finish_trace(&mut trace, true);
+
+        assert!(!span.disabled);
+        assert_eq!(span.trace_id, trace.id);
+        assert_eq!(
+            processor.spans.lock().expect("recorded spans lock").len(),
+            1
+        );
+        assert!(provider.get_current_trace().is_none());
+        assert!(provider.get_current_span().is_none());
     }
 }
