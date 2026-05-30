@@ -39,6 +39,12 @@ That makes them suitable for:
 - operator intervention
 - retry or fallback logic
 
+## Runnable Examples
+
+- [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs)
+- [output_guardrail.rs](../crates/openai-agents/examples/output_guardrail.rs)
+- [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs)
+
 ## Read Next
 
 - [tools.md](tools.md)
