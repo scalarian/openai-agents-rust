@@ -27,7 +27,7 @@ Keep approval prompts:
 
 The runtime already carries the call identity. Use that instead of inventing your own ad-hoc approval bookkeeping.
 
-Runnable version: [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs).
+Runnable versions: [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) for approval and resume, and [human_in_the_loop_custom_rejection.rs](../crates/openai-agents/examples/human_in_the_loop_custom_rejection.rs) for custom rejection text.
 
 ## Interruptions
 

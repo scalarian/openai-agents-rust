@@ -21,6 +21,7 @@ cargo run -p openai-agents-rs --example forcing_tool_use
 cargo run -p openai-agents-rs --example function_tools
 cargo run -p openai-agents-rs --example handoffs
 cargo run -p openai-agents-rs --example human_in_the_loop
+cargo run -p openai-agents-rs --example human_in_the_loop_custom_rejection
 cargo run -p openai-agents-rs --example image_tool_output
 cargo run -p openai-agents-rs --example input_guardrail
 cargo run -p openai-agents-rs --example lifecycle_hooks
@@ -64,6 +65,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `function_tools` | typed local function tools with structured arguments | [docs/tools.md](../docs/tools.md) |
 | `handoffs` | control transfer between agents | [docs/handoffs.md](../docs/handoffs.md) |
 | `human_in_the_loop` | approval-required tool calls with saved run state | [docs/human_in_the_loop.md](../docs/human_in_the_loop.md) |
+| `human_in_the_loop_custom_rejection` | custom model-visible rejection text for denied tool calls | [docs/human_in_the_loop.md](../docs/human_in_the_loop.md) |
 | `image_tool_output` | function tool returning an image output item | [docs/tools.md](../docs/tools.md) |
 | `input_guardrail` | tripwire handling before model execution | [docs/guardrails.md](../docs/guardrails.md) |
 | `lifecycle_hooks` | run and agent lifecycle callbacks | [docs/running_agents.md](../docs/running_agents.md) |
