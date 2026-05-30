@@ -128,6 +128,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | redis session example | upstream-named Redis session entry point | [redis_session_example.rs](../crates/openai-agents/examples/redis_session_example.rs) |
 | redis session | Redis-backed extension session with graceful availability check | [redis_session.rs](../crates/openai-agents/examples/redis_session.rs) |
 | retry | runner-managed model retry settings | [retry.rs](../crates/openai-agents/examples/retry.rs) |
+| retry LiteLLM | LiteLLM retry policy and backoff settings | [retry_litellm.rs](../crates/openai-agents/examples/retry_litellm.rs) |
 | routing | streamed triage handoff to a specialist agent | [routing.rs](../crates/openai-agents/examples/routing.rs) |
 | web search | hosted web search tool configuration | [web_search.rs](../crates/openai-agents/examples/web_search.rs) |
 | web search filters | hosted web search domain filters and source includes | [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) |
