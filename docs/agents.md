@@ -40,12 +40,15 @@ An agent is the runtime definition of:
 
 - `instructions(...)`
 - `dynamic_instructions(...)`
+- `prompt(...)`
+- `dynamic_prompt(...)`
 - `function_tool(...)`
 - `handoff(...)`
 - `output_schema(...)`
 - `hooks(...)`
 
 Use `dynamic_instructions(...)` when the system prompt should be derived from the run context or another runtime value instead of being fixed on the agent.
+Use `prompt(...)` or `dynamic_prompt(...)` for reusable OpenAI Responses prompt configs.
 
 ## Structured Output
 
