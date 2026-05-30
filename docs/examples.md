@@ -30,6 +30,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | compaction session stateless example | upstream-named stateless compaction entry point | [compaction_session_stateless_example.rs](../crates/openai-agents/examples/compaction_session_stateless_example.rs) |
 | compaction session | automatic and manual OpenAI Responses session compaction | [compaction_session.rs](../crates/openai-agents/examples/compaction_session.rs) |
 | compaction session stateless | auto compaction for `store=false` Responses runs | [compaction_session_stateless.rs](../crates/openai-agents/examples/compaction_session_stateless.rs) |
+| container shell inline skill | hosted shell container with inline skill metadata | [container_shell_inline_skill.rs](../crates/openai-agents/examples/container_shell_inline_skill.rs) |
 | custom example agent | upstream-named per-agent custom model entry point | [custom_example_agent.rs](../crates/openai-agents/examples/custom_example_agent.rs) |
 | custom example global | upstream-named global custom provider entry point | [custom_example_global.rs](../crates/openai-agents/examples/custom_example_global.rs) |
 | custom example provider | upstream-named custom model provider entry point | [custom_example_provider.rs](../crates/openai-agents/examples/custom_example_provider.rs) |
