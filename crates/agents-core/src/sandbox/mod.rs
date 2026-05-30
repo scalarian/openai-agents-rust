@@ -1211,18 +1211,28 @@ fn build_instructions_from_parts(
         parts.push(base.to_owned());
     }
     if let Some(instructions) = user_instructions {
-        parts.push(instructions.to_owned());
+        parts.push(instruction_section("Agent instructions", instructions));
     }
-    parts.push(format!(
-        "Capabilities: {}",
-        capabilities
-            .iter()
-            .map(SandboxCapability::as_str)
-            .collect::<Vec<_>>()
-            .join(", ")
+    parts.push(instruction_section(
+        "Sandbox capability instructions",
+        &format!(
+            "Capabilities: {}",
+            capabilities
+                .iter()
+                .map(SandboxCapability::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     ));
-    parts.push(format!("Workspace layout:\n{}", manifest.describe()));
+    parts.push(instruction_section(
+        "Filesystem",
+        &format!("Workspace layout:\n{}", manifest.describe()),
+    ));
     parts.join("\n\n")
+}
+
+fn instruction_section(title: &str, body: &str) -> String {
+    format!("# {title}\n\n{body}")
 }
 
 fn is_sandbox_tool_name(name: &str) -> bool {
@@ -2278,6 +2288,34 @@ mod tests {
                 .to_string()
                 .contains("sandbox workspace root must be absolute")
         );
+    }
+
+    #[test]
+    fn sandbox_instructions_delimit_agent_capability_and_filesystem_sections() {
+        let manifest = Manifest::default().with_entry("README.md", File::from_text("hello"));
+        let instructions = build_instructions_from_parts(
+            Some("Base instructions."),
+            Some("Inspect the prepared workspace."),
+            &[SandboxCapability::Filesystem, SandboxCapability::ApplyPatch],
+            &manifest,
+        );
+
+        let agent_index = instructions
+            .find("# Agent instructions")
+            .expect("agent section should exist");
+        let capability_index = instructions
+            .find("# Sandbox capability instructions")
+            .expect("capability section should exist");
+        let filesystem_index = instructions
+            .find("# Filesystem")
+            .expect("filesystem section should exist");
+
+        assert!(instructions.starts_with("Base instructions."));
+        assert!(agent_index < capability_index);
+        assert!(capability_index < filesystem_index);
+        assert!(instructions.contains("Inspect the prepared workspace."));
+        assert!(instructions.contains("Capabilities: filesystem, apply_patch"));
+        assert!(instructions.contains("README.md"));
     }
 
     #[cfg(unix)]
