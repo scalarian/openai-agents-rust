@@ -62,6 +62,7 @@ Read-only extra grants can expose host paths to the model without allowing write
 
 ## Read Next
 
+- [sandbox/guide.md](sandbox/guide.md)
 - [examples.md](examples.md)
 - [tools.md](tools.md)
 - [human_in_the_loop.md](human_in_the_loop.md)

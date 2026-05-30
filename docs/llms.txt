@@ -60,6 +60,10 @@ Compact export of the markdown docs tree.
   Use this page when you need to inspect what actually happened during a run, continue a conversation, or replay the output as the next input.
 - running_agents.md: Running Agents
   Use this page when you want to choose the right execution entry point and understand how the runtime moves through turns.
+- sandbox/guide.md: Sandbox Guide
+  Sandbox agents pair a normal agent with a prepared workspace. Use them when the task is grounded in files, generated artifacts, shell commands, or workspace state instead of only conversation history.
+- sandbox_agents.md: Sandbox Agents
+  Sandbox agents give an agent a prepared workspace with filesystem tools, optional shell access, patching, and resumable local state. Use them when the task is grounded in files instead of only chat history.
 - sessions/README.md: Sessions
   Use this section when you want state to survive across turns, runs, or process boundaries.
 - sessions/memory.md: Memory And SQLite Sessions

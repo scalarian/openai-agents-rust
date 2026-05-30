@@ -7,6 +7,6 @@ Open this directory when you want guides, curated reference, examples, or subsys
 - first program: [quickstart.md](quickstart.md)
 - runtime guides: [agents.md](agents.md), [running_agents.md](running_agents.md), [tools.md](tools.md)
 - sessions and replay: [sessions/README.md](sessions/README.md), [results.md](results.md)
-- sandbox workspaces: [sandbox_agents.md](sandbox_agents.md)
+- sandbox workspaces: [sandbox/guide.md](sandbox/guide.md), [sandbox_agents.md](sandbox_agents.md)
 - realtime and voice: [realtime/README.md](realtime/README.md), [voice/README.md](voice/README.md)
 - curated API map: [ref/README.md](ref/README.md)

@@ -11,7 +11,7 @@ This is the product docs home for the Rust agents runtime. Start here if you wan
 | build a first agent | [quickstart.md](quickstart.md) | [agents.md](agents.md), [running_agents.md](running_agents.md) |
 | run with tools | [tools.md](tools.md) | [guardrails.md](guardrails.md), [human_in_the_loop.md](human_in_the_loop.md) |
 | keep conversational state | [sessions/README.md](sessions/README.md) | [results.md](results.md), [context.md](context.md) |
-| work with files in a sandbox | [sandbox_agents.md](sandbox_agents.md) | [tools.md](tools.md), [human_in_the_loop.md](human_in_the_loop.md) |
+| work with files in a sandbox | [sandbox/guide.md](sandbox/guide.md) | [sandbox_agents.md](sandbox_agents.md), [tools.md](tools.md) |
 | stream events live | [streaming.md](streaming.md) | [tracing.md](tracing.md), [usage.md](usage.md) |
 | work with MCP | [mcp.md](mcp.md) | [tools.md](tools.md), [human_in_the_loop.md](human_in_the_loop.md) |
 | build realtime flows | [realtime/README.md](realtime/README.md) | [realtime/events.md](realtime/events.md), [realtime/audio.md](realtime/audio.md) |
@@ -42,7 +42,8 @@ flowchart LR
 - [context.md](context.md): thread application state through runs, tools, and hooks
 - [multi_agent.md](multi_agent.md): compose routers, specialists, and nested agent tools
 - [tools.md](tools.md): add function tools, shell/computer tools, hosted tools, and approvals
-- [sandbox_agents.md](sandbox_agents.md): prepare isolated workspaces with filesystem, shell, and patch tools
+- [sandbox/guide.md](sandbox/guide.md): prepare isolated workspaces with filesystem, shell, patch, and resume support
+- [sandbox_agents.md](sandbox_agents.md): quick API map for sandbox agent construction
 - [guardrails.md](guardrails.md): stop bad inputs, outputs, and tool traffic before it leaks
 - [handoffs.md](handoffs.md): route between agents with explicit history control
 - [human_in_the_loop.md](human_in_the_loop.md): approvals, interruptions, and operator review
@@ -60,7 +61,7 @@ flowchart LR
 
 - [models/README.md](models/README.md)
 - [sessions/README.md](sessions/README.md)
-- [sandbox_agents.md](sandbox_agents.md)
+- [sandbox/guide.md](sandbox/guide.md)
 - [realtime/README.md](realtime/README.md)
 - [voice/README.md](voice/README.md)
 - [ref/README.md](ref/README.md)

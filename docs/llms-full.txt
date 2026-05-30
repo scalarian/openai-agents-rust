@@ -12,6 +12,7 @@ Open this directory when you want guides, curated reference, examples, or subsys
 - first program: [quickstart.md](quickstart.md)
 - runtime guides: [agents.md](agents.md), [running_agents.md](running_agents.md), [tools.md](tools.md)
 - sessions and replay: [sessions/README.md](sessions/README.md), [results.md](results.md)
+- sandbox workspaces: [sandbox/guide.md](sandbox/guide.md), [sandbox_agents.md](sandbox_agents.md)
 - realtime and voice: [realtime/README.md](realtime/README.md), [voice/README.md](voice/README.md)
 - curated API map: [ref/README.md](ref/README.md)
 
@@ -59,10 +60,16 @@ An agent is the runtime definition of:
 ## Common Agent Builder Features
 
 - `instructions(...)`
+- `dynamic_instructions(...)`
+- `prompt(...)`
+- `dynamic_prompt(...)`
 - `function_tool(...)`
 - `handoff(...)`
 - `output_schema(...)`
 - `hooks(...)`
+
+Use `dynamic_instructions(...)` when the system prompt should be derived from the run context or another runtime value instead of being fixed on the agent.
+Use `prompt(...)` or `dynamic_prompt(...)` for reusable OpenAI Responses prompt configs.
 
 ## Structured Output
 
@@ -74,6 +81,12 @@ Use structured outputs when:
 - you need stable keys and types
 - you want retries or max-turn logic to stay in the runtime
 
+Use `AgentOutputSchema<T>` or `OutputSchemaDefinition` directly when you need non-strict schema handling or a custom validation pass. See [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs).
+
+For file input content, pass raw JSON `InputItem::Json` messages with `content` entries such as `{"type":"input_file","file_data":"data:application/pdf;base64,...","filename":"..."}` or `{"type":"input_file","file_url":"https://..."}`. See [local_file.rs](../crates/openai-agents/examples/local_file.rs) and [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs).
+
+For image input content, use `{"type":"input_image","detail":"auto","image_url":"data:image/...;base64,..."}` for local images or an HTTPS image URL for remote images. See [local_image.rs](../crates/openai-agents/examples/local_image.rs) and [remote_image.rs](../crates/openai-agents/examples/remote_image.rs).
+
 ## Agents As Tools
 
 An agent can be wrapped as a tool and invoked from another agent. This is the main primitive for “router + specialist” setups.
@@ -83,6 +96,9 @@ Use `Agent::as_tool()` when:
 - the specialist should keep its own instructions and state
 - you want nested runs to show up as tool executions
 - the parent should decide when to delegate
+
+Use `Agent::as_tool::<TArgs>(...)` when the parent should pass typed structured arguments to the nested agent. See [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs).
+Use `AgentAsToolOptions::is_enabled` when agent tools should be visible only for some run contexts. See [agents_as_tools_conditional.rs](../crates/openai-agents/examples/agents_as_tools_conditional.rs).
 
 Read [multi_agent.md](multi_agent.md) and [handoffs.md](handoffs.md) before building large delegating systems.
 
@@ -238,6 +254,8 @@ let _runner = Runner::new();
 - tracing helpers
 - handoff and approval flows that depend on caller state
 
+Tool hooks receive `ToolContext`, which includes the tool name, call id, raw tool arguments, namespace, and the wrapped run context.
+
 ## What Not To Put In Context
 
 - durable conversational history
@@ -266,11 +284,178 @@ All runnable examples live in `crates/openai-agents/examples`.
 
 | Example | What it covers | File |
 | --- | --- | --- |
+| agents as tools | specialist agents exposed as callable tools | [agents_as_tools.rs](../crates/openai-agents/examples/agents_as_tools.rs) |
+| agents as tools conditional | dynamically enabled agent tools | [agents_as_tools_conditional.rs](../crates/openai-agents/examples/agents_as_tools_conditional.rs) |
+| agents as tools streaming | stream events emitted by a nested agent tool | [agents_as_tools_streaming.rs](../crates/openai-agents/examples/agents_as_tools_streaming.rs) |
+| agents as tools structured | structured input for agent-as-tool calls | [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs) |
+| agent lifecycle | per-agent hooks around tools, handoffs, and final output | [agent_lifecycle.rs](../crates/openai-agents/examples/agent_lifecycle.rs) |
+| agent lifecycle example | upstream-named agent lifecycle entry point | [agent_lifecycle_example.rs](../crates/openai-agents/examples/agent_lifecycle_example.rs) |
+| advanced sqlite session example | upstream-named advanced SQLite session entry point | [advanced_sqlite_session_example.rs](../crates/openai-agents/examples/advanced_sqlite_session_example.rs) |
+| advanced sqlite session | extension SQLite session with custom table names and tool history | [advanced_sqlite_session.rs](../crates/openai-agents/examples/advanced_sqlite_session.rs) |
+| async sqlite session | async-friendly extension wrapper over SQLite-backed session memory | [async_sqlite_session.rs](../crates/openai-agents/examples/async_sqlite_session.rs) |
+| AnyLLM auto | upstream-named multi-provider AnyLLM routing entry point | [any_llm_auto.rs](../crates/openai-agents/examples/any_llm_auto.rs) |
+| AnyLLM provider | upstream-named AnyLLM provider entry point | [any_llm_provider.rs](../crates/openai-agents/examples/any_llm_provider.rs) |
+| apply patch | approval-gated local patch tool workflow | [apply_patch.rs](../crates/openai-agents/examples/apply_patch.rs) |
+| auto mode | deterministic fallback inputs and confirmations for automated example runs | [auto_mode.rs](../crates/openai-agents/examples/auto_mode.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
+| code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
+| codex | experimental Codex tool configuration for read-only workspace inspection | [codex.rs](../crates/openai-agents/examples/codex.rs) |
+| codex same thread | experimental Codex tool reuse across multiple turns | [codex_same_thread.rs](../crates/openai-agents/examples/codex_same_thread.rs) |
+| computer use | hosted browser computer tool configuration | [computer_use.rs](../crates/openai-agents/examples/computer_use.rs) |
+| compaction session example | upstream-named compaction session entry point | [compaction_session_example.rs](../crates/openai-agents/examples/compaction_session_example.rs) |
+| compaction session stateless example | upstream-named stateless compaction entry point | [compaction_session_stateless_example.rs](../crates/openai-agents/examples/compaction_session_stateless_example.rs) |
+| compaction session | automatic and manual OpenAI Responses session compaction | [compaction_session.rs](../crates/openai-agents/examples/compaction_session.rs) |
+| compaction session stateless | auto compaction for `store=false` Responses runs | [compaction_session_stateless.rs](../crates/openai-agents/examples/compaction_session_stateless.rs) |
+| container shell inline skill | hosted shell container with inline skill metadata | [container_shell_inline_skill.rs](../crates/openai-agents/examples/container_shell_inline_skill.rs) |
+| container shell skill reference | hosted shell container with referenced skill metadata | [container_shell_skill_reference.rs](../crates/openai-agents/examples/container_shell_skill_reference.rs) |
+| custom example agent | upstream-named per-agent custom model entry point | [custom_example_agent.rs](../crates/openai-agents/examples/custom_example_agent.rs) |
+| custom example global | upstream-named global custom provider entry point | [custom_example_global.rs](../crates/openai-agents/examples/custom_example_global.rs) |
+| custom example provider | upstream-named custom model provider entry point | [custom_example_provider.rs](../crates/openai-agents/examples/custom_example_provider.rs) |
+| custom agent model | per-agent model name resolved by a custom provider | [custom_agent_model.rs](../crates/openai-agents/examples/custom_agent_model.rs) |
+| custom model provider | per-run custom model provider selection | [custom_model_provider.rs](../crates/openai-agents/examples/custom_model_provider.rs) |
+| customer service | airline triage handoffs, FAQ lookup, seat updates, and shared context | [customer_service.rs](../crates/openai-agents/examples/customer_service.rs) |
+| database session | database-session extension using an in-memory SQLite URL | [database_session.rs](../crates/openai-agents/examples/database_session.rs) |
+| Dapr session example | upstream-named Dapr session entry point | [dapr_session_example.rs](../crates/openai-agents/examples/dapr_session_example.rs) |
+| dapr session | Dapr state-store backed extension session with graceful availability check | [dapr_session.rs](../crates/openai-agents/examples/dapr_session.rs) |
+| default model provider | global default runner model provider | [default_model_provider.rs](../crates/openai-agents/examples/default_model_provider.rs) |
+| deterministic | upstream-named deterministic workflow entry point | [deterministic.rs](../crates/openai-agents/examples/deterministic.rs) |
+| deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
+| dynamic system prompt | per-run agent instructions | [dynamic_system_prompt.rs](../crates/openai-agents/examples/dynamic_system_prompt.rs) |
+| encrypted session example | upstream-named encrypted session entry point | [encrypted_session_example.rs](../crates/openai-agents/examples/encrypted_session_example.rs) |
+| encrypted session | encrypted session wrapper over SQLite storage | [encrypted_session.rs](../crates/openai-agents/examples/encrypted_session.rs) |
+| file session | file-backed extension session rehydrated by session id | [file_session.rs](../crates/openai-agents/examples/file_session.rs) |
+| file search | hosted file search with vector store options and included results | [file_search.rs](../crates/openai-agents/examples/file_search.rs) |
+| file HITL | file-backed session with approval interruption persistence | [file_hitl.rs](../crates/openai-agents/examples/file_hitl.rs) |
+| file HITL example | upstream-named file session HITL entry point | [file_hitl_example.rs](../crates/openai-agents/examples/file_hitl_example.rs) |
+| financial research agent | multi-agent financial research planner, analyst tools, report writer, and verifier | [financial_research_agent.rs](../crates/openai-agents/examples/financial_research_agent.rs) |
+| function tools | typed local tools with JSON-schema inputs | [function_tools.rs](../crates/openai-agents/examples/function_tools.rs) |
+| forcing tool use | required tool choice and stop-on-tool behavior | [forcing_tool_use.rs](../crates/openai-agents/examples/forcing_tool_use.rs) |
+| handoffs | control transfer between agents | [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) |
+| hello world | upstream-style haiku response example | [hello_world.rs](../crates/openai-agents/examples/hello_world.rs) |
+| hello world GPT-5 | GPT-5 reasoning and verbosity model settings | [hello_world_gpt_5.rs](../crates/openai-agents/examples/hello_world_gpt_5.rs) |
+| hello world GPT-OSS | optional local GPT-OSS Chat Completions provider example | [hello_world_gpt_oss.rs](../crates/openai-agents/examples/hello_world_gpt_oss.rs) |
+| hosted MCP connectors | hosted MCP connector payload configuration | [hosted_mcp_connectors.rs](../crates/openai-agents/examples/hosted_mcp_connectors.rs) |
+| hosted MCP human in the loop | approval interruption and resume for hosted MCP calls | [hosted_mcp_human_in_the_loop.rs](../crates/openai-agents/examples/hosted_mcp_human_in_the_loop.rs) |
+| hosted MCP on approval | hosted MCP approval callback flow | [hosted_mcp_on_approval.rs](../crates/openai-agents/examples/hosted_mcp_on_approval.rs) |
+| hosted MCP simple | upstream-named hosted MCP simple entry point | [hosted_mcp_simple.rs](../crates/openai-agents/examples/hosted_mcp_simple.rs) |
+| HITL session scenario | approval resume across memory, file, and OpenAI sessions | [hitl_session_scenario.rs](../crates/openai-agents/examples/hitl_session_scenario.rs) |
+| hosted mcp | hosted MCP tool payload configuration for Responses models | [hosted_mcp.rs](../crates/openai-agents/examples/hosted_mcp.rs) |
+| human in the loop | approval-required tool calls with saved run state | [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) |
+| human in the loop custom rejection | custom model-visible rejection text for denied tool calls | [human_in_the_loop_custom_rejection.rs](../crates/openai-agents/examples/human_in_the_loop_custom_rejection.rs) |
+| human in the loop stream | streamed approval interruption and streamed resume | [human_in_the_loop_stream.rs](../crates/openai-agents/examples/human_in_the_loop_stream.rs) |
+| image generator | hosted image generation tool configuration and result decoding | [image_generator.rs](../crates/openai-agents/examples/image_generator.rs) |
+| image tool output | function tool returning an image output item | [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) |
+| input guardrails | upstream-named input guardrail entry point | [input_guardrails.rs](../crates/openai-agents/examples/input_guardrails.rs) |
+| input guardrail | local tripwire handling before model execution | [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs) |
+| lifecycle | run-level and agent-level lifecycle hooks | [lifecycle.rs](../crates/openai-agents/examples/lifecycle.rs) |
+| lifecycle example | upstream-named lifecycle entry point | [lifecycle_example.rs](../crates/openai-agents/examples/lifecycle_example.rs) |
+| lifecycle hooks | run and agent lifecycle callbacks | [lifecycle_hooks.rs](../crates/openai-agents/examples/lifecycle_hooks.rs) |
+| LiteLLM auto | upstream-named multi-provider LiteLLM routing entry point | [litellm_auto.rs](../crates/openai-agents/examples/litellm_auto.rs) |
+| LiteLLM provider | upstream-named LiteLLM provider entry point | [litellm_provider.rs](../crates/openai-agents/examples/litellm_provider.rs) |
+| llm as a judge | iterative generator and evaluator agent loop | [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs) |
+| local file | local file input item encoded as data URL content | [local_file.rs](../crates/openai-agents/examples/local_file.rs) |
+| local image | local image input item encoded as data URL content | [local_image.rs](../crates/openai-agents/examples/local_image.rs) |
+| local shell skill | local shell environment with inline skill metadata | [local_shell_skill.rs](../crates/openai-agents/examples/local_shell_skill.rs) |
+| memory session HITL example | upstream-named memory session HITL entry point | [memory_session_hitl_example.rs](../crates/openai-agents/examples/memory_session_hitl_example.rs) |
+| memory session HITL | SQLite session memory with approval interruption resume | [memory_session_hitl.rs](../crates/openai-agents/examples/memory_session_hitl.rs) |
 | memory session | session-backed follow-up turns | [memory_session.rs](../crates/openai-agents/examples/memory_session.rs) |
+| mcp filesystem example | upstream-named MCP filesystem entry point | [mcp_filesystem_example.rs](../crates/openai-agents/examples/mcp_filesystem_example.rs) |
+| mcp filesystem | MCP server tool discovery and local tool calls | [mcp_filesystem.rs](../crates/openai-agents/examples/mcp_filesystem.rs) |
+| mcp get all MCP tools example | upstream-named MCP tool-prefetch entry point | [mcp_get_all_mcp_tools_example.rs](../crates/openai-agents/examples/mcp_get_all_mcp_tools_example.rs) |
+| mcp get all tools | prefetch MCP function tools for reuse and filtering | [mcp_get_all_tools.rs](../crates/openai-agents/examples/mcp_get_all_tools.rs) |
+| mcp git example | upstream-named MCP git entry point | [mcp_git_example.rs](../crates/openai-agents/examples/mcp_git_example.rs) |
+| mcp git | local Git MCP server tool discovery and tool calls | [mcp_git.rs](../crates/openai-agents/examples/mcp_git.rs) |
+| mcp manager example | upstream-named MCP manager entry point | [mcp_manager_example.rs](../crates/openai-agents/examples/mcp_manager_example.rs) |
+| mcp manager | MCP server manager connection and cleanup flow | [mcp_manager.rs](../crates/openai-agents/examples/mcp_manager.rs) |
+| mcp prompt server | MCP prompt discovery and prompt-driven agent instructions | [mcp_prompt_server.rs](../crates/openai-agents/examples/mcp_prompt_server.rs) |
+| mcp SSE example | upstream-named MCP SSE transport entry point | [mcp_sse_example.rs](../crates/openai-agents/examples/mcp_sse_example.rs) |
+| mcp SSE | MCP SSE transport configuration with mocked tools | [mcp_sse.rs](../crates/openai-agents/examples/mcp_sse.rs) |
+| mcp SSE remote example | upstream-named MCP remote SSE transport entry point | [mcp_sse_remote_example.rs](../crates/openai-agents/examples/mcp_sse_remote_example.rs) |
+| mcp SSE remote | remote MCP SSE transport configuration with local fallback | [mcp_sse_remote.rs](../crates/openai-agents/examples/mcp_sse_remote.rs) |
+| mcp streamable HTTP custom client example | upstream-named MCP streamable HTTP custom client entry point | [mcp_streamablehttp_custom_client_example.rs](../crates/openai-agents/examples/mcp_streamablehttp_custom_client_example.rs) |
+| mcp streamable HTTP custom client | custom transport client configuration for MCP streamable HTTP | [mcp_streamable_http_custom_client.rs](../crates/openai-agents/examples/mcp_streamable_http_custom_client.rs) |
+| mcp streamable HTTP example | upstream-named MCP streamable HTTP entry point | [mcp_streamablehttp_example.rs](../crates/openai-agents/examples/mcp_streamablehttp_example.rs) |
+| mcp streamable HTTP | MCP streamable HTTP transport configuration with mocked tools | [mcp_streamable_http.rs](../crates/openai-agents/examples/mcp_streamable_http.rs) |
+| mcp streamable HTTP remote example | upstream-named MCP remote streamable HTTP entry point | [mcp_streamable_http_remote_example.rs](../crates/openai-agents/examples/mcp_streamable_http_remote_example.rs) |
+| mcp streamable HTTP remote | remote MCP streamable HTTP configuration with mocked tool outputs | [mcp_streamable_http_remote.rs](../crates/openai-agents/examples/mcp_streamable_http_remote.rs) |
+| mcp tool filter example | upstream-named MCP tool filter entry point | [mcp_tool_filter_example.rs](../crates/openai-agents/examples/mcp_tool_filter_example.rs) |
+| mcp tool filter | static MCP tool filtering before model-visible tool discovery | [mcp_tool_filter.rs](../crates/openai-agents/examples/mcp_tool_filter.rs) |
+| message filter | handoff input filtering that removes tool history | [message_filter.rs](../crates/openai-agents/examples/message_filter.rs) |
+| message filter streaming | streamed handoff input filtering that removes tool history | [message_filter_streaming.rs](../crates/openai-agents/examples/message_filter_streaming.rs) |
+| MongoDB session example | upstream-named MongoDB session entry point | [mongodb_session_example.rs](../crates/openai-agents/examples/mongodb_session_example.rs) |
+| mongodb session | MongoDB-backed extension session with shared client isolation | [mongodb_session.rs](../crates/openai-agents/examples/mongodb_session.rs) |
+| non-strict output type | structured output validation with non-strict and custom schemas | [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs) |
+| OpenAI session example | upstream-named OpenAI session entry point | [openai_session_example.rs](../crates/openai-agents/examples/openai_session_example.rs) |
+| OpenAI session HITL example | upstream-named OpenAI session HITL entry point | [openai_session_hitl_example.rs](../crates/openai-agents/examples/openai_session_hitl_example.rs) |
+| OpenAI session HITL | OpenAI conversation-aware session with approval resume | [openai_session_hitl.rs](../crates/openai-agents/examples/openai_session_hitl.rs) |
+| openai session | OpenAI conversation-aware session continuation metadata | [openai_session.rs](../crates/openai-agents/examples/openai_session.rs) |
+| output guardrails | upstream-named output guardrail entry point | [output_guardrails.rs](../crates/openai-agents/examples/output_guardrails.rs) |
+| output guardrail | final output tripwire handling | [output_guardrail.rs](../crates/openai-agents/examples/output_guardrail.rs) |
+| parallelization | run multiple agent calls concurrently and pick the best result | [parallelization.rs](../crates/openai-agents/examples/parallelization.rs) |
+| previous response id | continue a Responses API conversation by id | [previous_response_id.rs](../crates/openai-agents/examples/previous_response_id.rs) |
+| prompt template | static and dynamic reusable prompt config | [prompt_template.rs](../crates/openai-agents/examples/prompt_template.rs) |
+| reasoning content | reasoning items from normal and streamed runner output | [reasoning_content.rs](../crates/openai-agents/examples/reasoning_content.rs) |
+| reasoning content GPT OSS stream | optional local GPT-OSS reasoning stream smoke example | [reasoning_content_gpt_oss_stream.rs](../crates/openai-agents/examples/reasoning_content_gpt_oss_stream.rs) |
+| reasoning content runner example | upstream-named reasoning content Runner entry point | [reasoning_content_runner_example.rs](../crates/openai-agents/examples/reasoning_content_runner_example.rs) |
+| realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
+| research bot | multi-agent web research plan, search summaries, and streamed report writing | [research_bot.rs](../crates/openai-agents/examples/research_bot.rs) |
+| sandbox agent capabilities | sandbox tool surface controlled by capability flags | [sandbox_agent_capabilities.rs](../crates/openai-agents/examples/sandbox_agent_capabilities.rs) |
+| sandbox agent with tools | sandbox agent combined with function, MCP, and static tools | [sandbox_agent_with_tools.rs](../crates/openai-agents/examples/sandbox_agent_with_tools.rs) |
+| sandbox agents as tools | sandbox specialist agents exposed as callable tools | [sandbox_agents_as_tools.rs](../crates/openai-agents/examples/sandbox_agents_as_tools.rs) |
+| sandbox basic | local sandbox workspace with filesystem and shell tools | [sandbox_basic.rs](../crates/openai-agents/examples/sandbox_basic.rs) |
+| sandbox coding task | local sandbox coding task with patch and shell verification | [sandbox_coding_task.rs](../crates/openai-agents/examples/sandbox_coding_task.rs) |
+| sandbox dataroom metric extract | sandboxed synthetic 10-K metric extraction into verified JSONL output | [sandbox_dataroom_metric_extract.rs](../crates/openai-agents/examples/sandbox_dataroom_metric_extract.rs) |
+| sandbox dataroom QA | sandboxed synthetic 10-K question answering with cited source anchors | [sandbox_dataroom_qa.rs](../crates/openai-agents/examples/sandbox_dataroom_qa.rs) |
+| sandbox handoffs | sandbox-backed handoff workflow across specialist agents | [sandbox_handoffs.rs](../crates/openai-agents/examples/sandbox_handoffs.rs) |
+| sandbox healthcare support | sandboxed healthcare eligibility workflow with approval-gated human queue routing | [sandbox_healthcare_support.rs](../crates/openai-agents/examples/sandbox_healthcare_support.rs) |
+| sandbox memory | sandbox session memory restored across runs | [sandbox_memory.rs](../crates/openai-agents/examples/sandbox_memory.rs) |
+| sandbox memory multi-agent | shared sandbox session with separate agent memory namespaces | [sandbox_memory_multi_agent.rs](../crates/openai-agents/examples/sandbox_memory_multi_agent.rs) |
+| sandbox memory S3 | persistent sandbox memory layout mirrored to workspace files | [sandbox_memory_s3.rs](../crates/openai-agents/examples/sandbox_memory_s3.rs) |
+| sandbox remote snapshot | local sandbox session state serialization and workspace restore round-trip | [sandbox_remote_snapshot.rs](../crates/openai-agents/examples/sandbox_remote_snapshot.rs) |
+| sandbox repo code review | sandboxed repository test run with generated review, findings, and patch artifacts | [sandbox_repo_code_review.rs](../crates/openai-agents/examples/sandbox_repo_code_review.rs) |
+| sandbox tax prep | streamed sandbox tax preparation workflow with generated 1040 summary artifact | [sandbox_tax_prep.rs](../crates/openai-agents/examples/sandbox_tax_prep.rs) |
+| sandbox tutorial resume | serialized sandbox resume from app build to added test coverage | [sandbox_tutorial_resume.rs](../crates/openai-agents/examples/sandbox_tutorial_resume.rs) |
+| sandbox Unix local runner | local Unix sandbox runner with path grants | [sandbox_unix_local_runner.rs](../crates/openai-agents/examples/sandbox_unix_local_runner.rs) |
+| sandbox Unix local PTY | stateful Unix-local sandbox PTY interaction with stdin and output waits | [sandbox_unix_local_pty.rs](../crates/openai-agents/examples/sandbox_unix_local_pty.rs) |
+| sandbox vision website clone | sandboxed static website clone generated from reference screen notes | [sandbox_vision_website_clone.rs](../crates/openai-agents/examples/sandbox_vision_website_clone.rs) |
+| sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
+| sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
+| sandbox Cloudflare extension | Cloudflare hosted sandbox client feature-gate and session lifecycle | [sandbox_cloudflare_extension.rs](../crates/openai-agents/examples/sandbox_cloudflare_extension.rs) |
+| sandbox Daytona extension | Daytona hosted sandbox client feature-gate and session lifecycle | [sandbox_daytona_extension.rs](../crates/openai-agents/examples/sandbox_daytona_extension.rs) |
+| sandbox E2B extension | E2B hosted sandbox client feature-gate and session lifecycle | [sandbox_e2b_extension.rs](../crates/openai-agents/examples/sandbox_e2b_extension.rs) |
+| sandbox Modal extension | Modal hosted sandbox client feature-gate and session lifecycle | [sandbox_modal_extension.rs](../crates/openai-agents/examples/sandbox_modal_extension.rs) |
+| sandbox Runloop extension | Runloop hosted sandbox client feature-gate and session lifecycle | [sandbox_runloop_extension.rs](../crates/openai-agents/examples/sandbox_runloop_extension.rs) |
+| sandbox Vercel extension | Vercel hosted sandbox client feature-gate and session lifecycle | [sandbox_vercel_extension.rs](../crates/openai-agents/examples/sandbox_vercel_extension.rs) |
+| shell | local read-only shell command tool | [shell.rs](../crates/openai-agents/examples/shell.rs) |
+| shell human in the loop | approval-gated local shell command tool | [shell_human_in_the_loop.rs](../crates/openai-agents/examples/shell_human_in_the_loop.rs) |
+| SQLAlchemy session example | upstream-named database session entry point | [sqlalchemy_session_example.rs](../crates/openai-agents/examples/sqlalchemy_session_example.rs) |
+| sqlite session example | upstream-named SQLite session entry point | [sqlite_session_example.rs](../crates/openai-agents/examples/sqlite_session_example.rs) |
+| sqlite session | SQLite-backed conversation memory | [sqlite_session.rs](../crates/openai-agents/examples/sqlite_session.rs) |
+| stream function call args | streamed tool-call argument items | [stream_function_call_args.rs](../crates/openai-agents/examples/stream_function_call_args.rs) |
+| stream items | streamed run-item events for tool calls and messages | [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) |
+| stream text | streamed message text output | [stream_text.rs](../crates/openai-agents/examples/stream_text.rs) |
+| stream WebSocket | Responses WebSocket streaming with approvals and previous response ids | [stream_ws.rs](../crates/openai-agents/examples/stream_ws.rs) |
 | streamed run | live events and completion | [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) |
+| streaming guardrails | incremental output checks during streaming | [streaming_guardrails.rs](../crates/openai-agents/examples/streaming_guardrails.rs) |
+| tool guardrails | function-tool input and output guardrails | [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs) |
+| tool search | hosted tool search with namespaces and top-level deferred tools | [tool_search.rs](../crates/openai-agents/examples/tool_search.rs) |
+| tools | upstream-style basic function tool example | [tools.rs](../crates/openai-agents/examples/tools.rs) |
+| usage tracking | token usage from a completed run | [usage_tracking.rs](../crates/openai-agents/examples/usage_tracking.rs) |
 | realtime session | long-lived realtime interaction | [realtime_session.rs](../crates/openai-agents/examples/realtime_session.rs) |
+| realtime Twilio media stream | Twilio media stream event bridge for realtime sessions | [realtime_twilio_media_stream.rs](../crates/openai-agents/examples/realtime_twilio_media_stream.rs) |
+| realtime Twilio SIP | Twilio SIP-oriented realtime runner example | [realtime_twilio_sip.rs](../crates/openai-agents/examples/realtime_twilio_sip.rs) |
+| remote image | remote image input item by URL | [remote_image.rs](../crates/openai-agents/examples/remote_image.rs) |
+| remote pdf | remote PDF input item by URL | [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs) |
+| redis session example | upstream-named Redis session entry point | [redis_session_example.rs](../crates/openai-agents/examples/redis_session_example.rs) |
+| redis session | Redis-backed extension session with graceful availability check | [redis_session.rs](../crates/openai-agents/examples/redis_session.rs) |
+| retry | runner-managed model retry settings | [retry.rs](../crates/openai-agents/examples/retry.rs) |
+| retry LiteLLM | LiteLLM retry policy and backoff settings | [retry_litellm.rs](../crates/openai-agents/examples/retry_litellm.rs) |
+| routing | streamed triage handoff to a specialist agent | [routing.rs](../crates/openai-agents/examples/routing.rs) |
+| web search | hosted web search tool configuration | [web_search.rs](../crates/openai-agents/examples/web_search.rs) |
+| web search filters | hosted web search domain filters and source includes | [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) |
 | voice pipeline | STT -> workflow -> TTS flow | [voice_pipeline.rs](../crates/openai-agents/examples/voice_pipeline.rs) |
+| voice static | non-streamed voice pipeline example | [voice_static.rs](../crates/openai-agents/examples/voice_static.rs) |
+| voice streamed | streamed voice pipeline example | [voice_streamed.rs](../crates/openai-agents/examples/voice_streamed.rs) |
 
 ## Read By Goal
 
@@ -336,6 +521,12 @@ That makes them suitable for:
 - operator intervention
 - retry or fallback logic
 
+## Runnable Examples
+
+- [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs)
+- [output_guardrail.rs](../crates/openai-agents/examples/output_guardrail.rs)
+- [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs)
+
 ## Read Next
 
 - [tools.md](tools.md)
@@ -383,6 +574,8 @@ That matters when you want to avoid blindly forwarding the entire transcript int
 
 Start with explicit handoffs only when ownership of the conversation truly changes. Otherwise prefer a specialist tool.
 
+Runnable examples: [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) for a minimal transfer and [routing.rs](../crates/openai-agents/examples/routing.rs) for streamed triage to a specialist.
+
 ## Read Next
 
 - [multi_agent.md](multi_agent.md)
@@ -421,6 +614,8 @@ Keep approval prompts:
 
 The runtime already carries the call identity. Use that instead of inventing your own ad-hoc approval bookkeeping.
 
+Runnable versions: [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) for approval and resume, [human_in_the_loop_custom_rejection.rs](../crates/openai-agents/examples/human_in_the_loop_custom_rejection.rs) for custom rejection text, and [human_in_the_loop_stream.rs](../crates/openai-agents/examples/human_in_the_loop_stream.rs) for streamed interruption and resume.
+
 ## Interruptions
 
 Interruptions let you stop or branch a run without losing the run state model. That is the right surface for:
@@ -451,6 +646,7 @@ This is the product docs home for the Rust agents runtime. Start here if you wan
 | build a first agent | [quickstart.md](quickstart.md) | [agents.md](agents.md), [running_agents.md](running_agents.md) |
 | run with tools | [tools.md](tools.md) | [guardrails.md](guardrails.md), [human_in_the_loop.md](human_in_the_loop.md) |
 | keep conversational state | [sessions/README.md](sessions/README.md) | [results.md](results.md), [context.md](context.md) |
+| work with files in a sandbox | [sandbox/guide.md](sandbox/guide.md) | [sandbox_agents.md](sandbox_agents.md), [tools.md](tools.md) |
 | stream events live | [streaming.md](streaming.md) | [tracing.md](tracing.md), [usage.md](usage.md) |
 | work with MCP | [mcp.md](mcp.md) | [tools.md](tools.md), [human_in_the_loop.md](human_in_the_loop.md) |
 | build realtime flows | [realtime/README.md](realtime/README.md) | [realtime/events.md](realtime/events.md), [realtime/audio.md](realtime/audio.md) |
@@ -481,6 +677,8 @@ flowchart LR
 - [context.md](context.md): thread application state through runs, tools, and hooks
 - [multi_agent.md](multi_agent.md): compose routers, specialists, and nested agent tools
 - [tools.md](tools.md): add function tools, shell/computer tools, hosted tools, and approvals
+- [sandbox/guide.md](sandbox/guide.md): prepare isolated workspaces with filesystem, shell, patch, and resume support
+- [sandbox_agents.md](sandbox_agents.md): quick API map for sandbox agent construction
 - [guardrails.md](guardrails.md): stop bad inputs, outputs, and tool traffic before it leaks
 - [handoffs.md](handoffs.md): route between agents with explicit history control
 - [human_in_the_loop.md](human_in_the_loop.md): approvals, interruptions, and operator review
@@ -498,6 +696,7 @@ flowchart LR
 
 - [models/README.md](models/README.md)
 - [sessions/README.md](sessions/README.md)
+- [sandbox/guide.md](sandbox/guide.md)
 - [realtime/README.md](realtime/README.md)
 - [voice/README.md](voice/README.md)
 - [ref/README.md](ref/README.md)
@@ -648,6 +847,10 @@ Use this page when you need to decide where model resolution should live and how
 
 Use one provider for the application and pass it into a shared `Runner` unless you have a real need for per-request provider switching.
 
+Use `RunOptions::model_provider` when a single run should resolve models from a custom provider. See [custom_model_provider.rs](../../crates/openai-agents/examples/custom_model_provider.rs).
+Use `Agent::model(...)` when one agent should request a specific model name from the provider. See [custom_agent_model.rs](../../crates/openai-agents/examples/custom_agent_model.rs).
+Use `set_default_agent_runner(...)` when facade calls such as `run(...)` should share a custom provider. See [default_model_provider.rs](../../crates/openai-agents/examples/default_model_provider.rs).
+
 ## When `MultiProvider` Helps
 
 `MultiProvider` is useful when:
@@ -683,6 +886,8 @@ Use this page when you need to shape provider requests without hardcoding those 
 - keep stable defaults on the runner
 - add request-specific overrides in `RunConfig`
 - avoid storing provider request details in your agent instructions
+
+Use `ModelSettings::retry` with `ModelRetrySettings` and `retry_policies` when the runner should retry transient model failures instead of leaving recovery to the model provider.
 
 ## Read Next
 
@@ -729,6 +934,14 @@ This is usually the right choice for:
 - code review specialists
 - search or retrieval specialists
 - translation or formatting specialists
+
+## Parallelization
+
+Use normal Rust concurrency when several independent agent calls can run at once. For example, run translation attempts with `tokio::try_join!`, collect the candidate outputs, then pass them to a picker agent. See [parallelization.rs](../crates/openai-agents/examples/parallelization.rs).
+
+## LLM As A Judge
+
+Use an evaluator agent when a generation step needs a quality gate or iterative feedback. Model the evaluator's response as structured output, parse it into an application type, and feed feedback back into the next generator run. See [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs).
 
 ## Handoffs
 
@@ -1129,6 +1342,15 @@ Use this page when you already know the concept you need and want the shortest p
 - `SQLiteSession`
 - `SessionSettings`
 
+## Sandbox Surfaces
+
+- `SandboxAgent`
+- `SandboxRunConfig`
+- `Manifest`
+- `File`, `Dir`, `LocalDir`
+- `LocalSandboxSession`
+- `prepare_sandbox_run`
+
 ## Tracing Surfaces
 
 - `Trace`
@@ -1398,6 +1620,187 @@ Use the built-in result/session machinery when you want:
 - [sessions/README.md](sessions/README.md)
 
 
+## sandbox/guide.md
+
+# Sandbox Guide
+
+Sandbox agents pair a normal agent with a prepared workspace. Use them when the task is grounded in files, generated artifacts, shell commands, or workspace state instead of only conversation history.
+
+The Rust sandbox surface is local-first:
+
+- `SandboxAgent` carries the normal agent configuration plus sandbox defaults.
+- `Manifest` declares the files, directories, and extra path grants for fresh workspaces.
+- `SandboxRunConfig` chooses the per-run sandbox input: a manifest override, a live local session, or serialized local session state.
+- `LocalSandboxSession` owns filesystem, shell, patch, PTY, snapshot, and memory-note operations.
+- `prepare_sandbox_run` materializes the workspace, attaches capability tools, and returns the prepared `Agent` plus session.
+
+## Minimal Flow
+
+The runnable version lives in [sandbox_workspace.rs](../../crates/openai-agents/examples/sandbox_workspace.rs).
+
+```rust,no_run
+use openai_agents::{
+    AgentsError, File, Manifest, RunConfig, SandboxAgent, SandboxRunConfig, prepare_sandbox_run,
+};
+
+fn main() -> Result<(), AgentsError> {
+    let sandbox_agent = SandboxAgent::builder("Workspace assistant")
+        .instructions("Inspect workspace files before answering.")
+        .default_manifest(
+            Manifest::default().with_entry("README.md", File::from_text("# Demo\n")),
+        )
+        .build();
+
+    let prepared = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig::default()),
+            ..RunConfig::default()
+        },
+    )?;
+
+    println!("{}", prepared.session.read_file("/workspace/README.md")?);
+    prepared.session.cleanup()?;
+    Ok(())
+}
+```
+
+After preparation, run `prepared.agent` with the normal `Runner` APIs. The sandbox tools are ordinary function tools bound to the prepared session.
+
+## When To Use Sandbox Agents
+
+Use a sandbox agent when the workflow needs one of these properties:
+
+- a known starting filesystem layout
+- workspace-safe file reads, writes, and patches
+- shell commands that run from a controlled workspace root
+- resumable local workspace state
+- isolated workspaces for sub-agents or reviewers
+- generated artifacts that your application can inspect after the run
+
+If the workflow only needs one occasional shell command and no persistent workspace, a normal agent with a hosted or local shell tool is usually simpler.
+
+## Core Pieces
+
+| Piece | Role |
+| --- | --- |
+| `SandboxAgent` | Agent definition plus sandbox defaults such as `default_manifest`, `base_instructions`, and capabilities. |
+| `Manifest` | Fresh-session workspace contract built from `File`, `Dir`, `LocalDir`, and extra path grants. |
+| `SandboxCapability` | Controls which sandbox tools are attached. Defaults are filesystem, shell, and patch. |
+| `SandboxRunConfig` | Per-run sandbox source: manifest override, live session, or serialized session state. |
+| `LocalSandboxSession` | Live workspace API for direct file, shell, patch, PTY, snapshot, and memory-note operations. |
+
+## Preparation Model
+
+`prepare_sandbox_run` does the sandbox-specific work before the normal runner loop starts:
+
+1. Resolve the effective manifest from the run config or agent default.
+2. Create, reuse, or restore a local sandbox session.
+3. Materialize manifest entries under the logical `/workspace` root.
+4. Build sandbox instructions from the base prompt, agent instructions, capabilities, and workspace tree.
+5. Attach capability tools to the prepared agent.
+
+The runner still owns turns, model calls, approvals, tracing, handoffs, and durable run state. The sandbox session owns workspace operations and local confinement.
+
+## Capabilities
+
+Sandbox agents default to these capabilities:
+
+| Capability | Tools |
+| --- | --- |
+| `SandboxCapability::Filesystem` | `sandbox_list_files`, `sandbox_read_file` |
+| `SandboxCapability::Shell` | `sandbox_run_shell` |
+| `SandboxCapability::ApplyPatch` | `sandbox_apply_patch` |
+
+If you pass `SandboxAgentBuilder::capabilities`, the list replaces the defaults. Include every capability the run should expose.
+
+## Safety Boundaries
+
+The logical workspace root is `/workspace`. Sandbox APIs reject paths that escape that root, including symlink escapes. Shell commands run from the session workspace and are checked for obvious path escapes before execution.
+
+On Linux, the local shell path uses Landlock where available to restrict writes. On macOS, the runtime uses `sandbox-exec` when available. Extra path grants can expose host paths intentionally; keep them read-only unless the workflow truly needs write access.
+
+## Read Next
+
+- [../sandbox_agents.md](../sandbox_agents.md)
+- [../examples.md](../examples.md)
+- [../tools.md](../tools.md)
+- [../human_in_the_loop.md](../human_in_the_loop.md)
+
+
+## sandbox_agents.md
+
+# Sandbox Agents
+
+Sandbox agents give an agent a prepared workspace with filesystem tools, optional shell access, patching, and resumable local state. Use them when the task is grounded in files instead of only chat history.
+
+## Minimal Local Workspace
+
+This example prepares a local sandbox without making a model call. The runnable version lives in [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs).
+
+```rust,no_run
+use openai_agents::{
+    AgentsError, File, Manifest, RunConfig, SandboxAgent, SandboxRunConfig, prepare_sandbox_run,
+};
+
+fn main() -> Result<(), AgentsError> {
+    let sandbox_agent = SandboxAgent::builder("sandbox engineer")
+        .instructions("Use the sandbox workspace for file inspection and edits.")
+        .default_manifest(
+            Manifest::default().with_entry("notes.txt", File::from_text("hello from sandbox\n")),
+        )
+        .build();
+
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig::default()),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config)?;
+
+    println!("{}", prepared.session.read_file("/workspace/notes.txt")?);
+    prepared.session.cleanup()?;
+    Ok(())
+}
+```
+
+## Runtime Model
+
+- `SandboxAgent` wraps a normal `Agent` with sandbox defaults.
+- `Manifest` describes files staged into the workspace.
+- `File`, `Dir`, and `LocalDir` are the manifest entry types.
+- `SandboxRunConfig` carries the manifest override, session state, or live session for a run.
+- `LocalSandboxSession` exposes direct workspace operations when your application needs to inspect or persist state outside an agent run.
+
+## Capabilities
+
+Sandbox agents default to filesystem, shell, and patch capabilities. You can narrow that set with `SandboxAgentBuilder::capabilities`.
+
+| Capability | Attached tools |
+| --- | --- |
+| `SandboxCapability::Filesystem` | `sandbox_list_files`, `sandbox_read_file` |
+| `SandboxCapability::Shell` | `sandbox_run_shell` |
+| `SandboxCapability::ApplyPatch` | `sandbox_apply_patch` |
+
+## Filesystem Safety
+
+The logical workspace root is `/workspace`; host paths are resolved through the local session root. Reads and writes reject paths that escape the workspace, including symlink escapes.
+
+For shell commands, the runtime validates obvious path escapes before execution and applies platform confinement during execution:
+
+- Linux uses Landlock to allow file mutation only in the workspace and writable extra grants.
+- macOS uses `sandbox-exec` when available.
+
+Read-only extra grants can expose host paths to the model without allowing writes through `LocalSandboxSession` APIs.
+
+## Read Next
+
+- [sandbox/guide.md](sandbox/guide.md)
+- [examples.md](examples.md)
+- [tools.md](tools.md)
+- [human_in_the_loop.md](human_in_the_loop.md)
+- [ref/runtime.md](ref/runtime.md)
+
+
 ## sessions/README.md
 
 # Sessions
@@ -1408,6 +1811,8 @@ Use this section when you want state to survive across turns, runs, or process b
 
 - [memory.md](memory.md): in-memory and SQLite-backed session basics
 - [openai.md](openai.md): OpenAI conversation-aware sessions and compaction
+
+The runnable [compaction_session.rs](../../crates/openai-agents/examples/compaction_session.rs) and [compaction_session_stateless.rs](../../crates/openai-agents/examples/compaction_session_stateless.rs) examples show automatic, manual, and `store=false` OpenAI Responses compaction.
 
 ## What Sessions Are For
 
@@ -1448,6 +1853,8 @@ Use this page when you need a local session backend without OpenAI-specific conv
 | `MemorySession` | tests, demos, short-lived app state |
 | `SQLiteSession` | local persistence, desktop apps, prototypes that need durability |
 
+Runnable examples: [memory_session.rs](../../crates/openai-agents/examples/memory_session.rs) for in-memory state, [sqlite_session.rs](../../crates/openai-agents/examples/sqlite_session.rs) for SQLite-backed state, [advanced_sqlite_session.rs](../../crates/openai-agents/examples/advanced_sqlite_session.rs) for the extension SQLite session with custom table names and persisted tool history, [async_sqlite_session.rs](../../crates/openai-agents/examples/async_sqlite_session.rs) for async-friendly SQLite session storage, [database_session.rs](../../crates/openai-agents/examples/database_session.rs) for database URL-backed sessions, [encrypted_session.rs](../../crates/openai-agents/examples/encrypted_session.rs) for encrypted-at-rest session storage, [file_session.rs](../../crates/openai-agents/examples/file_session.rs) for file-backed session rehydration, [mongodb_session.rs](../../crates/openai-agents/examples/mongodb_session.rs) for MongoDB-backed storage, [redis_session.rs](../../crates/openai-agents/examples/redis_session.rs) for Redis-backed storage, and [dapr_session.rs](../../crates/openai-agents/examples/dapr_session.rs) for Dapr state-store backed storage.
+
 ## Session Settings
 
 Use `SessionSettings` when you need bounds such as history limits. That is the right layer for controlling replay growth without rewriting session storage code.
@@ -1469,6 +1876,8 @@ Use this page when you want sessions that preserve OpenAI conversation behavior 
 
 - `OpenAIConversationsSession`
 - `OpenAIResponsesCompactionSession`
+
+The runnable [openai_session.rs](../../crates/openai-agents/examples/openai_session.rs) example shows conversation-aware response id continuation.
 
 ## What They Add
 
@@ -1531,7 +1940,9 @@ async fn main() -> Result<(), openai_agents::AgentsError> {
 }
 ```
 
-Runnable version: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs)
+Runnable versions: [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) for a minimal stream, [stream_text.rs](../crates/openai-agents/examples/stream_text.rs) for message text, and [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) for run-item events around a tool call.
+For tool-call arguments, [stream_function_call_args.rs](../crates/openai-agents/examples/stream_function_call_args.rs) shows the `RunItem::ToolCall` event payload.
+For nested agent tools, [agents_as_tools_streaming.rs](../crates/openai-agents/examples/agents_as_tools_streaming.rs) shows `AgentAsToolOptions::on_stream`.
 
 ## Event Families
 
@@ -1574,6 +1985,10 @@ Use this page when you want the model to trigger typed behavior instead of only 
 | shell and computer tools | local or hosted execution environments |
 | hosted OpenAI tools | code interpreter, file search, web search, image generation |
 | MCP tools | external tools discovered from MCP servers |
+
+Function tools can return text, JSON, image, or file outputs. See [image_tool_output.rs](../crates/openai-agents/examples/image_tool_output.rs) for an image-returning function tool.
+
+Hosted tools are added as static tools on the agent. For example, [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) configures an auto code interpreter container, [file_search.rs](../crates/openai-agents/examples/file_search.rs) configures vector store search with included results, [image_generator.rs](../crates/openai-agents/examples/image_generator.rs) decodes an image generation result, [tool_search.rs](../crates/openai-agents/examples/tool_search.rs) shows deferred namespace loading, [web_search.rs](../crates/openai-agents/examples/web_search.rs) configures `web_search_tool_with_options(...)` with an approximate user location, and [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) shows domain filters plus source includes.
 
 ## Function Tool Example
 
