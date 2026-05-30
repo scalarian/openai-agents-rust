@@ -135,9 +135,25 @@ pub struct ToolCallItem {
     pub raw_item: RunItem,
 }
 
+impl ToolCallItem {
+    pub fn tool_name(&self) -> Option<&str> {
+        self.raw_item.tool_name()
+    }
+
+    pub fn call_id(&self) -> Option<&str> {
+        self.raw_item.call_id()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolCallOutputItem {
     pub raw_item: RunItem,
+}
+
+impl ToolCallOutputItem {
+    pub fn call_id(&self) -> Option<&str> {
+        self.raw_item.call_id()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -245,6 +261,30 @@ impl ItemHelpers {
 }
 
 impl RunItem {
+    pub fn tool_name(&self) -> Option<&str> {
+        match self {
+            Self::ToolCall { tool_name, .. } | Self::ToolCallOutput { tool_name, .. } => {
+                Some(tool_name)
+            }
+            Self::MessageOutput { .. }
+            | Self::HandoffCall { .. }
+            | Self::HandoffOutput { .. }
+            | Self::Reasoning { .. } => None,
+        }
+    }
+
+    pub fn call_id(&self) -> Option<&str> {
+        match self {
+            Self::ToolCall { call_id, .. } | Self::ToolCallOutput { call_id, .. } => {
+                call_id.as_deref()
+            }
+            Self::MessageOutput { .. }
+            | Self::HandoffCall { .. }
+            | Self::HandoffOutput { .. }
+            | Self::Reasoning { .. } => None,
+        }
+    }
+
     pub fn to_input_item(&self) -> Option<InputItem> {
         match self {
             Self::MessageOutput { content } => match content {
@@ -369,6 +409,49 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn exposes_tool_call_item_name_and_call_id() {
+        let item = ToolCallItem {
+            raw_item: RunItem::ToolCall {
+                tool_name: "search".to_owned(),
+                arguments: json!({"query": "rust"}),
+                call_id: Some("call-1".to_owned()),
+                namespace: None,
+            },
+        };
+
+        assert_eq!(item.tool_name(), Some("search"));
+        assert_eq!(item.call_id(), Some("call-1"));
+    }
+
+    #[test]
+    fn exposes_tool_call_output_item_call_id() {
+        let item = ToolCallOutputItem {
+            raw_item: RunItem::ToolCallOutput {
+                tool_name: "search".to_owned(),
+                output: OutputItem::Text {
+                    text: "result".to_owned(),
+                },
+                call_id: Some("call-1".to_owned()),
+                namespace: None,
+            },
+        };
+
+        assert_eq!(item.call_id(), Some("call-1"));
+    }
+
+    #[test]
+    fn tool_item_accessors_return_none_for_non_tool_items() {
+        let item = RunItem::MessageOutput {
+            content: OutputItem::Text {
+                text: "done".to_owned(),
+            },
+        };
+
+        assert_eq!(item.tool_name(), None);
+        assert_eq!(item.call_id(), None);
     }
 
     #[test]
