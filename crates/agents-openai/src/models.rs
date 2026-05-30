@@ -161,7 +161,7 @@ impl OpenAIResponsesModel {
                     .collect(),
             ),
         );
-        let tools = openai_tools_payload(&request.tools);
+        let tools = openai_responses_tools_payload(&request.tools);
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
         }
@@ -235,7 +235,7 @@ impl OpenAIChatCompletionsModel {
             .collect::<Result<Vec<_>>>()?;
         messages.extend(converted_messages.into_iter().flatten());
         payload.insert("messages".to_owned(), Value::Array(messages));
-        let tools = openai_tools_payload(&request.tools);
+        let tools = openai_chat_tools_payload(&request.tools);
         let has_tools = !tools.is_empty();
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
@@ -929,8 +929,12 @@ fn openai_chat_json_messages(value: &Value, strict_feature_validation: bool) -> 
     }
 }
 
-fn openai_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
-    tools.iter().map(openai_tool_payload).collect()
+fn openai_responses_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
+    tools.iter().map(openai_responses_tool_payload).collect()
+}
+
+fn openai_chat_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
+    tools.iter().map(openai_chat_tool_payload).collect()
 }
 
 fn apply_hosted_tool_includes(
@@ -960,7 +964,34 @@ fn append_response_include(payload: &mut serde_json::Map<String, Value>, include
     }
 }
 
-fn openai_tool_payload(tool: &ToolDefinition) -> Value {
+fn openai_responses_tool_payload(tool: &ToolDefinition) -> Value {
+    if tool.input_json_schema.is_none() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("type".to_owned(), Value::String(tool.name.clone()));
+        payload.extend(tool.hosted_tool_options.clone());
+        return Value::Object(payload);
+    }
+
+    let mut payload = serde_json::Map::from_iter([
+        ("type".to_owned(), Value::String("function".to_owned())),
+        ("name".to_owned(), Value::String(tool.name.clone())),
+        (
+            "description".to_owned(),
+            Value::String(tool.description.clone()),
+        ),
+        (
+            "parameters".to_owned(),
+            tool.input_json_schema.clone().unwrap_or(Value::Null),
+        ),
+        ("strict".to_owned(), Value::Bool(tool.strict_json_schema)),
+    ]);
+    if tool.defer_loading {
+        payload.insert("defer_loading".to_owned(), Value::Bool(true));
+    }
+    Value::Object(payload)
+}
+
+fn openai_chat_tool_payload(tool: &ToolDefinition) -> Value {
     if tool.input_json_schema.is_none() {
         let mut payload = serde_json::Map::new();
         payload.insert("type".to_owned(), Value::String(tool.name.clone()));
@@ -1373,7 +1404,22 @@ mod tests {
 
         assert_eq!(payload["model"], "gpt-5");
         assert_eq!(payload["input"][0]["role"], "user");
-        assert_eq!(payload["tools"][0]["type"], "function");
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "function",
+                "name": "search",
+                "description": "Search",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"}
+                    },
+                    "required": ["query"]
+                },
+                "strict": true
+            })
+        );
         assert!((payload["temperature"].as_f64().unwrap_or_default() - 0.3).abs() < 0.000_1);
         assert_eq!(payload["max_output_tokens"], 256);
         assert_eq!(payload["store"], true);
@@ -1422,6 +1468,55 @@ mod tests {
                 "user_location": null,
                 "search_context_size": "medium",
                 "external_web_access": false
+            })
+        );
+    }
+
+    #[test]
+    fn responses_payload_includes_deferred_function_tool_flag() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("get_weather", "Get weather")
+                        .with_input_json_schema(json!({
+                            "type": "object",
+                            "properties": {
+                                "city": {"type": "string"}
+                            },
+                            "required": ["city"]
+                        }))
+                        .with_defer_loading(true),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"}
+                    },
+                    "required": ["city"]
+                },
+                "strict": true,
+                "defer_loading": true
             })
         );
     }
