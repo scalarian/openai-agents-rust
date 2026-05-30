@@ -49,11 +49,15 @@ Runnable version: [voice_pipeline.rs](../../crates/openai-agents/examples/voice_
 
 ## In This Section
 
+- [quickstart.md](quickstart.md)
 - [workflow.md](workflow.md)
 - [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
 
 ## Read Next
 
+- [quickstart.md](quickstart.md)
 - [workflow.md](workflow.md)
 - [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
 - [../realtime/README.md](../realtime/README.md)

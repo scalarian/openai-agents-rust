@@ -19,5 +19,7 @@ A separate “voice-only agent system” would drift. Keeping voice on top of th
 
 ## Read Next
 
+- [quickstart.md](quickstart.md)
 - [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
 - [../streaming.md](../streaming.md)

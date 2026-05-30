@@ -2972,13 +2972,17 @@ Runnable version: [voice_pipeline.rs](../../crates/openai-agents/examples/voice_
 
 ## In This Section
 
+- [quickstart.md](quickstart.md)
 - [workflow.md](workflow.md)
 - [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
 
 ## Read Next
 
+- [quickstart.md](quickstart.md)
 - [workflow.md](workflow.md)
 - [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
 - [../realtime/README.md](../realtime/README.md)
 
 
@@ -3008,7 +3012,130 @@ The result is live, not just a static summary. It owns:
 ## Read Next
 
 - [README.md](README.md)
+- [quickstart.md](quickstart.md)
 - [../streaming.md](../streaming.md)
+- [../tracing.md](../tracing.md)
+
+
+## voice/quickstart.md
+
+# Voice Quickstart
+
+Voice pipelines run speech-to-text, a workflow, and optional text-to-speech on top of the same agent runtime used by text agents.
+
+## Minimal Buffered Audio Flow
+
+The runnable version lives in [voice_pipeline.rs](../../crates/openai-agents/examples/voice_pipeline.rs).
+
+```rust,no_run
+use openai_agents::voice::{
+    AudioInput, SingleAgentVoiceWorkflow, VoicePipeline, VoicePipelineConfig,
+};
+use openai_agents::{Agent, AgentsError};
+
+#[tokio::main]
+async fn main() -> Result<(), AgentsError> {
+    let workflow = SingleAgentVoiceWorkflow::new(
+        Agent::builder("assistant")
+            .instructions("Be concise.")
+            .build(),
+    );
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: false,
+        ..VoicePipelineConfig::default()
+    });
+
+    let result = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1, 2, 3],
+            },
+        )
+        .await?;
+    let completed = result.wait_for_completion().await?;
+    println!("{:?}", completed.transcript);
+    Ok(())
+}
+```
+
+## Streamed Audio Input
+
+Use `StreamedAudioInput` when audio arrives in chunks. The runnable version is [voice_streamed.rs](../../crates/openai-agents/examples/voice_streamed.rs).
+
+```rust,no_run
+use openai_agents::voice::{
+    StreamedAudioInput, VoicePipeline, VoicePipelineConfig, VoiceWorkflowBase,
+};
+
+# fn build_workflow() -> impl VoiceWorkflowBase { todo!() }
+# async fn run() -> Result<(), openai_agents::AgentsError> {
+let workflow = build_workflow();
+let pipeline = VoicePipeline::new(VoicePipelineConfig {
+    stream_audio: true,
+    ..VoicePipelineConfig::default()
+});
+let input = StreamedAudioInput::from_pcm16_chunks(&[vec![0, 128], vec![-128, 0]]);
+let result = pipeline.run_streamed_audio_input(&workflow, input).await?;
+let completed = result.wait_for_completion().await?;
+println!("{:?}", completed.transcript);
+# Ok(())
+# }
+```
+
+## Main Types
+
+| Type | Role |
+| --- | --- |
+| `AudioInput` | Buffered audio input with MIME type and bytes. |
+| `StreamedAudioInput` | Chunked PCM16 input. |
+| `VoicePipeline` | Runs STT, workflow, and optional TTS. |
+| `VoicePipelineConfig` | Controls streaming, sentence splitting, STT settings, and TTS settings. |
+| `SingleAgentVoiceWorkflow` | Adapts a normal `Agent` to the voice workflow trait. |
+| `StreamedAudioResult` | Live result with transcript, audio, lifecycle, completion, and error state. |
+
+## Read Next
+
+- [README.md](README.md)
+- [workflow.md](workflow.md)
+- [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
+
+
+## voice/tracing.md
+
+# Voice Tracing
+
+Voice workflows use the shared agents runtime, so the agent turn inside `SingleAgentVoiceWorkflow` participates in the same tracing model described in [../tracing.md](../tracing.md).
+
+## What Gets Traced
+
+The shared runner can trace:
+
+- the agent run launched by `SingleAgentVoiceWorkflow`
+- tool calls and handoffs inside that run
+- guardrail activity from the underlying agent workflow
+- model request metadata allowed by the tracing configuration
+
+`VoicePipeline` also emits live `VoiceStreamEvent` values for transcript, audio, lifecycle, and errors. Use those events for product telemetry that is specific to audio playback or capture.
+
+## Current Rust Config Surface
+
+`VoicePipelineConfig` currently exposes:
+
+- `stream_audio`
+- `split_sentences`
+- `stt_settings`
+- `tts_settings`
+
+It does not currently expose Python-style voice-specific tracing fields such as audio-data redaction toggles or trace metadata. Use the shared tracing controls from [../tracing.md](../tracing.md) for agent-run tracing, and keep application-level audio telemetry outside the model-visible workflow when it contains sensitive data.
+
+## Read Next
+
+- [quickstart.md](quickstart.md)
+- [pipeline.md](pipeline.md)
+- [workflow.md](workflow.md)
 - [../tracing.md](../tracing.md)
 
 
@@ -3035,6 +3162,8 @@ A separate “voice-only agent system” would drift. Keeping voice on top of th
 
 ## Read Next
 
+- [quickstart.md](quickstart.md)
 - [pipeline.md](pipeline.md)
+- [tracing.md](tracing.md)
 - [../streaming.md](../streaming.md)
 

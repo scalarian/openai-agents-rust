@@ -22,5 +22,6 @@ The result is live, not just a static summary. It owns:
 ## Read Next
 
 - [README.md](README.md)
+- [quickstart.md](quickstart.md)
 - [../streaming.md](../streaming.md)
 - [../tracing.md](../tracing.md)

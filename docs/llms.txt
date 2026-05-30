@@ -106,5 +106,9 @@ Compact export of the markdown docs tree.
   Use this section when you want STT -> workflow -> TTS orchestration on top of the shared agents runtime.
 - voice/pipeline.md: Voice Pipeline
   Use this page when you need the full STT -> workflow -> TTS loop.
+- voice/quickstart.md: Voice Quickstart
+  Voice pipelines run speech-to-text, a workflow, and optional text-to-speech on top of the same agent runtime used by text agents.
+- voice/tracing.md: Voice Tracing
+  Voice workflows use the shared agents runtime, so the agent turn inside `SingleAgentVoiceWorkflow` participates in the same tracing model described in [../tracing.md](../tracing.md).
 - voice/workflow.md: Voice Workflow
   Use this page when you want to understand how voice uses the shared runner rather than bypassing it.
