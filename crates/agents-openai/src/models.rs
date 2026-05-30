@@ -8,8 +8,8 @@ use std::{
 };
 
 use agents_core::{
-    AgentsError, InputItem, LOGGER_TARGET, Model, ModelRequest, ModelResponse, OutputItem, Result,
-    ToolDefinition, Usage, UserError,
+    AgentsError, InputItem, LOGGER_TARGET, Model, ModelBehaviorError, ModelRequest, ModelResponse,
+    OutputItem, Result, ToolDefinition, Usage, UserError,
 };
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
@@ -1087,11 +1087,19 @@ fn parse_chat_completions_response(
     strict_feature_validation: bool,
 ) -> Result<ModelResponse> {
     let mut output = Vec::new();
-    if let Some(message) = payload
+    let choices = payload
         .get("choices")
         .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
+        .ok_or_else(|| ModelBehaviorError {
+            message: chat_completions_no_choices_message(payload),
+        })?;
+    let message = choices
+        .first()
         .and_then(|choice| choice.get("message"))
+        .ok_or_else(|| ModelBehaviorError {
+            message: chat_completions_no_choices_message(payload),
+        })?;
+
     {
         if let Some(content) = parse_chat_message_content(message.get("content")) {
             output.push(OutputItem::Text { text: content });
@@ -1155,6 +1163,16 @@ fn parse_chat_completions_response(
         response_id: None,
         request_id,
     })
+}
+
+fn chat_completions_no_choices_message(payload: &Value) -> String {
+    let mut message =
+        "ChatCompletion response has no choices (possible provider error payload)".to_owned();
+    if let Some(error) = payload.get("error") {
+        message.push_str(": ");
+        message.push_str(&error.to_string());
+    }
+    message
 }
 
 fn first_non_empty_string(value: &Value, fields: &[&str]) -> Option<String> {
@@ -2050,6 +2068,29 @@ mod tests {
                 .to_string()
                 .contains("Custom tool calls are not supported")
         );
+    }
+
+    #[test]
+    fn chat_completions_rejects_empty_choices() {
+        let error = parse_chat_completions_response(
+            "gpt-4.1",
+            &json!({
+                "choices": [],
+                "error": {
+                    "message": "provider overloaded"
+                }
+            }),
+            None,
+            false,
+        )
+        .expect_err("empty chat choices should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ChatCompletion response has no choices")
+        );
+        assert!(error.to_string().contains("provider overloaded"));
     }
 
     #[test]
