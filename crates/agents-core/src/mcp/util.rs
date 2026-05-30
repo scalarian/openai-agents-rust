@@ -189,7 +189,11 @@ impl MCPUtil {
         let tool_name = tool.name.clone();
         let server_name = server.name().to_owned();
         let origin = ToolOrigin::mcp(server_name.clone());
-        let needs_approval = tool.requires_approval;
+        let needs_approval = server
+            .require_approval()
+            .map(|policy| policy.needs_approval_for_tool(&tool.name))
+            .transpose()?
+            .unwrap_or(tool.requires_approval);
         let input_schema = tool.input_schema.clone();
         let static_meta = tool.meta.clone();
         let function_tool = FunctionTool::new(
@@ -380,13 +384,17 @@ fn strict_or_fallback_mcp_input_schema(tool_name: &str, schema: &Value) -> (Valu
 mod tests {
     use async_trait::async_trait;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
     use crate::internal::tool_execution::execute_local_function_tools;
     use crate::items::RunItem;
-    use crate::mcp::server::MCPToolAnnotations;
+    use crate::mcp::server::{
+        MCPToolAnnotations, RequireApprovalObject, RequireApprovalPolicy, RequireApprovalSetting,
+        RequireApprovalToolList, RequireApprovalValue,
+    };
     use crate::run_config::RunConfig;
     use crate::tool::{Tool, ToolOutput};
     use crate::tool_context::ToolCall;
@@ -470,6 +478,44 @@ mod tests {
     impl MCPServer for ToolListServer {
         fn name(&self) -> &str {
             &self.name
+        }
+
+        async fn connect(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn cleanup(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn list_tools(&self) -> Result<Vec<MCPTool>> {
+            Ok(self.tools.clone())
+        }
+
+        async fn call_tool(
+            &self,
+            tool_name: &str,
+            arguments: Value,
+            _meta: Option<Value>,
+        ) -> Result<ToolOutput> {
+            Ok(ToolOutput::from(format!("{tool_name}:{arguments}")))
+        }
+    }
+
+    struct ApprovalPolicyServer {
+        name: String,
+        tools: Vec<MCPTool>,
+        require_approval: Option<RequireApprovalSetting>,
+    }
+
+    #[async_trait]
+    impl MCPServer for ApprovalPolicyServer {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn require_approval(&self) -> Option<&RequireApprovalSetting> {
+            self.require_approval.as_ref()
         }
 
         async fn connect(&self) -> Result<()> {
@@ -778,6 +824,100 @@ mod tests {
         assert_eq!(
             captured.lock().expect("capture mutex").as_slice(),
             [("test-server".to_owned(), "lookup".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn server_require_approval_policy_overrides_tool_flags() {
+        let server = Arc::new(ApprovalPolicyServer {
+            name: "policy".to_owned(),
+            tools: vec![MCPTool::new("lookup")],
+            require_approval: Some(RequireApprovalSetting::always()),
+        }) as Arc<dyn MCPServer>;
+
+        let tools = MCPUtil::get_function_tools_connected(
+            server,
+            None,
+            RunContextWrapper::new(RunContext::default()),
+            Agent::builder("assistant").build(),
+            None,
+        )
+        .await
+        .expect("tools should load");
+
+        assert_eq!(tools.len(), 1);
+        assert!(tools[0].needs_approval);
+    }
+
+    #[tokio::test]
+    async fn server_require_approval_mapping_allows_policy_keyword_tool_names() {
+        let server = Arc::new(ApprovalPolicyServer {
+            name: "policy".to_owned(),
+            tools: vec![MCPTool::new("always"), MCPTool::new("never")],
+            require_approval: Some(RequireApprovalSetting::ToolMapping(BTreeMap::from([
+                (
+                    "always".to_owned(),
+                    RequireApprovalValue::Policy(RequireApprovalPolicy::Always),
+                ),
+                (
+                    "never".to_owned(),
+                    RequireApprovalValue::Policy(RequireApprovalPolicy::Never),
+                ),
+            ]))),
+        }) as Arc<dyn MCPServer>;
+
+        let tools = MCPUtil::get_function_tools_connected(
+            server,
+            None,
+            RunContextWrapper::new(RunContext::default()),
+            Agent::builder("assistant").build(),
+            None,
+        )
+        .await
+        .expect("tools should load");
+
+        assert_eq!(tools.len(), 2);
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.definition.name == "always" && tool.needs_approval)
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.definition.name == "never" && !tool.needs_approval)
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_server_require_approval_policy_rejects_conversion() {
+        let server = Arc::new(ApprovalPolicyServer {
+            name: "policy".to_owned(),
+            tools: vec![MCPTool::new("delete")],
+            require_approval: Some(RequireApprovalSetting::ToolLists(RequireApprovalObject {
+                always: Some(RequireApprovalToolList {
+                    tool_names: vec!["delete".to_owned()],
+                }),
+                never: Some(RequireApprovalToolList {
+                    tool_names: vec!["delete".to_owned()],
+                }),
+            })),
+        }) as Arc<dyn MCPServer>;
+
+        let error = MCPUtil::get_function_tools_connected(
+            server,
+            None,
+            RunContextWrapper::new(RunContext::default()),
+            Agent::builder("assistant").build(),
+            None,
+        )
+        .await
+        .expect_err("overlapping policies should not fail open");
+
+        assert!(
+            error
+                .to_string()
+                .contains("both always and never: [\"delete\"]")
         );
     }
 

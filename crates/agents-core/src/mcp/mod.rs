@@ -11,7 +11,8 @@ pub use server::{
     MCPServerSse, MCPServerSseParams, MCPServerStdio, MCPServerStdioParams,
     MCPServerStreamableHttp, MCPServerStreamableHttpParams, MCPTextResourceContents, MCPTool,
     MCPToolAnnotations, MCPTransportAuth, MCPTransportClient, MCPTransportClientBuilder,
-    MCPTransportClientConfig, MCPTransportKind, RequireApprovalObject, RequireApprovalToolList,
+    MCPTransportClientConfig, MCPTransportKind, RequireApprovalObject, RequireApprovalPolicy,
+    RequireApprovalSetting, RequireApprovalToolList, RequireApprovalValue,
 };
 pub use util::{
     MCPToolMetaContext, MCPToolMetaResolver, MCPUtil, ToolFilter, ToolFilterCallable,

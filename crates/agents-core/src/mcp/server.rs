@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -23,9 +23,177 @@ pub struct RequireApprovalToolList {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RequireApprovalObject {
     pub always: Option<RequireApprovalToolList>,
     pub never: Option<RequireApprovalToolList>,
+}
+
+impl RequireApprovalObject {
+    pub fn validate(&self) -> Result<()> {
+        let always_names = self
+            .always
+            .as_ref()
+            .map(|entry| entry.tool_names.iter().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        let never_names = self
+            .never
+            .as_ref()
+            .map(|entry| entry.tool_names.iter().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        let overlapping_names = always_names
+            .intersection(&never_names)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if overlapping_names.is_empty() {
+            return Ok(());
+        }
+
+        Err(AgentsError::User(UserError {
+            message: format!(
+                "Invalid require_approval tool list policy: tool names cannot appear in both always and never: {overlapping_names:?}."
+            ),
+        }))
+    }
+
+    pub fn to_tool_mapping(&self) -> Result<BTreeMap<String, bool>> {
+        self.validate()?;
+
+        let mut tool_mapping = BTreeMap::new();
+        if let Some(always) = &self.always {
+            for name in &always.tool_names {
+                tool_mapping.insert(name.clone(), true);
+            }
+        }
+        if let Some(never) = &self.never {
+            for name in &never.tool_names {
+                tool_mapping.insert(name.clone(), false);
+            }
+        }
+        Ok(tool_mapping)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequireApprovalPolicy {
+    Always,
+    Never,
+}
+
+impl RequireApprovalPolicy {
+    pub fn as_bool(self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum RequireApprovalValue {
+    Bool(bool),
+    Policy(RequireApprovalPolicy),
+}
+
+impl RequireApprovalValue {
+    pub fn as_bool(self) -> bool {
+        match self {
+            Self::Bool(value) => value,
+            Self::Policy(policy) => policy.as_bool(),
+        }
+    }
+}
+
+impl From<bool> for RequireApprovalValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<RequireApprovalPolicy> for RequireApprovalValue {
+    fn from(policy: RequireApprovalPolicy) -> Self {
+        Self::Policy(policy)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum RequireApprovalSetting {
+    Bool(bool),
+    Policy(RequireApprovalPolicy),
+    ToolLists(RequireApprovalObject),
+    ToolMapping(BTreeMap<String, RequireApprovalValue>),
+}
+
+impl RequireApprovalSetting {
+    pub fn always() -> Self {
+        Self::Policy(RequireApprovalPolicy::Always)
+    }
+
+    pub fn never() -> Self {
+        Self::Policy(RequireApprovalPolicy::Never)
+    }
+
+    pub fn tool_mapping(mapping: BTreeMap<String, bool>) -> Self {
+        Self::ToolMapping(
+            mapping
+                .into_iter()
+                .map(|(name, value)| (name, RequireApprovalValue::Bool(value)))
+                .collect(),
+        )
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Self::ToolLists(tool_lists) = self {
+            tool_lists.validate()
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn needs_approval_for_tool(&self, tool_name: &str) -> Result<bool> {
+        match self {
+            Self::Bool(value) => Ok(*value),
+            Self::Policy(policy) => Ok(policy.as_bool()),
+            Self::ToolMapping(mapping) => Ok(mapping
+                .get(tool_name)
+                .copied()
+                .map(RequireApprovalValue::as_bool)
+                .unwrap_or(false)),
+            Self::ToolLists(tool_lists) => Ok(tool_lists
+                .to_tool_mapping()?
+                .get(tool_name)
+                .copied()
+                .unwrap_or(false)),
+        }
+    }
+}
+
+impl From<bool> for RequireApprovalSetting {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<RequireApprovalPolicy> for RequireApprovalSetting {
+    fn from(policy: RequireApprovalPolicy) -> Self {
+        Self::Policy(policy)
+    }
+}
+
+impl From<RequireApprovalObject> for RequireApprovalSetting {
+    fn from(object: RequireApprovalObject) -> Self {
+        Self::ToolLists(object)
+    }
+}
+
+impl From<BTreeMap<String, bool>> for RequireApprovalSetting {
+    fn from(mapping: BTreeMap<String, bool>) -> Self {
+        Self::tool_mapping(mapping)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -119,6 +287,10 @@ pub struct MCPReadResourceResult {
 #[async_trait]
 pub trait MCPServer: Send + Sync {
     fn name(&self) -> &str;
+
+    fn require_approval(&self) -> Option<&RequireApprovalSetting> {
+        None
+    }
 
     async fn connect(&self) -> Result<()>;
 
@@ -300,6 +472,7 @@ pub struct MCPServerStreamableHttpParams {
 pub struct MCPServerStdio {
     name: String,
     pub params: MCPServerStdioParams,
+    require_approval: Option<RequireApprovalSetting>,
     connected: Arc<AtomicBool>,
     resources: Arc<Mutex<Vec<MCPResource>>>,
     resource_templates: Arc<Mutex<Vec<MCPResourceTemplate>>>,
@@ -311,6 +484,7 @@ impl fmt::Debug for MCPServerStdio {
         f.debug_struct("MCPServerStdio")
             .field("name", &self.name)
             .field("params", &self.params)
+            .field("require_approval", &self.require_approval)
             .finish()
     }
 }
@@ -320,11 +494,22 @@ impl MCPServerStdio {
         Self {
             name: name.into(),
             params,
+            require_approval: None,
             connected: Arc::new(AtomicBool::new(false)),
             resources: Arc::new(Mutex::new(Vec::new())),
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_require_approval(
+        mut self,
+        require_approval: impl Into<RequireApprovalSetting>,
+    ) -> Result<Self> {
+        let require_approval = require_approval.into();
+        require_approval.validate()?;
+        self.require_approval = Some(require_approval);
+        Ok(self)
     }
 
     pub fn with_resources(mut self, resources: Vec<MCPResource>) -> Self {
@@ -361,6 +546,10 @@ impl MCPServerStdio {
 impl MCPServer for MCPServerStdio {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn require_approval(&self) -> Option<&RequireApprovalSetting> {
+        self.require_approval.as_ref()
     }
 
     async fn connect(&self) -> Result<()> {
@@ -424,6 +613,7 @@ impl MCPServer for MCPServerStdio {
 pub struct MCPServerSse {
     name: String,
     pub params: MCPServerSseParams,
+    require_approval: Option<RequireApprovalSetting>,
     connected: Arc<AtomicBool>,
     client_builder: Option<MCPTransportClientBuilder>,
     current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
@@ -437,6 +627,7 @@ impl fmt::Debug for MCPServerSse {
         f.debug_struct("MCPServerSse")
             .field("name", &self.name)
             .field("params", &self.params)
+            .field("require_approval", &self.require_approval)
             .finish()
     }
 }
@@ -446,6 +637,7 @@ impl MCPServerSse {
         Self {
             name: name.into(),
             params,
+            require_approval: None,
             connected: Arc::new(AtomicBool::new(false)),
             client_builder: None,
             current_client: Arc::new(StdMutex::new(None)),
@@ -453,6 +645,16 @@ impl MCPServerSse {
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_require_approval(
+        mut self,
+        require_approval: impl Into<RequireApprovalSetting>,
+    ) -> Result<Self> {
+        let require_approval = require_approval.into();
+        require_approval.validate()?;
+        self.require_approval = Some(require_approval);
+        Ok(self)
     }
 
     pub fn with_client_builder(mut self, client_builder: MCPTransportClientBuilder) -> Self {
@@ -513,6 +715,10 @@ impl MCPServerSse {
 impl MCPServer for MCPServerSse {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn require_approval(&self) -> Option<&RequireApprovalSetting> {
+        self.require_approval.as_ref()
     }
 
     async fn connect(&self) -> Result<()> {
@@ -595,6 +801,7 @@ impl MCPServer for MCPServerSse {
 pub struct MCPServerStreamableHttp {
     name: String,
     pub params: MCPServerStreamableHttpParams,
+    require_approval: Option<RequireApprovalSetting>,
     connected: Arc<AtomicBool>,
     client_builder: Option<MCPTransportClientBuilder>,
     current_client: Arc<StdMutex<Option<Arc<dyn MCPTransportClient>>>>,
@@ -608,6 +815,7 @@ impl fmt::Debug for MCPServerStreamableHttp {
         f.debug_struct("MCPServerStreamableHttp")
             .field("name", &self.name)
             .field("params", &self.params)
+            .field("require_approval", &self.require_approval)
             .finish()
     }
 }
@@ -617,6 +825,7 @@ impl MCPServerStreamableHttp {
         Self {
             name: name.into(),
             params,
+            require_approval: None,
             connected: Arc::new(AtomicBool::new(false)),
             client_builder: None,
             current_client: Arc::new(StdMutex::new(None)),
@@ -624,6 +833,16 @@ impl MCPServerStreamableHttp {
             resource_templates: Arc::new(Mutex::new(Vec::new())),
             resource_contents: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_require_approval(
+        mut self,
+        require_approval: impl Into<RequireApprovalSetting>,
+    ) -> Result<Self> {
+        let require_approval = require_approval.into();
+        require_approval.validate()?;
+        self.require_approval = Some(require_approval);
+        Ok(self)
     }
 
     pub fn with_client_builder(mut self, client_builder: MCPTransportClientBuilder) -> Self {
@@ -692,6 +911,10 @@ impl MCPServerStreamableHttp {
 impl MCPServer for MCPServerStreamableHttp {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn require_approval(&self) -> Option<&RequireApprovalSetting> {
+        self.require_approval.as_ref()
     }
 
     async fn connect(&self) -> Result<()> {
@@ -775,6 +998,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use serde_json::json;
 
     use super::*;
 
@@ -867,6 +1092,87 @@ mod tests {
 
         server.cleanup().await.expect("cleanup should succeed");
         assert_eq!(state.cleanup_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn require_approval_rejects_invalid_fail_open_policies() {
+        let typo = serde_json::from_value::<RequireApprovalSetting>(json!("alwyas"));
+        assert!(typo.is_err());
+
+        let mapping_typo =
+            serde_json::from_value::<RequireApprovalSetting>(json!({"delete": "alwyas"}));
+        assert!(mapping_typo.is_err());
+
+        let unexpected_tool_list_key = serde_json::from_value::<RequireApprovalSetting>(json!({
+            "always": {"tool_names": ["delete"]},
+            "sometimes": {"tool_names": ["other"]},
+        }));
+        assert!(unexpected_tool_list_key.is_err());
+
+        let overlap = RequireApprovalSetting::ToolLists(RequireApprovalObject {
+            always: Some(RequireApprovalToolList {
+                tool_names: vec!["delete".to_owned()],
+            }),
+            never: Some(RequireApprovalToolList {
+                tool_names: vec!["delete".to_owned()],
+            }),
+        });
+        let error = overlap
+            .validate()
+            .expect_err("overlapping approval lists should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("both always and never: [\"delete\"]")
+        );
+    }
+
+    #[test]
+    fn require_approval_mapping_allows_policy_keyword_tool_names() {
+        let setting = serde_json::from_value::<RequireApprovalSetting>(json!({
+            "always": "always",
+            "never": "never",
+        }))
+        .expect("keyword tool names should parse as mapping keys");
+
+        assert!(
+            setting
+                .needs_approval_for_tool("always")
+                .expect("policy should evaluate")
+        );
+        assert!(
+            !setting
+                .needs_approval_for_tool("never")
+                .expect("policy should evaluate")
+        );
+    }
+
+    #[test]
+    fn mcp_server_builder_rejects_invalid_require_approval_policy() {
+        let policy = RequireApprovalSetting::ToolLists(RequireApprovalObject {
+            always: Some(RequireApprovalToolList {
+                tool_names: vec!["delete".to_owned()],
+            }),
+            never: Some(RequireApprovalToolList {
+                tool_names: vec!["delete".to_owned()],
+            }),
+        });
+
+        let error = MCPServerStdio::new(
+            "docs",
+            MCPServerStdioParams {
+                command: "server".to_owned(),
+                args: Vec::new(),
+            },
+        )
+        .with_require_approval(policy)
+        .expect_err("invalid require_approval policy should fail at configuration time");
+
+        assert!(
+            error
+                .to_string()
+                .contains("both always and never: [\"delete\"]")
+        );
     }
 
     #[tokio::test]
