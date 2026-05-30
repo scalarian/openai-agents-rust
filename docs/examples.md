@@ -59,6 +59,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | memory session HITL example | upstream-named memory session HITL entry point | [memory_session_hitl_example.rs](../crates/openai-agents/examples/memory_session_hitl_example.rs) |
 | memory session | session-backed follow-up turns | [memory_session.rs](../crates/openai-agents/examples/memory_session.rs) |
 | mcp filesystem | MCP server tool discovery and local tool calls | [mcp_filesystem.rs](../crates/openai-agents/examples/mcp_filesystem.rs) |
+| mcp get all MCP tools example | upstream-named MCP tool-prefetch entry point | [mcp_get_all_mcp_tools_example.rs](../crates/openai-agents/examples/mcp_get_all_mcp_tools_example.rs) |
 | mcp tool filter | static MCP tool filtering before model-visible tool discovery | [mcp_tool_filter.rs](../crates/openai-agents/examples/mcp_tool_filter.rs) |
 | MongoDB session example | upstream-named MongoDB session entry point | [mongodb_session_example.rs](../crates/openai-agents/examples/mongodb_session_example.rs) |
 | mongodb session | MongoDB-backed extension session with shared client isolation | [mongodb_session.rs](../crates/openai-agents/examples/mongodb_session.rs) |
