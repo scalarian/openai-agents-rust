@@ -170,7 +170,7 @@ impl OpenAIResponsesModel {
         if let Some(text_config) = openai_responses_text_config(request) {
             payload.insert("text".to_owned(), text_config);
         }
-        apply_responses_model_settings(&mut payload, &request.settings)?;
+        apply_responses_model_settings(&mut payload, &request.settings, &request.tools)?;
         apply_hosted_tool_includes(&mut payload, &request.tools);
         Ok(Value::Object(payload))
     }
@@ -598,6 +598,7 @@ async fn post_json(
 fn apply_responses_model_settings(
     payload: &mut serde_json::Map<String, Value>,
     settings: &agents_core::ModelSettings,
+    tools: &[ToolDefinition],
 ) -> Result<()> {
     validate_extra_body_keys(
         &settings.extra_body,
@@ -635,7 +636,10 @@ fn apply_responses_model_settings(
         payload.insert("parallel_tool_calls".to_owned(), json!(value));
     }
     if let Some(value) = &settings.tool_choice {
-        payload.insert("tool_choice".to_owned(), Value::String(value.clone()));
+        payload.insert(
+            "tool_choice".to_owned(),
+            responses_tool_choice_value(value, tools)?,
+        );
     }
     if let Some(value) = &settings.truncation {
         payload.insert("truncation".to_owned(), Value::String(value.clone()));
@@ -686,6 +690,55 @@ fn apply_responses_model_settings(
         payload.insert(key.clone(), value.clone());
     }
     Ok(())
+}
+
+fn responses_tool_choice_value(tool_choice: &str, tools: &[ToolDefinition]) -> Result<Value> {
+    match tool_choice {
+        "auto" | "required" | "none" => Ok(Value::String(tool_choice.to_owned())),
+        "file_search"
+        | "web_search"
+        | "web_search_preview"
+        | "image_generation"
+        | "code_interpreter"
+        | "computer"
+        | "computer_use"
+        | "computer_use_preview"
+        | "mcp" => Ok(json!({ "type": tool_choice })),
+        "tool_search" => {
+            let has_hosted_tool_search = tools
+                .iter()
+                .any(|tool| tool.input_json_schema.is_none() && tool.name == "tool_search");
+            let has_top_level_function_tool_search = tools.iter().any(|tool| {
+                tool.input_json_schema.is_some()
+                    && tool.name == "tool_search"
+                    && tool
+                        .namespace
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty()
+                    && !tool.defer_loading
+            });
+            if has_hosted_tool_search && !has_top_level_function_tool_search {
+                return Err(AgentsError::message(
+                    "tool_choice='tool_search' is not supported for ToolSearchTool() on the OpenAI Responses API. Use `auto` or `required`, or target a real top-level function tool named `tool_search`.",
+                ));
+            }
+            if !has_hosted_tool_search && !has_top_level_function_tool_search {
+                return Err(AgentsError::message(
+                    "tool_choice='tool_search' requires ToolSearchTool() or a real top-level function tool named `tool_search` on the OpenAI Responses API.",
+                ));
+            }
+            Ok(json!({
+                "type": "function",
+                "name": tool_choice,
+            }))
+        }
+        _ => Ok(json!({
+            "type": "function",
+            "name": tool_choice,
+        })),
+    }
 }
 
 fn apply_chat_model_settings(
@@ -1657,6 +1710,67 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_converts_named_function_tool_choice() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    tool_choice: Some("search".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("search", "Search")
+                        .with_input_json_schema(json!({"type": "object"})),
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tool_choice"],
+            json!({
+                "type": "function",
+                "name": "search"
+            })
+        );
+    }
+
+    #[test]
+    fn responses_payload_converts_hosted_tool_choice() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    tool_choice: Some("file_search".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(payload["tool_choice"], json!({"type": "file_search"}));
+    }
+
+    #[test]
     fn responses_payload_includes_file_search_options_and_results_include() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",
@@ -1803,6 +1917,41 @@ mod tests {
             .expect_err("duplicate tool_search tools should fail");
 
         assert!(error.to_string().contains("Only one ToolSearchTool()"));
+    }
+
+    #[test]
+    fn responses_payload_rejects_hosted_tool_search_tool_choice() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    tool_choice: Some("tool_search".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("get_weather", "Get weather")
+                        .with_input_json_schema(json!({"type": "object"}))
+                        .with_defer_loading(true),
+                    crate::tools::tool_search_tool().definition,
+                ],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("hosted tool_search should not be a named tool choice");
+
+        assert!(
+            error
+                .to_string()
+                .contains("tool_choice='tool_search' is not supported")
+        );
     }
 
     #[test]
