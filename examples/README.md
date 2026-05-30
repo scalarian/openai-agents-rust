@@ -7,6 +7,7 @@ Runnable examples live in `crates/openai-agents/examples`.
 From the repo root:
 
 ```bash
+cargo run -p openai-agents-rs --example agents_as_tools
 cargo run -p openai-agents-rs --example basic_run
 cargo run -p openai-agents-rs --example function_tools
 cargo run -p openai-agents-rs --example input_guardrail
@@ -21,6 +22,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 
 | Example | What it shows | Docs |
 | --- | --- | --- |
+| `agents_as_tools` | specialist agents exposed as callable tools | [docs/agents.md](../docs/agents.md) |
 | `basic_run` | the smallest end-to-end facade call | [docs/quickstart.md](../docs/quickstart.md) |
 | `function_tools` | typed local function tools with structured arguments | [docs/tools.md](../docs/tools.md) |
 | `input_guardrail` | tripwire handling before model execution | [docs/guardrails.md](../docs/guardrails.md) |
