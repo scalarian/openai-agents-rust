@@ -112,6 +112,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_accepts_custom_realtime_model_driver() {
+        let runner = RealtimeRunner::new(RealtimeAgent::new("sip assistant"));
+        let session = runner
+            .run_with_model(OpenAIRealtimeSIPModel {
+                transport: TransportConfig {
+                    call_id: Some("call_test".to_owned()),
+                    ..TransportConfig::default()
+                },
+                ..OpenAIRealtimeSIPModel::default()
+            })
+            .await
+            .expect("SIP model should attach");
+
+        let events = session
+            .send_text("hello")
+            .await
+            .expect("text turn should run");
+
+        assert!(matches!(
+            events.last(),
+            Some(RealtimeEvent::RawModelEvent(_))
+        ));
+        assert!(session.connected().await);
+    }
+
+    #[tokio::test]
     async fn session_supports_interrupt_update_and_close() {
         let agent = RealtimeAgent::new("assistant");
         let session = RealtimeRunner::new(agent)

@@ -672,6 +672,36 @@ mod tests {
         assert_eq!(payload["tools"][0]["parameters"]["required"][0], "question");
     }
 
+    #[test]
+    fn session_payload_uses_realtime_type_keys_for_audio_controls() {
+        let model = OpenAIRealtimeWebSocketModel::default();
+        let payload = model.session_payload_from_settings(&RealtimeSessionModelSettings {
+            input_audio_noise_reduction: Some(crate::RealtimeInputAudioNoiseReductionConfig {
+                kind: Some("near_field".to_owned()),
+            }),
+            turn_detection: Some(crate::RealtimeTurnDetectionConfig {
+                kind: Some("semantic_vad".to_owned()),
+                interrupt_response: Some(true),
+                ..crate::RealtimeTurnDetectionConfig::default()
+            }),
+            ..RealtimeSessionModelSettings::default()
+        });
+
+        assert_eq!(
+            payload["audio"]["input"]["noise_reduction"]["type"],
+            "near_field"
+        );
+        assert_eq!(
+            payload["audio"]["input"]["turn_detection"]["type"],
+            "semantic_vad"
+        );
+        assert!(
+            payload["audio"]["input"]["turn_detection"]
+                .get("kind")
+                .is_none()
+        );
+    }
+
     #[tokio::test]
     async fn websocket_model_tracks_connection_and_updates_session_model() {
         let mut model = OpenAIRealtimeWebSocketModel::default();

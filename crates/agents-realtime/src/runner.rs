@@ -3,7 +3,7 @@ use agents_core::Result;
 use crate::agent::RealtimeAgent;
 use crate::config::RealtimeRunConfig;
 use crate::events::RealtimeEvent;
-use crate::model::RealtimeModelConfig;
+use crate::model::{RealtimeModel, RealtimeModelConfig};
 use crate::openai_realtime::{OpenAIRealtimeWebSocketModel, TransportConfig};
 use crate::session::RealtimeSession;
 
@@ -27,10 +27,36 @@ impl RealtimeRunner {
     }
 
     pub async fn run(&self) -> Result<RealtimeSession> {
+        let model_name = self.effective_model_name();
+        self.run_with_model(OpenAIRealtimeWebSocketModel {
+            config: RealtimeModelConfig {
+                model: model_name.clone(),
+            },
+            transport: TransportConfig::default(),
+            connected: false,
+            last_connection_url: None,
+            last_session_payload: None,
+            applied_settings: None,
+        })
+        .await
+    }
+
+    pub async fn run_with_model<M>(&self, model_driver: M) -> Result<RealtimeSession>
+    where
+        M: RealtimeModel + 'static,
+    {
         let mut effective_agent = self.agent.clone();
         effective_agent.model_settings = Some(self.model_settings_for_agent(&effective_agent));
-        let model_name = self
-            .config
+        let model_name = self.effective_model_name();
+        let session = RealtimeSession::new(model_name.clone());
+        session.attach_model_driver(Box::new(model_driver)).await;
+        session.connect(Some(effective_agent.clone())).await?;
+        session.update_agent(effective_agent).await?;
+        Ok(session)
+    }
+
+    fn effective_model_name(&self) -> Option<String> {
+        self.config
             .model_settings
             .as_ref()
             .and_then(|settings| settings.model_name.clone())
@@ -39,21 +65,7 @@ impl RealtimeRunner {
                     .model_settings
                     .as_ref()
                     .and_then(|settings| settings.model_name.clone())
-            });
-        let session = RealtimeSession::new(model_name.clone());
-        session
-            .attach_model_driver(Box::new(OpenAIRealtimeWebSocketModel {
-                config: RealtimeModelConfig { model: model_name },
-                transport: TransportConfig::default(),
-                connected: false,
-                last_connection_url: None,
-                last_session_payload: None,
-                applied_settings: None,
-            }))
-            .await;
-        session.connect(Some(effective_agent.clone())).await?;
-        session.update_agent(effective_agent).await?;
-        Ok(session)
+            })
     }
 
     fn model_settings_for_agent(

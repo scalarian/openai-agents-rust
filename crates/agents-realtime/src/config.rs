@@ -31,6 +31,7 @@ impl RealtimeInputAudioTranscriptionConfig {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeInputAudioNoiseReductionConfig {
+    #[serde(rename = "type")]
     pub kind: Option<String>,
 }
 
@@ -44,6 +45,7 @@ impl RealtimeInputAudioNoiseReductionConfig {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeTurnDetectionConfig {
+    #[serde(rename = "type")]
     pub kind: Option<String>,
     pub create_response: Option<bool>,
     pub eagerness: Option<String>,
