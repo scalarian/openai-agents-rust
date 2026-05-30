@@ -29,6 +29,8 @@ pub struct ToolDefinition {
     pub strict_json_schema: bool,
     pub input_json_schema: Option<Value>,
     pub defer_loading: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hosted_tool_options: BTreeMap<String, Value>,
 }
 
 impl ToolDefinition {
@@ -40,6 +42,7 @@ impl ToolDefinition {
             strict_json_schema: true,
             input_json_schema: None,
             defer_loading: false,
+            hosted_tool_options: BTreeMap::new(),
         }
     }
 
@@ -55,6 +58,16 @@ impl ToolDefinition {
 
     pub fn with_defer_loading(mut self, defer_loading: bool) -> Self {
         self.defer_loading = defer_loading;
+        self
+    }
+
+    pub fn with_hosted_tool_option(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.hosted_tool_options.insert(key.into(), value);
+        self
+    }
+
+    pub fn with_hosted_tool_options(mut self, options: BTreeMap<String, Value>) -> Self {
+        self.hosted_tool_options = options;
         self
     }
 }
@@ -228,6 +241,16 @@ impl StaticTool {
         Self {
             definition: ToolDefinition::new(name, description),
         }
+    }
+
+    pub fn with_hosted_tool_option(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.definition = self.definition.with_hosted_tool_option(key, value);
+        self
+    }
+
+    pub fn with_hosted_tool_options(mut self, options: BTreeMap<String, Value>) -> Self {
+        self.definition = self.definition.with_hosted_tool_options(options);
+        self
     }
 }
 

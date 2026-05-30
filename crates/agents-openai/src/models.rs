@@ -934,9 +934,10 @@ fn openai_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
 
 fn openai_tool_payload(tool: &ToolDefinition) -> Value {
     if tool.input_json_schema.is_none() {
-        return json!({
-            "type": tool.name,
-        });
+        let mut payload = serde_json::Map::new();
+        payload.insert("type".to_owned(), Value::String(tool.name.clone()));
+        payload.extend(tool.hosted_tool_options.clone());
+        return Value::Object(payload);
     }
 
     json!({
@@ -1358,6 +1359,43 @@ mod tests {
             })
         );
         assert_eq!(payload["service_tier"], "priority");
+    }
+
+    #[test]
+    fn responses_payload_includes_web_search_external_web_access() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let web_search =
+            crate::tools::web_search_tool_with_options(crate::tools::WebSearchToolOptions {
+                external_web_access: Some(false),
+                ..Default::default()
+            });
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![web_search.definition],
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "web_search",
+                "filters": null,
+                "user_location": null,
+                "search_context_size": "medium",
+                "external_web_access": false
+            })
+        );
     }
 
     #[test]
