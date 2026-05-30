@@ -19,7 +19,7 @@ pub use extensions::{
 };
 pub use memory::{
     AdvancedSQLiteSession, AsyncSQLiteSession, DaprSession, DatabaseSession, EncryptedEnvelope,
-    EncryptedSession, MongoDBSession, RedisSession,
+    EncryptedSession, FileSession, MongoDBSession, RedisSession,
 };
 pub use providers::{
     AnyLLMApi, AnyLLMInternalChatCompletionMessage, AnyLLMModel, AnyLLMProvider,

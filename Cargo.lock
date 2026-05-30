@@ -1672,6 +1672,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

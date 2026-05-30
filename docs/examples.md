@@ -26,6 +26,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | deterministic flow | multi-step agent workflow with an explicit gate | [deterministic_flow.rs](../crates/openai-agents/examples/deterministic_flow.rs) |
 | dynamic system prompt | per-run agent instructions | [dynamic_system_prompt.rs](../crates/openai-agents/examples/dynamic_system_prompt.rs) |
 | encrypted session | encrypted session wrapper over SQLite storage | [encrypted_session.rs](../crates/openai-agents/examples/encrypted_session.rs) |
+| file session | file-backed extension session rehydrated by session id | [file_session.rs](../crates/openai-agents/examples/file_session.rs) |
 | file search | hosted file search with vector store options and included results | [file_search.rs](../crates/openai-agents/examples/file_search.rs) |
 | function tools | typed local tools with JSON-schema inputs | [function_tools.rs](../crates/openai-agents/examples/function_tools.rs) |
 | forcing tool use | required tool choice and stop-on-tool behavior | [forcing_tool_use.rs](../crates/openai-agents/examples/forcing_tool_use.rs) |
