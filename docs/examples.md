@@ -122,6 +122,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | reasoning content GPT OSS stream | optional local GPT-OSS reasoning stream smoke example | [reasoning_content_gpt_oss_stream.rs](../crates/openai-agents/examples/reasoning_content_gpt_oss_stream.rs) |
 | reasoning content runner example | upstream-named reasoning content Runner entry point | [reasoning_content_runner_example.rs](../crates/openai-agents/examples/reasoning_content_runner_example.rs) |
 | realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
+| research bot | multi-agent web research plan, search summaries, and streamed report writing | [research_bot.rs](../crates/openai-agents/examples/research_bot.rs) |
 | sandbox agent capabilities | sandbox tool surface controlled by capability flags | [sandbox_agent_capabilities.rs](../crates/openai-agents/examples/sandbox_agent_capabilities.rs) |
 | sandbox agent with tools | sandbox agent combined with function, MCP, and static tools | [sandbox_agent_with_tools.rs](../crates/openai-agents/examples/sandbox_agent_with_tools.rs) |
 | sandbox agents as tools | sandbox specialist agents exposed as callable tools | [sandbox_agents_as_tools.rs](../crates/openai-agents/examples/sandbox_agents_as_tools.rs) |
