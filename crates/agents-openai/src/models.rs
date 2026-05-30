@@ -1,6 +1,6 @@
 use agents_core::{
     AgentsError, InputItem, Model, ModelRequest, ModelResponse, OutputItem, Result, ToolDefinition,
-    Usage,
+    Usage, UserError,
 };
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
@@ -246,11 +246,12 @@ impl Model for OpenAIChatCompletionsModel {
         )
         .await?;
 
-        Ok(parse_chat_completions_response(
+        parse_chat_completions_response(
             &self.model,
             &response.payload,
             response.request_id,
-        ))
+            self.strict_feature_validation,
+        )
     }
 }
 
@@ -889,7 +890,8 @@ fn parse_chat_completions_response(
     model: &str,
     payload: &Value,
     request_id: Option<String>,
-) -> ModelResponse {
+    strict_feature_validation: bool,
+) -> Result<ModelResponse> {
     let mut output = Vec::new();
     if let Some(message) = payload
         .get("choices")
@@ -902,10 +904,30 @@ fn parse_chat_completions_response(
         }
         if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
             for tool_call in tool_calls {
-                let function = tool_call.get("function").unwrap_or(&Value::Null);
+                match tool_call.get("type").and_then(Value::as_str) {
+                    Some("custom") => {
+                        if strict_feature_validation {
+                            return Err(UserError {
+                                message:
+                                    "Custom tool calls are not supported by Chat Completions models"
+                                        .to_owned(),
+                            }
+                            .into());
+                        }
+                        continue;
+                    }
+                    Some("function") | None => {}
+                    Some(_) => continue,
+                }
+                let Some(function) = tool_call.get("function") else {
+                    continue;
+                };
+                let Some(tool_name) = first_non_empty_string(function, &["name"]) else {
+                    continue;
+                };
                 output.push(OutputItem::ToolCall {
                     call_id: first_non_empty_string(tool_call, &["id"]).unwrap_or_default(),
-                    tool_name: first_non_empty_string(function, &["name"]).unwrap_or_default(),
+                    tool_name,
                     arguments: parse_json_maybe_string(function.get("arguments")),
                     namespace: None,
                 });
@@ -918,7 +940,7 @@ fn parse_chat_completions_response(
         }
     }
 
-    ModelResponse {
+    Ok(ModelResponse {
         model: Some(model.to_owned()),
         output,
         usage: Usage {
@@ -935,7 +957,7 @@ fn parse_chat_completions_response(
         },
         response_id: None,
         request_id,
-    }
+    })
 }
 
 fn first_non_empty_string(value: &Value, fields: &[&str]) -> Option<String> {
@@ -1594,7 +1616,9 @@ mod tests {
                 "usage": {"prompt_tokens": 5, "completion_tokens": 6}
             }),
             Some("req_chat_123".to_owned()),
-        );
+            false,
+        )
+        .expect("chat completions response should parse");
 
         assert_eq!(parsed.usage.input_tokens, 5);
         assert_eq!(parsed.usage.output_tokens, 6);
@@ -1602,6 +1626,64 @@ mod tests {
         assert_eq!(parsed.request_id.as_deref(), Some("req_chat_123"));
         assert!(matches!(parsed.output[0], OutputItem::Text { .. }));
         assert!(matches!(parsed.output[1], OutputItem::ToolCall { .. }));
+    }
+
+    #[test]
+    fn chat_completions_ignores_custom_tool_calls_by_default() {
+        let parsed = parse_chat_completions_response(
+            "gpt-4.1",
+            &json!({
+                "choices": [{
+                    "message": {
+                        "content": "done",
+                        "tool_calls": [{
+                            "id": "custom-1",
+                            "type": "custom",
+                            "custom": {
+                                "name": "raw_tool",
+                                "input": "payload"
+                            }
+                        }]
+                    }
+                }]
+            }),
+            None,
+            false,
+        )
+        .expect("default chat parser should ignore custom tool calls");
+
+        assert_eq!(parsed.output.len(), 1);
+        assert!(matches!(parsed.output[0], OutputItem::Text { .. }));
+    }
+
+    #[test]
+    fn strict_chat_completions_reject_custom_tool_calls() {
+        let error = parse_chat_completions_response(
+            "gpt-4.1",
+            &json!({
+                "choices": [{
+                    "message": {
+                        "tool_calls": [{
+                            "id": "custom-1",
+                            "type": "custom",
+                            "custom": {
+                                "name": "raw_tool",
+                                "input": "payload"
+                            }
+                        }]
+                    }
+                }]
+            }),
+            None,
+            true,
+        )
+        .expect_err("strict chat parser should reject custom tool calls");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Custom tool calls are not supported")
+        );
     }
 
     #[test]
