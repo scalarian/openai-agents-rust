@@ -153,6 +153,7 @@ fn input_json_to_messages(value: &Value) -> Vec<Value> {
                 }
             }]
         })],
+        Some("custom_tool_call") | Some("custom_tool_call_output") => Vec::new(),
         Some("reasoning") => vec![json!({
             "role": "assistant",
             "content": value.get("text").cloned().unwrap_or_else(|| json!("")),
@@ -188,6 +189,31 @@ mod tests {
 
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["function"]["name"], "search");
+    }
+
+    #[test]
+    fn skips_custom_tool_replay_items_in_chat_messages() {
+        let messages = ChatCmplHelpers::input_to_messages(&[
+            InputItem::from("hello"),
+            InputItem::Json {
+                value: json!({
+                    "type": "custom_tool_call",
+                    "call_id": "call-custom",
+                    "name": "raw_editor",
+                    "input": "hello",
+                }),
+            },
+            InputItem::Json {
+                value: json!({
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-custom",
+                    "output": "HELLO",
+                }),
+            },
+        ]);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["content"], "hello");
     }
 
     #[test]

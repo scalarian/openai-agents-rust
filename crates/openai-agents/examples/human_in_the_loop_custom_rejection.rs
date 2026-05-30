@@ -164,8 +164,9 @@ fn tool_call_output_text(item: &openai_agents::RunItem) -> Option<String> {
         OutputItem::Text { text } => Some(text.clone()),
         OutputItem::Json { value } => Some(value.to_string()),
         OutputItem::Refusal { refusal } => Some(refusal.clone()),
-        OutputItem::ToolCall { .. } | OutputItem::Handoff { .. } | OutputItem::Reasoning { .. } => {
-            None
-        }
+        OutputItem::ToolCall { .. }
+        | OutputItem::CustomToolCall { .. }
+        | OutputItem::Handoff { .. }
+        | OutputItem::Reasoning { .. } => None,
     }
 }

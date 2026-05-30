@@ -117,6 +117,8 @@ fn stream_event_name(event: &StreamEvent) -> &'static str {
         StreamEvent::RunItemEvent(item) => match &item.item {
             RunItem::ToolCall { .. } => "tool_call",
             RunItem::ToolCallOutput { .. } => "tool_call_output",
+            RunItem::CustomToolCall { .. } => "custom_tool_call",
+            RunItem::CustomToolCallOutput { .. } => "custom_tool_call_output",
             RunItem::MessageOutput { .. } => "message_output",
             RunItem::HandoffCall { .. } => "handoff_call",
             RunItem::HandoffOutput { .. } => "handoff_output",

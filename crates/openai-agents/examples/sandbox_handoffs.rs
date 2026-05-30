@@ -128,7 +128,10 @@ async fn main() -> Result<(), AgentsError> {
                 RunItem::MessageOutput { content } => {
                     println!("message={}", output_text(&content).trim());
                 }
-                RunItem::HandoffOutput { .. } | RunItem::Reasoning { .. } => {}
+                RunItem::CustomToolCall { .. }
+                | RunItem::CustomToolCallOutput { .. }
+                | RunItem::HandoffOutput { .. }
+                | RunItem::Reasoning { .. } => {}
             },
             StreamEvent::RawResponseEvent(_) | StreamEvent::Lifecycle(_) => {}
         }
@@ -228,8 +231,9 @@ fn output_text(output: &OutputItem) -> String {
         OutputItem::Text { text } => text.clone(),
         OutputItem::Json { value } => value.to_string(),
         OutputItem::Refusal { refusal } => refusal.clone(),
-        OutputItem::ToolCall { .. } | OutputItem::Handoff { .. } | OutputItem::Reasoning { .. } => {
-            String::new()
-        }
+        OutputItem::ToolCall { .. }
+        | OutputItem::CustomToolCall { .. }
+        | OutputItem::Handoff { .. }
+        | OutputItem::Reasoning { .. } => String::new(),
     }
 }

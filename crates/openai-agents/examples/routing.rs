@@ -138,6 +138,8 @@ async fn main() -> Result<(), AgentsError> {
                 }
                 RunItem::ToolCall { .. }
                 | RunItem::ToolCallOutput { .. }
+                | RunItem::CustomToolCall { .. }
+                | RunItem::CustomToolCallOutput { .. }
                 | RunItem::HandoffOutput { .. }
                 | RunItem::Reasoning { .. } => {}
             },

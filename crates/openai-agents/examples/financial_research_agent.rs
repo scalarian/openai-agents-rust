@@ -246,6 +246,8 @@ async fn main() -> Result<(), AgentsError> {
                 }
                 RunItem::MessageOutput { .. } => println!("Writing financial report..."),
                 RunItem::HandoffCall { .. }
+                | RunItem::CustomToolCall { .. }
+                | RunItem::CustomToolCallOutput { .. }
                 | RunItem::HandoffOutput { .. }
                 | RunItem::Reasoning { .. } => {}
             }

@@ -249,6 +249,12 @@ fn print_run_items(items: &[RunItem]) {
                     output.as_text().unwrap_or_default()
                 );
             }
+            RunItem::CustomToolCall { tool_name, .. } => {
+                println!("Custom tool call: {tool_name}");
+            }
+            RunItem::CustomToolCallOutput { output, .. } => {
+                println!("Custom tool output: {output}");
+            }
             RunItem::HandoffOutput { source_agent } => {
                 println!("Handoff completed from {source_agent}");
             }

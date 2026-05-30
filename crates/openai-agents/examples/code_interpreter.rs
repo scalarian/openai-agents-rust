@@ -137,6 +137,8 @@ fn run_item_kind(item: &RunItem) -> &'static str {
         RunItem::MessageOutput { .. } => "message_output",
         RunItem::ToolCall { .. } => "tool_call",
         RunItem::ToolCallOutput { .. } => "tool_call_output",
+        RunItem::CustomToolCall { .. } => "custom_tool_call",
+        RunItem::CustomToolCallOutput { .. } => "custom_tool_call_output",
         RunItem::HandoffCall { .. } => "handoff_call",
         RunItem::HandoffOutput { .. } => "handoff_output",
         RunItem::Reasoning { .. } => "reasoning",
