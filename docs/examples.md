@@ -50,6 +50,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | retry | runner-managed model retry settings | [retry.rs](../crates/openai-agents/examples/retry.rs) |
 | routing | streamed triage handoff to a specialist agent | [routing.rs](../crates/openai-agents/examples/routing.rs) |
 | web search | hosted web search tool configuration | [web_search.rs](../crates/openai-agents/examples/web_search.rs) |
+| web search filters | hosted web search domain filters and source includes | [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) |
 | voice pipeline | STT -> workflow -> TTS flow | [voice_pipeline.rs](../crates/openai-agents/examples/voice_pipeline.rs) |
 
 ## Read By Goal
