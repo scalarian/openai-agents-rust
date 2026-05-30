@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future,
     pin::Pin,
     sync::{
@@ -704,41 +704,82 @@ fn responses_tool_choice_value(tool_choice: &str, tools: &[ToolDefinition]) -> R
         | "computer_use"
         | "computer_use_preview"
         | "mcp" => Ok(json!({ "type": tool_choice })),
-        "tool_search" => {
-            let has_hosted_tool_search = tools
-                .iter()
-                .any(|tool| tool.input_json_schema.is_none() && tool.name == "tool_search");
-            let has_top_level_function_tool_search = tools.iter().any(|tool| {
-                tool.input_json_schema.is_some()
-                    && tool.name == "tool_search"
-                    && tool
-                        .namespace
-                        .as_deref()
-                        .unwrap_or_default()
-                        .trim()
-                        .is_empty()
-                    && !tool.defer_loading
-            });
-            if has_hosted_tool_search && !has_top_level_function_tool_search {
-                return Err(AgentsError::message(
-                    "tool_choice='tool_search' is not supported for ToolSearchTool() on the OpenAI Responses API. Use `auto` or `required`, or target a real top-level function tool named `tool_search`.",
-                ));
-            }
-            if !has_hosted_tool_search && !has_top_level_function_tool_search {
-                return Err(AgentsError::message(
-                    "tool_choice='tool_search' requires ToolSearchTool() or a real top-level function tool named `tool_search` on the OpenAI Responses API.",
-                ));
-            }
+        _ => {
+            validate_named_responses_tool_choice(tool_choice, tools)?;
             Ok(json!({
                 "type": "function",
                 "name": tool_choice,
             }))
         }
-        _ => Ok(json!({
-            "type": "function",
-            "name": tool_choice,
-        })),
     }
+}
+
+fn validate_named_responses_tool_choice(tool_choice: &str, tools: &[ToolDefinition]) -> Result<()> {
+    let mut top_level_function_names = BTreeSet::new();
+    let mut all_local_function_names = BTreeSet::new();
+    let mut deferred_only_function_names = BTreeSet::new();
+    let mut namespaced_function_names = BTreeSet::new();
+    let mut namespace_names = BTreeSet::new();
+    let mut has_hosted_tool_search = false;
+
+    for tool in tools {
+        if tool.input_json_schema.is_none() {
+            if tool.name == "tool_search" {
+                has_hosted_tool_search = true;
+            }
+            continue;
+        }
+
+        all_local_function_names.insert(tool.name.as_str());
+
+        if let Some(namespace) = tool
+            .namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            namespaced_function_names.insert(tool.name.as_str());
+            namespace_names.insert(namespace);
+            continue;
+        }
+
+        if tool.defer_loading {
+            deferred_only_function_names.insert(tool.name.as_str());
+        } else {
+            top_level_function_names.insert(tool.name.as_str());
+        }
+    }
+
+    if tool_choice == "tool_search" {
+        if has_hosted_tool_search && !all_local_function_names.contains(tool_choice) {
+            return Err(AgentsError::message(
+                "tool_choice='tool_search' is not supported for ToolSearchTool() on the OpenAI Responses API. Use `auto` or `required`, or target a real top-level function tool named `tool_search`.",
+            ));
+        }
+        if !has_hosted_tool_search && !all_local_function_names.contains(tool_choice) {
+            return Err(AgentsError::message(
+                "tool_choice='tool_search' requires ToolSearchTool() or a real top-level function tool named `tool_search` on the OpenAI Responses API.",
+            ));
+        }
+    }
+
+    if (namespaced_function_names.contains(tool_choice) || namespace_names.contains(tool_choice))
+        && !top_level_function_names.contains(tool_choice)
+    {
+        return Err(AgentsError::message(
+            "Named tool_choice must target a callable tool, not a namespace wrapper or bare inner name from tool_namespace(), on the OpenAI Responses API. Use `auto`, `required`, `none`, or target a top-level or qualified namespaced function tool.",
+        ));
+    }
+
+    if deferred_only_function_names.contains(tool_choice)
+        && !top_level_function_names.contains(tool_choice)
+    {
+        return Err(AgentsError::message(
+            "Named tool_choice is not currently supported for deferred-loading function tools on the OpenAI Responses API. Use `auto`, `required`, `none`, or load the tool via ToolSearchTool() first.",
+        ));
+    }
+
+    Ok(())
 }
 
 fn apply_chat_model_settings(
@@ -1493,6 +1534,30 @@ mod tests {
 
     use super::*;
 
+    fn build_responses_payload_with_tool_choice(
+        tool_choice: &str,
+        tools: Vec<ToolDefinition>,
+    ) -> Result<Value> {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        model.build_payload(&ModelRequest {
+            model: Some("gpt-5".to_owned()),
+            instructions: None,
+            previous_response_id: None,
+            conversation_id: None,
+            settings: agents_core::ModelSettings {
+                tool_choice: Some(tool_choice.to_owned()),
+                ..Default::default()
+            },
+            input: vec![InputItem::from("hello")],
+            tools,
+            output_schema: None,
+            trace_id: None,
+        })
+    }
+
     #[test]
     fn responses_payload_includes_tools_and_input() {
         let model = OpenAIResponsesModel::new(
@@ -1752,6 +1817,124 @@ mod tests {
             json!({
                 "type": "function",
                 "name": "search"
+            })
+        );
+    }
+
+    #[test]
+    fn responses_payload_rejects_bare_namespaced_tool_choice() {
+        let error = build_responses_payload_with_tool_choice(
+            "lookup_account",
+            vec![
+                ToolDefinition::new("lookup_account", "Look up account")
+                    .with_namespace("crm")
+                    .with_input_json_schema(json!({"type": "object"})),
+            ],
+        )
+        .expect_err("bare inner namespaced tool choice should fail");
+
+        assert!(error.to_string().contains("tool_namespace()"));
+    }
+
+    #[test]
+    fn responses_payload_rejects_namespace_wrapper_tool_choice() {
+        let error = build_responses_payload_with_tool_choice(
+            "crm",
+            vec![
+                ToolDefinition::new("lookup_account", "Look up account")
+                    .with_namespace("crm")
+                    .with_input_json_schema(json!({"type": "object"})),
+            ],
+        )
+        .expect_err("namespace wrapper tool choice should fail");
+
+        assert!(error.to_string().contains("tool_namespace()"));
+    }
+
+    #[test]
+    fn responses_payload_allows_qualified_namespaced_tool_choice() {
+        let payload = build_responses_payload_with_tool_choice(
+            "crm.lookup_account",
+            vec![
+                ToolDefinition::new("lookup_account", "Look up account")
+                    .with_namespace("crm")
+                    .with_input_json_schema(json!({"type": "object"})),
+            ],
+        )
+        .expect("qualified namespaced tool choice should build");
+
+        assert_eq!(
+            payload["tool_choice"],
+            json!({
+                "type": "function",
+                "name": "crm.lookup_account"
+            })
+        );
+    }
+
+    #[test]
+    fn responses_payload_allows_top_level_function_choice_with_namespaced_peer() {
+        let payload = build_responses_payload_with_tool_choice(
+            "lookup_account",
+            vec![
+                ToolDefinition::new("lookup_account", "Look up account")
+                    .with_input_json_schema(json!({"type": "object"})),
+                ToolDefinition::new("lookup_account", "Look up CRM account")
+                    .with_namespace("crm")
+                    .with_input_json_schema(json!({"type": "object"})),
+            ],
+        )
+        .expect("top-level tool choice should win over namespaced peer");
+
+        assert_eq!(
+            payload["tool_choice"],
+            json!({
+                "type": "function",
+                "name": "lookup_account"
+            })
+        );
+    }
+
+    #[test]
+    fn responses_payload_rejects_deferred_only_tool_choice() {
+        let error = build_responses_payload_with_tool_choice(
+            "lookup_account",
+            vec![
+                ToolDefinition::new("lookup_account", "Look up account")
+                    .with_input_json_schema(json!({"type": "object"}))
+                    .with_defer_loading(true),
+                crate::tools::tool_search_tool().definition,
+            ],
+        )
+        .expect_err("deferred-only named tool choice should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("deferred-loading function tools")
+        );
+    }
+
+    #[test]
+    fn responses_payload_allows_visible_function_choice_with_deferred_peer() {
+        let payload = build_responses_payload_with_tool_choice(
+            "lookup_account",
+            vec![
+                ToolDefinition::new("lookup_account", "Look up account")
+                    .with_input_json_schema(json!({"type": "object"})),
+                ToolDefinition::new("lookup_account", "Look up account later")
+                    .with_input_json_schema(json!({"type": "object"}))
+                    .with_defer_loading(true),
+                crate::tools::tool_search_tool().definition,
+            ],
+        )
+        .expect("visible top-level tool choice should win over deferred peer");
+
+        assert_eq!(
+            payload["tool_choice"],
+            json!({
+                "type": "function",
+                "name": "lookup_account"
             })
         );
     }
