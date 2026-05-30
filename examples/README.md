@@ -36,6 +36,7 @@ cargo run -p openai-agents-rs --example local_file
 cargo run -p openai-agents-rs --example local_image
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example non_strict_output_type
+cargo run -p openai-agents-rs --example openai_session
 cargo run -p openai-agents-rs --example output_guardrail
 cargo run -p openai-agents-rs --example parallelization
 cargo run -p openai-agents-rs --example previous_response_id
@@ -93,6 +94,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `local_image` | local image input item encoded as data URL content | [docs/agents.md](../docs/agents.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `non_strict_output_type` | structured output validation with non-strict and custom schemas | [docs/agents.md](../docs/agents.md) |
+| `openai_session` | OpenAI conversation-aware session continuation metadata | [docs/sessions/openai.md](../docs/sessions/openai.md) |
 | `output_guardrail` | tripwire handling for final model output | [docs/guardrails.md](../docs/guardrails.md) |
 | `parallelization` | concurrent agent calls followed by a picker agent | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `previous_response_id` | Responses API conversation continuation by id | [docs/running_agents.md](../docs/running_agents.md) |

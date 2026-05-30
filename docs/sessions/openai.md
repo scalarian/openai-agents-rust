@@ -7,6 +7,8 @@ Use this page when you want sessions that preserve OpenAI conversation behavior 
 - `OpenAIConversationsSession`
 - `OpenAIResponsesCompactionSession`
 
+The runnable [openai_session.rs](../../crates/openai-agents/examples/openai_session.rs) example shows conversation-aware response id continuation.
+
 ## What They Add
 
 - conversation identifiers
