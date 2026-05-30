@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Provider-agnostic model tuning parameters.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -41,6 +41,60 @@ pub struct ReasoningSettings {
 }
 
 impl ModelSettings {
+    /// Return the model settings that are safe to attach to trace metadata.
+    ///
+    /// Provider-specific request extras can contain credentials or other request-scoped
+    /// sensitive data, so they are intentionally excluded.
+    pub fn to_traceable_map(&self) -> BTreeMap<String, Value> {
+        let mut traceable = BTreeMap::new();
+        if let Some(value) = self.temperature {
+            traceable.insert("temperature".to_owned(), json!(value));
+        }
+        if let Some(value) = self.top_p {
+            traceable.insert("top_p".to_owned(), json!(value));
+        }
+        if let Some(value) = self.max_output_tokens {
+            traceable.insert("max_output_tokens".to_owned(), json!(value));
+        }
+        if let Some(value) = self.frequency_penalty {
+            traceable.insert("frequency_penalty".to_owned(), json!(value));
+        }
+        if let Some(value) = self.presence_penalty {
+            traceable.insert("presence_penalty".to_owned(), json!(value));
+        }
+        if let Some(value) = &self.tool_choice {
+            traceable.insert("tool_choice".to_owned(), json!(value));
+        }
+        if let Some(value) = self.parallel_tool_calls {
+            traceable.insert("parallel_tool_calls".to_owned(), json!(value));
+        }
+        if let Some(value) = &self.truncation {
+            traceable.insert("truncation".to_owned(), json!(value));
+        }
+        if let Some(value) = self.store {
+            traceable.insert("store".to_owned(), json!(value));
+        }
+        if let Some(value) = self.include_usage {
+            traceable.insert("include_usage".to_owned(), json!(value));
+        }
+        if !self.response_include.is_empty() {
+            traceable.insert("response_include".to_owned(), json!(self.response_include));
+        }
+        if let Some(value) = self.top_logprobs {
+            traceable.insert("top_logprobs".to_owned(), json!(value));
+        }
+        if let Some(value) = &self.reasoning {
+            traceable.insert("reasoning".to_owned(), json!(value));
+        }
+        if let Some(value) = &self.verbosity {
+            traceable.insert("verbosity".to_owned(), json!(value));
+        }
+        if !self.metadata.is_empty() {
+            traceable.insert("metadata".to_owned(), json!(self.metadata));
+        }
+        traceable
+    }
+
     pub fn resolve(&self, override_settings: Option<&Self>) -> Self {
         let Some(override_settings) = override_settings else {
             return self.clone();
@@ -211,5 +265,33 @@ mod tests {
         assert_eq!(resolved.extra_headers.get("x-route"), Some(&json!("fast")));
         assert_eq!(resolved.extra_args.get("timeout"), Some(&json!(10)));
         assert_eq!(resolved.extra_args.get("retry"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn traceable_model_settings_omit_request_extras() {
+        let settings = ModelSettings {
+            temperature: Some(0.5),
+            metadata: BTreeMap::from([("purpose".to_owned(), json!("trace"))]),
+            extra_query: BTreeMap::from([("api-key".to_owned(), json!("query-secret"))]),
+            extra_body: BTreeMap::from([("secret".to_owned(), json!("body-secret"))]),
+            extra_headers: BTreeMap::from([(
+                "authorization".to_owned(),
+                json!("Bearer header-secret"),
+            )]),
+            extra_args: BTreeMap::from([("api_key".to_owned(), json!("arg-secret"))]),
+            ..Default::default()
+        };
+
+        let traceable = settings.to_traceable_map();
+
+        assert_eq!(traceable.get("temperature"), Some(&json!(0.5)));
+        assert_eq!(
+            traceable.get("metadata"),
+            Some(&json!({"purpose": "trace"}))
+        );
+        assert!(!traceable.contains_key("extra_query"));
+        assert!(!traceable.contains_key("extra_body"));
+        assert!(!traceable.contains_key("extra_headers"));
+        assert!(!traceable.contains_key("extra_args"));
     }
 }

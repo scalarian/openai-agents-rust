@@ -1312,6 +1312,12 @@ impl Runner {
         let settings = get_default_model_settings(requested_model.as_deref())
             .resolve(agent.model_settings.as_ref())
             .resolve(self.config.model_settings.as_ref());
+        let traceable_settings = settings.to_traceable_map();
+        if !traceable_settings.is_empty()
+            && let SpanData::Generation(data) = &mut span.data
+        {
+            data.model_config = Some(traceable_settings);
+        }
         let tools = internal_turn_preparation::get_all_tools(agent, context).await?;
 
         if let Some(model_provider) = self
@@ -3553,6 +3559,57 @@ mod tests {
             json!("integration-test")
         );
         assert_eq!(exported_span["metadata"]["nested"], json!({"value": 1}));
+    }
+
+    #[tokio::test]
+    async fn generation_span_model_config_omits_request_extras() {
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: Arc::new(RequestCaptureModel::default()),
+            }))
+            .with_config(RunConfig {
+                model_settings: Some(crate::ModelSettings {
+                    temperature: Some(0.5),
+                    extra_headers: BTreeMap::from([(
+                        "authorization".to_owned(),
+                        json!("Bearer provider-token"),
+                    )]),
+                    extra_query: BTreeMap::from([("api-key".to_owned(), json!("query-token"))]),
+                    extra_body: BTreeMap::from([("secret".to_owned(), json!("body-token"))]),
+                    extra_args: BTreeMap::from([("api_key".to_owned(), json!("arg-token"))]),
+                    ..Default::default()
+                }),
+                ..RunConfig::default()
+            })
+            .run(&Agent::builder("assistant").build(), "hello")
+            .await
+            .expect("run should succeed");
+
+        let model_config = processor
+            .spans()
+            .into_iter()
+            .find_map(|span| match span.data {
+                crate::tracing::SpanData::Generation(data) => data.model_config,
+                _ => None,
+            })
+            .expect("generation span should carry model config");
+
+        assert_eq!(model_config.get("temperature"), Some(&json!(0.5)));
+        assert!(!model_config.contains_key("extra_headers"));
+        assert!(!model_config.contains_key("extra_query"));
+        assert!(!model_config.contains_key("extra_body"));
+        assert!(!model_config.contains_key("extra_args"));
     }
 
     #[tokio::test]
