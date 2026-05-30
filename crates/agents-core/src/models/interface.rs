@@ -126,6 +126,15 @@ pub trait ModelProvider: Send + Sync {
         metadata.cloned()
     }
 
+    fn model_config_for_trace(
+        &self,
+        _model: Option<&str>,
+        _settings: &ModelSettings,
+        config: BTreeMap<String, Value>,
+    ) -> BTreeMap<String, Value> {
+        config
+    }
+
     fn prepare_request(&self, request: ModelRequest) -> ModelRequest {
         request
     }

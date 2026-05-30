@@ -196,6 +196,19 @@ impl ModelProvider for MultiProvider {
         metadata.cloned()
     }
 
+    fn model_config_for_trace(
+        &self,
+        model: Option<&str>,
+        settings: &ModelSettings,
+        config: BTreeMap<String, Value>,
+    ) -> BTreeMap<String, Value> {
+        if let Some((provider, resolved_model)) = self.resolve_provider_for_model(model) {
+            return provider.model_config_for_trace(resolved_model, settings, config);
+        }
+
+        config
+    }
+
     fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
         if let Some((provider, resolved_model)) =
             self.resolve_provider_for_model(request.model.as_deref())
@@ -486,6 +499,19 @@ mod tests {
                 Some(metadata)
             }
 
+            fn model_config_for_trace(
+                &self,
+                model: Option<&str>,
+                _settings: &ModelSettings,
+                mut config: BTreeMap<String, Value>,
+            ) -> BTreeMap<String, Value> {
+                config.insert(
+                    "resolved_model".to_owned(),
+                    Value::String(model.unwrap().to_owned()),
+                );
+                config
+            }
+
             fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
                 request.settings.metadata.insert(
                     "agent_harness_id".to_owned(),
@@ -513,6 +539,16 @@ mod tests {
                 .metadata
                 .get("agent_harness_id"),
             Some(&Value::String("hooked".to_owned()))
+        );
+        assert_eq!(
+            provider
+                .model_config_for_trace(
+                    Some("openai/gpt-5"),
+                    &ModelSettings::default(),
+                    BTreeMap::new(),
+                )
+                .get("resolved_model"),
+            Some(&Value::String("gpt-5".to_owned()))
         );
     }
 }

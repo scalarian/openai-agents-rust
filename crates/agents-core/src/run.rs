@@ -1544,7 +1544,18 @@ impl Runner {
         let settings = get_default_model_settings(requested_model.as_deref())
             .resolve(agent.model_settings.as_ref())
             .resolve(self.config.model_settings.as_ref());
-        let traceable_settings = settings.to_traceable_map();
+        let model_provider = self
+            .model_provider
+            .clone()
+            .or_else(|| self.config.model_provider.clone());
+        let traceable_settings = match &model_provider {
+            Some(provider) => provider.model_config_for_trace(
+                requested_model.as_deref(),
+                &settings,
+                settings.to_traceable_map(),
+            ),
+            None => settings.to_traceable_map(),
+        };
         if !traceable_settings.is_empty()
             && let SpanData::Generation(data) = &mut span.data
         {
@@ -1552,11 +1563,7 @@ impl Runner {
         }
         let tools = internal_turn_preparation::get_all_tools(agent, context).await?;
 
-        if let Some(model_provider) = self
-            .model_provider
-            .clone()
-            .or_else(|| self.config.model_provider.clone())
-        {
+        if let Some(model_provider) = model_provider {
             let request = ModelRequest {
                 trace_id: Some(trace_id),
                 model: requested_model.clone(),
@@ -4158,6 +4165,80 @@ mod tests {
         assert!(!model_config.contains_key("extra_query"));
         assert!(!model_config.contains_key("extra_body"));
         assert!(!model_config.contains_key("extra_args"));
+    }
+
+    #[tokio::test]
+    async fn generation_span_model_config_uses_provider_trace_hook() {
+        struct TraceConfigProvider {
+            model: Arc<RequestCaptureModel>,
+        }
+
+        impl ModelProvider for TraceConfigProvider {
+            fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+                self.model.clone()
+            }
+
+            fn model_config_for_trace(
+                &self,
+                model: Option<&str>,
+                _settings: &crate::ModelSettings,
+                mut config: BTreeMap<String, Value>,
+            ) -> BTreeMap<String, Value> {
+                config.insert("provider_model".to_owned(), json!(model));
+                config.insert("base_url".to_owned(), json!("https://example.test/v1"));
+                config
+            }
+        }
+
+        let trace_id = uuid::Uuid::new_v4();
+        let _trace_guard = crate::tracing::setup::trace_provider_test_lock()
+            .lock()
+            .await;
+        let previous_provider = crate::tracing::get_trace_provider();
+        let _provider_reset = TraceProviderReset(previous_provider);
+        let provider = Arc::new(crate::tracing::DefaultTraceProvider::default())
+            as Arc<dyn crate::tracing::TraceProvider>;
+        crate::tracing::set_trace_provider(provider);
+        let processor = Arc::new(RecordingTraceProcessor::default());
+        crate::tracing::get_trace_provider().register_processor(processor.clone());
+
+        Runner::new()
+            .with_model_provider(Arc::new(TraceConfigProvider {
+                model: Arc::new(RequestCaptureModel::default()),
+            }))
+            .with_config(RunConfig {
+                trace_id: Some(trace_id.to_string()),
+                model: Some("gpt-5".to_owned()),
+                model_settings: Some(crate::ModelSettings {
+                    temperature: Some(0.5),
+                    ..Default::default()
+                }),
+                ..RunConfig::default()
+            })
+            .run(&Agent::builder("assistant").build(), "hello")
+            .await
+            .expect("run should succeed");
+
+        let model_config = processor
+            .spans()
+            .into_iter()
+            .find_map(|span| {
+                if span.trace_id != trace_id {
+                    return None;
+                }
+                match span.data {
+                    crate::tracing::SpanData::Generation(data) => data.model_config,
+                    _ => None,
+                }
+            })
+            .expect("generation span should carry model config");
+
+        assert_eq!(model_config.get("temperature"), Some(&json!(0.5)));
+        assert_eq!(model_config.get("provider_model"), Some(&json!("gpt-5")));
+        assert_eq!(
+            model_config.get("base_url"),
+            Some(&json!("https://example.test/v1"))
+        );
     }
 
     #[tokio::test]

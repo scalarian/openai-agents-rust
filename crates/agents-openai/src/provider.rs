@@ -219,6 +219,19 @@ impl ModelProvider for OpenAIProvider {
         merge_openai_harness_id_into_metadata(metadata, self.effective_harness_id().as_deref())
     }
 
+    fn model_config_for_trace(
+        &self,
+        _model: Option<&str>,
+        _settings: &agents_core::ModelSettings,
+        mut config: BTreeMap<String, Value>,
+    ) -> BTreeMap<String, Value> {
+        config.insert(
+            "base_url".to_owned(),
+            Value::String(sanitize_url_for_trace(&self.client_options().base_url)),
+        );
+        config
+    }
+
     fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
         request.settings.metadata = merge_openai_harness_id_into_metadata(
             Some(&request.settings.metadata),
@@ -245,6 +258,37 @@ impl ModelProvider for OpenAIProvider {
                 self.resolve_responses_ws_model(model_name)
             }
         }
+    }
+}
+
+fn sanitize_url_for_trace(url: impl AsRef<str>) -> String {
+    let without_fragment = url
+        .as_ref()
+        .split_once('#')
+        .map_or(url.as_ref(), |(head, _)| head);
+    let without_query = without_fragment
+        .split_once('?')
+        .map_or(without_fragment, |(head, _)| head);
+
+    if let Some((scheme, rest)) = without_query.split_once("://") {
+        let (authority, path) = split_authority_and_path(rest);
+        let authority = authority.rsplit('@').next().unwrap_or(authority);
+        return format!("{scheme}://{authority}{path}");
+    }
+
+    if let Some(rest) = without_query.strip_prefix("//") {
+        let (authority, path) = split_authority_and_path(rest);
+        let authority = authority.rsplit('@').next().unwrap_or(authority);
+        return format!("//{authority}{path}");
+    }
+
+    without_query.to_owned()
+}
+
+fn split_authority_and_path(value: &str) -> (&str, &str) {
+    match value.find('/') {
+        Some(index) => (&value[..index], &value[index..]),
+        None => (value, ""),
     }
 }
 
@@ -410,6 +454,37 @@ mod tests {
 
         set_openai_base_url(crate::defaults::OPENAI_DEFAULT_BASE_URL);
         set_default_openai_websocket_base_url(crate::defaults::OPENAI_DEFAULT_WEBSOCKET_BASE_URL);
+    }
+
+    #[test]
+    fn model_config_for_trace_includes_sanitized_base_url() {
+        let provider = OpenAIProvider::new()
+            .with_api_key("sk-test")
+            .with_base_url("https://user:pass@example.test/v1?api-key=secret#fragment");
+
+        let config = provider.model_config_for_trace(
+            Some("gpt-5"),
+            &agents_core::ModelSettings::default(),
+            BTreeMap::from([("temperature".to_owned(), json!(0.5))]),
+        );
+
+        assert_eq!(
+            config.get("base_url"),
+            Some(&json!("https://example.test/v1"))
+        );
+        assert_eq!(config.get("temperature"), Some(&json!(0.5)));
+    }
+
+    #[test]
+    fn sanitize_url_for_trace_preserves_path_without_auth_query_or_fragment() {
+        assert_eq!(
+            sanitize_url_for_trace("https://token@example.test/v1/responses?api-key=secret#frag"),
+            "https://example.test/v1/responses"
+        );
+        assert_eq!(
+            sanitize_url_for_trace("https://example.test?api-key=secret"),
+            "https://example.test"
+        );
     }
 
     #[test]
