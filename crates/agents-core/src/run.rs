@@ -1416,6 +1416,15 @@ impl Runner {
         if !pending_items.is_empty() {
             session.add_items(pending_items).await?;
         }
+        if let Some(conversation_session) = session.conversation_session() {
+            conversation_session
+                .save_openai_conversation_state(crate::memory::OpenAIConversationSessionState {
+                    conversation_id: result.conversation_id.clone(),
+                    previous_response_id: result.previous_response_id.clone(),
+                    auto_previous_response_id: result.auto_previous_response_id,
+                })
+                .await?;
+        }
         if let Some(run_state) = result.run_state.as_mut() {
             run_state.persisted_item_count = state.persisted_item_count + added_count;
         }
