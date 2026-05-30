@@ -5,10 +5,10 @@ use std::sync::{
 
 use agents_core::{
     Agent, AgentsError, InputItem, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
-    RunConfig, RunInterruptionKind, RunItem, Runner, Usage, function_tool,
+    RunConfig, RunInterruptionKind, RunItem, Runner, StreamEvent, Usage, function_tool,
 };
 use async_trait::async_trait;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -568,6 +568,66 @@ async fn conversation_resume_sends_only_unsent_interrupted_tool_outputs() {
         })
         .collect::<Vec<_>>();
     assert_eq!(output_call_ids, vec!["call-fast", "call-approval"]);
+}
+
+#[tokio::test]
+async fn runner_streams_resumed_tool_approval() {
+    let provider = Arc::new(ApprovalProvider {
+        model: Arc::new(ApprovalModel::default()),
+    });
+    let search_tool =
+        function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+    let agent = Agent::builder("assistant")
+        .function_tool(search_tool)
+        .build();
+    let runner = Runner::new().with_model_provider(provider);
+
+    let initial = runner
+        .run(&agent, "hello")
+        .await
+        .expect("initial run should interrupt");
+    let mut state = initial
+        .durable_state()
+        .cloned()
+        .expect("state should exist");
+    state.approve_for_tool(
+        "call-1",
+        Some("search".to_owned()),
+        Some("approved".to_owned()),
+    );
+
+    let streamed = runner
+        .resume_streamed_with_agent(&state, &agent)
+        .await
+        .expect("streamed resume should start");
+    let events = streamed.stream_events().collect::<Vec<_>>().await;
+    let resumed = streamed
+        .wait_for_completion()
+        .await
+        .expect("streamed resume should complete");
+
+    assert_eq!(resumed.final_output.as_deref(), Some("final:result:rust"));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            StreamEvent::Lifecycle(lifecycle)
+                if lifecycle.name == "tool_start"
+                    && lifecycle
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("tool_name"))
+                        .and_then(Value::as_str)
+                        == Some("search")
+        )
+    }));
 }
 
 #[tokio::test]

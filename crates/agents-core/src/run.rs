@@ -237,6 +237,43 @@ impl Runner {
         Ok(RunResultStreaming::from_live(max_turns, shared_state))
     }
 
+    pub async fn resume_streamed(&self, state: &RunState) -> Result<RunResultStreaming> {
+        let max_turns = state.remaining_turns();
+        let recorder = StreamRecorder::new();
+        let shared_state = recorder.shared_state();
+        let runner = self.clone();
+        let state = state.clone();
+
+        tokio::spawn(async move {
+            let result = runner.resume_inner(&state, Some(recorder.clone())).await;
+            recorder.complete(result).await;
+        });
+
+        Ok(RunResultStreaming::from_live(max_turns, shared_state))
+    }
+
+    pub async fn resume_streamed_with_agent(
+        &self,
+        state: &RunState,
+        agent: &Agent,
+    ) -> Result<RunResultStreaming> {
+        let max_turns = state.remaining_turns();
+        let recorder = StreamRecorder::new();
+        let shared_state = recorder.shared_state();
+        let runner = self.clone();
+        let state = state.clone();
+        let agent = agent.clone();
+
+        tokio::spawn(async move {
+            let result = runner
+                .resume_with_agent_inner(&state, &agent, Some(recorder.clone()))
+                .await;
+            recorder.complete(result).await;
+        });
+
+        Ok(RunResultStreaming::from_live(max_turns, shared_state))
+    }
+
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
         self.run_with_options(agent, input, RunOptions::default())
             .await
@@ -1202,6 +1239,14 @@ impl Runner {
     }
 
     pub async fn resume(&self, state: &RunState) -> Result<RunResult> {
+        self.resume_inner(state, None).await
+    }
+
+    async fn resume_inner(
+        &self,
+        state: &RunState,
+        stream_recorder: Option<StreamRecorder>,
+    ) -> Result<RunResult> {
         if state.remaining_turns() == Some(0) {
             return Err(MaxTurnsExceeded {
                 message: "cannot resume a run state that has exhausted max_turns".to_owned(),
@@ -1229,7 +1274,9 @@ impl Runner {
                 .and_then(|step| step.kind.clone()),
             Some(RunInterruptionKind::ToolApproval)
         ) {
-            return self.resume_pending_tool_approval(state, &agent).await;
+            return self
+                .resume_pending_tool_approval(state, &agent, stream_recorder)
+                .await;
         }
 
         let mut resumed_config = self.config.clone();
@@ -1263,12 +1310,24 @@ impl Runner {
                     None,
                     None,
                     None,
-                    None,
+                    stream_recorder,
                     Some(hydration),
                 )
                 .await?
         } else {
-            runner.run_items(&agent, state.resume_input()).await?
+            let resume_input = state.resume_input();
+            runner
+                .run_items_internal(
+                    &agent,
+                    resume_input.clone(),
+                    resume_input,
+                    None,
+                    None,
+                    None,
+                    stream_recorder,
+                    None,
+                )
+                .await?
         };
 
         let result_preserve_items = result.new_items.clone();
@@ -1322,6 +1381,15 @@ impl Runner {
     }
 
     pub async fn resume_with_agent(&self, state: &RunState, agent: &Agent) -> Result<RunResult> {
+        self.resume_with_agent_inner(state, agent, None).await
+    }
+
+    async fn resume_with_agent_inner(
+        &self,
+        state: &RunState,
+        agent: &Agent,
+        stream_recorder: Option<StreamRecorder>,
+    ) -> Result<RunResult> {
         let mut rebound_state = state.clone();
         let resumed_agent = if let Some(sandbox_state) = rebound_state.sandbox.as_ref() {
             let (annotated_agent, identities) = crate::sandbox::build_sandbox_identity_map(agent);
@@ -1351,16 +1419,17 @@ impl Runner {
             Some(RunInterruptionKind::ToolApproval)
         ) {
             return self
-                .resume_pending_tool_approval(&rebound_state, &resumed_agent)
+                .resume_pending_tool_approval(&rebound_state, &resumed_agent, stream_recorder)
                 .await;
         }
-        self.resume(&rebound_state).await
+        self.resume_inner(&rebound_state, stream_recorder).await
     }
 
     async fn resume_pending_tool_approval(
         &self,
         state: &RunState,
         agent: &Agent,
+        stream_recorder: Option<StreamRecorder>,
     ) -> Result<RunResult> {
         let interruption = state.current_step.clone().ok_or_else(|| UserError {
             message: "cannot resume a pending approval without an interruption record".to_owned(),
@@ -1401,7 +1470,7 @@ impl Runner {
             &self.config,
             &context,
             vec![tool_call],
-            None,
+            stream_recorder.as_ref(),
             Some((&interruption, &approval)),
         )
         .await?;
@@ -1456,13 +1525,23 @@ impl Runner {
                     None,
                     None,
                     None,
-                    None,
+                    stream_recorder,
                     Some(hydration),
                 )
                 .await?
         } else {
+            let resume_input = continued_state.resume_input();
             runner
-                .run_items(agent, continued_state.resume_input())
+                .run_items_internal(
+                    agent,
+                    resume_input.clone(),
+                    resume_input,
+                    None,
+                    None,
+                    None,
+                    stream_recorder,
+                    None,
+                )
                 .await?
         };
 
@@ -1718,6 +1797,19 @@ pub async fn run_streamed_with_options(
 ) -> Result<RunResultStreaming> {
     get_default_agent_runner()
         .run_streamed_with_options(agent, input, options)
+        .await
+}
+
+pub async fn resume_streamed(state: &RunState) -> Result<RunResultStreaming> {
+    get_default_agent_runner().resume_streamed(state).await
+}
+
+pub async fn resume_streamed_with_agent(
+    state: &RunState,
+    agent: &Agent,
+) -> Result<RunResultStreaming> {
+    get_default_agent_runner()
+        .resume_streamed_with_agent(state, agent)
         .await
 }
 
