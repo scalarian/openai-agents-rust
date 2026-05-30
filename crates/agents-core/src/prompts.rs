@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,7 +11,7 @@ use crate::errors::Result;
 use crate::run_context::{RunContext, RunContextWrapper};
 
 /// Prompt configuration for model execution.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Prompt {
     pub id: String,
     pub version: Option<String>,

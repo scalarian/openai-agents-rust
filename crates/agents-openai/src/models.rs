@@ -163,6 +163,13 @@ impl OpenAIResponsesModel {
                     .collect(),
             ),
         );
+        if let Some(prompt) = &request.prompt {
+            payload.insert(
+                "prompt".to_owned(),
+                serde_json::to_value(prompt)
+                    .map_err(|error| AgentsError::message(error.to_string()))?,
+            );
+        }
         let tools = openai_responses_tools_payload(&request.tools);
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
@@ -202,6 +209,7 @@ pub struct OpenAIChatCompletionsModel {
     options: OpenAIClientOptions,
     strict_feature_validation: bool,
     has_warned_unsupported_conversation_state: Arc<AtomicBool>,
+    has_warned_unsupported_prompt: Arc<AtomicBool>,
 }
 
 impl OpenAIChatCompletionsModel {
@@ -211,6 +219,7 @@ impl OpenAIChatCompletionsModel {
             options,
             strict_feature_validation: false,
             has_warned_unsupported_conversation_state: Arc::new(AtomicBool::new(false)),
+            has_warned_unsupported_prompt: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -221,6 +230,7 @@ impl OpenAIChatCompletionsModel {
 
     pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
         self.handle_unsupported_server_managed_conversation_state(request)?;
+        self.handle_unsupported_prompt(request)?;
         let mut payload = serde_json::Map::new();
         payload.insert("model".to_owned(), Value::String(self.model.clone()));
         let mut messages = Vec::new();
@@ -282,6 +292,33 @@ for previous_response_id or a conversation-capable model for conversation_id.",
             log::warn!(
                 target: LOGGER_TARGET,
                 "{} Ignoring unsupported server-managed conversation state; enable strict feature validation to raise an error instead.",
+                message
+            );
+        }
+
+        Ok(())
+    }
+
+    fn handle_unsupported_prompt(&self, request: &ModelRequest) -> Result<()> {
+        if request.prompt.is_none() {
+            return Ok(());
+        }
+
+        let message = "OpenAIChatCompletionsModel does not support reusable prompts. \
+Use a Responses API model for `prompt`."
+            .to_owned();
+
+        if self.strict_feature_validation {
+            return Err(UserError { message }.into());
+        }
+
+        if !self
+            .has_warned_unsupported_prompt
+            .swap(true, Ordering::Relaxed)
+        {
+            log::warn!(
+                target: LOGGER_TARGET,
+                "{} Ignoring unsupported prompt; enable strict feature validation to raise an error instead.",
                 message
             );
         }
@@ -1601,6 +1638,7 @@ mod tests {
             tools,
             output_schema: None,
             trace_id: None,
+            prompt: None,
         })
     }
 
@@ -1644,6 +1682,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -1681,6 +1720,46 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_includes_prompt_config() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_123".to_owned(),
+                    version: Some("1".to_owned()),
+                    variables: std::collections::BTreeMap::from([(
+                        "poem_style".to_owned(),
+                        json!("haiku"),
+                    )]),
+                }),
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["prompt"],
+            json!({
+                "id": "pmpt_123",
+                "version": "1",
+                "variables": {
+                    "poem_style": "haiku"
+                }
+            })
+        );
+    }
+
+    #[test]
     fn responses_payload_includes_web_search_external_web_access() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",
@@ -1702,6 +1781,7 @@ mod tests {
                 tools: vec![web_search.definition],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -1745,6 +1825,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -1794,6 +1875,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -1855,6 +1937,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2005,6 +2088,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2039,6 +2123,7 @@ mod tests {
                 tools: vec![file_search.definition],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2087,6 +2172,7 @@ mod tests {
                 tools: vec![tool_search.definition],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2128,6 +2214,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("deferred tools should require tool_search");
 
@@ -2154,6 +2241,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("duplicate tool_search tools should fail");
 
@@ -2185,6 +2273,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("hosted tool_search should not be a named tool choice");
 
@@ -2218,6 +2307,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("reserved responses fields should be rejected");
 
@@ -2255,6 +2345,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("reserved context management field should be rejected");
 
@@ -2302,6 +2393,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("chat payload should build");
 
@@ -2341,6 +2433,7 @@ mod tests {
                 ],
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("chat payload should build");
 
@@ -2372,6 +2465,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("default chat payload should ignore server-managed state");
 
@@ -2398,6 +2492,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("strict chat payload should reject server-managed state");
 
@@ -2405,6 +2500,35 @@ mod tests {
         assert!(message.contains("server-managed conversation state"));
         assert!(message.contains("previous_response_id"));
         assert!(message.contains("conversation_id"));
+    }
+
+    #[test]
+    fn strict_chat_payload_rejects_prompt_config() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        )
+        .with_strict_feature_validation(true);
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_123".to_owned(),
+                    version: None,
+                    variables: Default::default(),
+                }),
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect_err("strict chat payload should reject prompt config");
+
+        assert!(error.to_string().contains("reusable prompts"));
     }
 
     #[test]
@@ -2430,6 +2554,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("default chat payload should replace empty tool output");
 
@@ -2461,6 +2586,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("strict chat payload should reject empty tool output");
 
@@ -2500,6 +2626,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("chat payload should keep text tool output parts");
 
@@ -2537,6 +2664,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect_err("reserved chat fields should be rejected");
 
@@ -2576,6 +2704,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: Some(output_schema.clone()),
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2614,6 +2743,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: Some(output_schema.clone()),
                 trace_id: None,
+                prompt: None,
             })
             .expect("chat payload should build");
 
@@ -2658,6 +2788,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2689,6 +2820,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2714,6 +2846,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -2738,6 +2871,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .expect("responses payload should build");
 
@@ -3126,6 +3260,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .await
             .expect("websocket generate should succeed");
@@ -3220,6 +3355,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .await
             .expect_err("failed terminal event should reject the response");
@@ -3283,6 +3419,7 @@ mod tests {
                 tools: Vec::new(),
                 output_schema: None,
                 trace_id: None,
+                prompt: None,
             })
             .await
             .expect_err("error terminal event should reject the response");

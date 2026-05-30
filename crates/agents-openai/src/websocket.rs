@@ -209,6 +209,7 @@ mod tests {
         let payload = session
             .request_frame(&ModelRequest {
                 trace_id: None,
+                prompt: None,
                 model: Some("gpt-5".to_owned()),
                 instructions: Some("Be precise".to_owned()),
                 previous_response_id: None,
@@ -294,6 +295,7 @@ mod tests {
         let payload = session
             .request_frame(&ModelRequest {
                 trace_id: None,
+                prompt: None,
                 model: Some("gpt-5".to_owned()),
                 instructions: None,
                 previous_response_id: Some("resp_request".to_owned()),

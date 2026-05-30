@@ -25,6 +25,7 @@ use crate::items::{OutputItem, RunItem};
 use crate::lifecycle::SharedAgentHooks;
 use crate::mcp::{MCPServer, MCPServerManager, MCPToolMetaResolver, MCPUtil, ToolFilter};
 use crate::model_settings::ModelSettings;
+use crate::prompts::{GenerateDynamicPromptData, Prompt, PromptSpec, PromptUtil};
 use crate::result::{AgentToolInvocation, RunResult, RunResultStreaming};
 use crate::run::get_default_agent_runner;
 use crate::run_config::RunConfig;
@@ -291,6 +292,8 @@ pub struct Agent {
     pub instructions: Option<String>,
     #[serde(skip, default)]
     pub dynamic_instructions: Option<DynamicInstructionsFunction>,
+    #[serde(skip, default)]
+    pub prompt: Option<PromptSpec>,
     pub output_schema: Option<OutputSchemaDefinition>,
     pub model_settings: Option<ModelSettings>,
     pub tools: Vec<StaticTool>,
@@ -328,6 +331,7 @@ impl fmt::Debug for Agent {
                 "dynamic_instructions",
                 &self.dynamic_instructions.as_ref().map(|_| "<function>"),
             )
+            .field("prompt", &self.prompt.as_ref().map(|_| "<prompt>"))
             .field("output_schema", &self.output_schema)
             .field("model_settings", &self.model_settings)
             .field("tools", &self.tools)
@@ -462,6 +466,10 @@ impl Agent {
             return callback(context.clone(), self.clone()).await.map(Some);
         }
         Ok(self.instructions.clone())
+    }
+
+    pub async fn resolve_prompt(&self, context: &RunContextWrapper) -> Result<Option<Prompt>> {
+        PromptUtil::to_model_input(self.prompt.clone(), context.clone(), self.clone()).await
     }
 
     pub fn as_tool<TArgs>(
@@ -731,6 +739,22 @@ impl AgentBuilder {
         self.agent.dynamic_instructions = Some(Arc::new(move |context, agent| {
             instructions(context, agent).boxed()
         }));
+        self
+    }
+
+    pub fn prompt(mut self, prompt: Prompt) -> Self {
+        self.agent.prompt = Some(PromptSpec::Static(prompt));
+        self
+    }
+
+    pub fn dynamic_prompt<F, Fut>(mut self, prompt: F) -> Self
+    where
+        F: Fn(GenerateDynamicPromptData) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Prompt>> + Send + 'static,
+    {
+        self.agent.prompt = Some(PromptSpec::Dynamic(Arc::new(move |data| {
+            prompt(data).boxed()
+        })));
         self
     }
 

@@ -11,6 +11,7 @@ use crate::OutputSchemaDefinition;
 use crate::errors::Result;
 use crate::items::{InputItem, OutputItem};
 use crate::model_settings::ModelSettings;
+use crate::prompts::Prompt;
 use crate::tool::ToolDefinition;
 use crate::usage::Usage;
 
@@ -43,6 +44,7 @@ pub struct ModelRequest {
     pub conversation_id: Option<String>,
     pub settings: ModelSettings,
     pub input: Vec<InputItem>,
+    pub prompt: Option<Prompt>,
     pub tools: Vec<ToolDefinition>,
     pub output_schema: Option<OutputSchemaDefinition>,
 }

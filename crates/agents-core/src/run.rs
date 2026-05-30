@@ -660,6 +660,7 @@ impl Runner {
                 normalized_input_override = Some(model_data.input.clone());
             }
             let delivered_model_input = model_data.input.clone();
+            let prompt = current_agent.resolve_prompt(&context).await?;
 
             let response = self
                 .call_model_with_retry(
@@ -667,6 +668,7 @@ impl Runner {
                     &context,
                     trace.id,
                     model_data,
+                    prompt,
                     conversation_tracker.previous_response_id(),
                     conversation_tracker.conversation_id(),
                 )
@@ -1520,6 +1522,7 @@ impl Runner {
         context: &crate::run_context::RunContextWrapper,
         trace_id: Uuid,
         model_data: ModelInputData,
+        prompt: Option<crate::Prompt>,
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
     ) -> Result<ModelResponse> {
@@ -1572,6 +1575,7 @@ impl Runner {
                 conversation_id: conversation_id.map(ToOwned::to_owned),
                 settings: settings.clone(),
                 input: model_data.input,
+                prompt,
                 tools,
                 output_schema: internal_turn_preparation::get_output_schema(agent),
             };
@@ -1641,6 +1645,7 @@ impl Runner {
         context: &crate::run_context::RunContextWrapper,
         trace_id: Uuid,
         model_data: ModelInputData,
+        prompt: Option<crate::Prompt>,
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
     ) -> Result<ModelResponse> {
@@ -1650,6 +1655,7 @@ impl Runner {
                 context,
                 trace_id,
                 model_data,
+                prompt,
                 previous_response_id,
                 conversation_id,
             )
@@ -2306,6 +2312,7 @@ mod tests {
         previous_response_id: Arc<Mutex<Option<String>>>,
         conversation_id: Arc<Mutex<Option<String>>>,
         instructions: Arc<Mutex<Option<String>>>,
+        prompt: Arc<Mutex<Option<crate::Prompt>>>,
         output_schema: Arc<Mutex<Option<crate::OutputSchemaDefinition>>>,
         metadata: Arc<Mutex<std::collections::BTreeMap<String, serde_json::Value>>>,
     }
@@ -2326,6 +2333,7 @@ mod tests {
                 .instructions
                 .lock()
                 .expect("request capture instructions lock") = request.instructions.clone();
+            *self.prompt.lock().expect("request capture prompt lock") = request.prompt.clone();
             *self
                 .output_schema
                 .lock()
@@ -4275,6 +4283,37 @@ mod tests {
                 .as_deref(),
             Some("assistant input_tokens=0")
         );
+    }
+
+    #[tokio::test]
+    async fn runner_resolves_agent_prompt_config() {
+        let model = Arc::new(RequestCaptureModel::default());
+        let provider = Arc::new(StaticProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant")
+            .prompt(crate::Prompt {
+                id: "pmpt_static".to_owned(),
+                version: Some("1".to_owned()),
+                variables: BTreeMap::from([("style".to_owned(), json!("haiku"))]),
+            })
+            .build();
+
+        Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        let prompt = model
+            .prompt
+            .lock()
+            .expect("prompt lock")
+            .clone()
+            .expect("prompt should be sent");
+        assert_eq!(prompt.id, "pmpt_static");
+        assert_eq!(prompt.version.as_deref(), Some("1"));
+        assert_eq!(prompt.variables.get("style"), Some(&json!("haiku")));
     }
 
     #[tokio::test]
