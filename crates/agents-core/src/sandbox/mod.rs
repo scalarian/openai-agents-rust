@@ -1028,6 +1028,26 @@ fn should_reuse_ancestor_identity(path_signatures: &[String], signature: &str) -
     path_signatures.len() >= 2 && path_signatures.iter().any(|seen| seen == signature)
 }
 
+fn collect_agent_literal_names(
+    agent: &Agent,
+    path_signatures: &mut Vec<String>,
+    names: &mut BTreeSet<String>,
+) {
+    let signature = sandbox_reachability_signature(agent);
+    if should_reuse_ancestor_identity(path_signatures, &signature) {
+        return;
+    }
+
+    names.insert(agent.name.clone());
+    path_signatures.push(signature);
+    for handoff in &agent.handoffs {
+        if let Some(target) = handoff.runtime_agent() {
+            collect_agent_literal_names(target, path_signatures, names);
+        }
+    }
+    path_signatures.pop();
+}
+
 fn next_sandbox_identity_key(
     agent: &Agent,
     literal_names: &BTreeSet<String>,
@@ -1083,20 +1103,18 @@ fn annotate_sandbox_identity_graph(
     }
 
     let mut annotated = agent.clone();
-    if sandbox_agent_signature(&annotated).is_some() {
-        let had_existing_key = annotated.sandbox_identity_key.is_some();
-        let key = annotated.sandbox_identity_key.clone().unwrap_or_else(|| {
-            next_sandbox_identity_key(&annotated, literal_names, used_keys, counts_by_name)
-        });
-        used_keys.insert(key.clone());
-        if had_existing_key {
-            counts_by_name
-                .entry(annotated.name.clone())
-                .and_modify(|count| *count += 1)
-                .or_insert(1);
-        }
-        annotated.sandbox_identity_key = Some(key);
+    let had_existing_key = annotated.sandbox_identity_key.is_some();
+    let key = annotated.sandbox_identity_key.clone().unwrap_or_else(|| {
+        next_sandbox_identity_key(&annotated, literal_names, used_keys, counts_by_name)
+    });
+    used_keys.insert(key.clone());
+    if had_existing_key {
+        counts_by_name
+            .entry(annotated.name.clone())
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
     }
+    annotated.sandbox_identity_key = Some(key);
 
     path_signatures.push(signature);
     path_keys.push(annotated.sandbox_identity_key.clone());
@@ -1114,7 +1132,9 @@ fn annotate_sandbox_identity_graph(
             handoff.agent = Some(Box::new(annotated_target));
         }
     }
-    if let Some(key) = annotated.sandbox_identity_key.clone() {
+    if sandbox_agent_signature(&annotated).is_some()
+        && let Some(key) = annotated.sandbox_identity_key.clone()
+    {
         agent_by_key.insert(key, annotated.clone());
     }
     let result = annotated;
@@ -1124,16 +1144,8 @@ fn annotate_sandbox_identity_graph(
 }
 
 pub(crate) fn build_sandbox_identity_map(root: &Agent) -> (Agent, SandboxIdentityMap) {
-    let literal_names =
-        std::iter::once(root.clone())
-            .flat_map(|agent| {
-                let mut names = vec![agent.name.clone()];
-                names.extend(agent.handoffs.iter().filter_map(|handoff| {
-                    handoff.runtime_agent().map(|target| target.name.clone())
-                }));
-                names
-            })
-            .collect::<BTreeSet<_>>();
+    let mut literal_names = BTreeSet::new();
+    collect_agent_literal_names(root, &mut Vec::new(), &mut literal_names);
     let mut used_keys = BTreeSet::new();
     let mut counts_by_name = BTreeMap::new();
     let mut key_by_signature = BTreeMap::new();
@@ -2894,6 +2906,36 @@ mod tests {
         assert!(instructions.contains("Inspect the prepared workspace."));
         assert!(instructions.contains("Capabilities: filesystem, apply_patch"));
         assert!(instructions.contains("README.md"));
+    }
+
+    #[test]
+    fn identity_keys_avoid_reachable_literal_suffix_names() {
+        let literal_suffix = Agent::builder("sandbox#2").build();
+        let duplicate = Agent::builder("sandbox")
+            .handoff(crate::handoff::handoff(literal_suffix))
+            .build();
+        let root = Agent::builder("sandbox")
+            .handoff(crate::handoff::handoff(duplicate))
+            .build();
+
+        let (annotated, identities) = build_sandbox_identity_map(&root);
+        let annotated_duplicate = annotated.handoffs[0]
+            .runtime_agent()
+            .expect("duplicate handoff should keep runtime agent");
+        let annotated_literal = annotated_duplicate.handoffs[0]
+            .runtime_agent()
+            .expect("literal suffix handoff should keep runtime agent");
+
+        assert!(identities.agent_by_key.is_empty());
+        assert_eq!(annotated.sandbox_identity_key.as_deref(), Some("sandbox"));
+        assert_eq!(
+            annotated_duplicate.sandbox_identity_key.as_deref(),
+            Some("sandbox#3")
+        );
+        assert_eq!(
+            annotated_literal.sandbox_identity_key.as_deref(),
+            Some("sandbox#2")
+        );
     }
 
     #[test]

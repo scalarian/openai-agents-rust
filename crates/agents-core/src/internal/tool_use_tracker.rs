@@ -22,13 +22,16 @@ impl AgentToolUseTracker {
         if tool_names.is_empty() {
             return;
         }
-        let entry = self.agent_to_tools.entry(agent.name.clone()).or_default();
+        let entry = self
+            .agent_to_tools
+            .entry(agent_tracker_key(agent))
+            .or_default();
         entry.extend(tool_names);
     }
 
     pub(crate) fn has_used_tools(&self, agent: &Agent) -> bool {
         self.agent_to_tools
-            .get(&agent.name)
+            .get(&agent_tracker_key(agent))
             .map(|tools| !tools.is_empty())
             .unwrap_or(false)
     }
@@ -64,6 +67,13 @@ impl AgentToolUseTracker {
     }
 }
 
+fn agent_tracker_key(agent: &Agent) -> String {
+    agent
+        .sandbox_identity_key
+        .clone()
+        .unwrap_or_else(|| agent.name.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +89,24 @@ mod tests {
         assert_eq!(
             tracker.as_serializable().get("router"),
             Some(&vec!["lookup".to_owned(), "search".to_owned()])
+        );
+    }
+
+    #[test]
+    fn tracks_tools_by_runtime_identity_key() {
+        let mut tracker = AgentToolUseTracker::new();
+        let first = Agent::builder("duplicate").build();
+        let second = Agent::builder("duplicate").build().clone_with(|agent| {
+            agent.sandbox_identity_key = Some("duplicate#2".to_owned());
+        });
+
+        tracker.add_tool_use(&second, ["approval_tool".to_owned()]);
+
+        assert!(!tracker.has_used_tools(&first));
+        assert!(tracker.has_used_tools(&second));
+        assert_eq!(
+            tracker.as_serializable().get("duplicate#2"),
+            Some(&vec!["approval_tool".to_owned()])
         );
     }
 }

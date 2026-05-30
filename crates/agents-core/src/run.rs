@@ -2624,6 +2624,71 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
+    struct DuplicateNamedAgentModel {
+        calls_by_model: Arc<Mutex<BTreeMap<String, usize>>>,
+        seen_tool_choices_by_model: Arc<Mutex<BTreeMap<String, Vec<Option<String>>>>>,
+    }
+
+    impl DuplicateNamedAgentModel {
+        fn seen_tool_choices(&self, model: &str) -> Vec<Option<String>> {
+            self.seen_tool_choices_by_model
+                .lock()
+                .expect("duplicate named tool choice lock")
+                .get(model)
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
+    #[async_trait]
+    impl Model for DuplicateNamedAgentModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            let requested_model = request
+                .model
+                .clone()
+                .unwrap_or_else(|| "<default>".to_owned());
+            self.seen_tool_choices_by_model
+                .lock()
+                .expect("duplicate named tool choice lock")
+                .entry(requested_model.clone())
+                .or_default()
+                .push(request.settings.tool_choice.clone());
+
+            let mut calls_by_model = self
+                .calls_by_model
+                .lock()
+                .expect("duplicate named model calls lock");
+            let calls = calls_by_model.entry(requested_model.clone()).or_default();
+            *calls += 1;
+            let call = *calls;
+
+            let output = match (requested_model.as_str(), call) {
+                ("root", 1) => vec![OutputItem::Handoff {
+                    target_agent: "assistant".to_owned(),
+                }],
+                ("child", 1) => vec![OutputItem::ToolCall {
+                    call_id: "call-search".to_owned(),
+                    tool_name: "search".to_owned(),
+                    arguments: json!({}),
+                    namespace: None,
+                }],
+                ("child", 2) => vec![OutputItem::Text {
+                    text: "done".to_owned(),
+                }],
+                _ => panic!("unexpected duplicate-name model turn"),
+            };
+
+            Ok(ModelResponse {
+                model: request.model,
+                output,
+                usage: Usage::default(),
+                response_id: Some(format!("resp-duplicate-{call}")),
+                request_id: Some(format!("req-duplicate-{call}")),
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
     struct RequestCaptureModel {
         previous_response_id: Arc<Mutex<Option<String>>>,
         conversation_id: Arc<Mutex<Option<String>>>,
@@ -3864,6 +3929,54 @@ mod tests {
                 .cloned(),
             Some(vec!["raw_editor".to_owned()])
         );
+    }
+
+    #[tokio::test]
+    async fn tool_choice_reset_snapshot_uses_duplicate_agent_identity() {
+        let model = Arc::new(DuplicateNamedAgentModel::default());
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, _args: NoArgs| async move { Ok::<_, AgentsError>("tool result") },
+        )
+        .expect("function tool should build");
+        let child = Agent::builder("assistant")
+            .model("child")
+            .model_settings(crate::ModelSettings {
+                tool_choice: Some("required".to_owned()),
+                ..crate::ModelSettings::default()
+            })
+            .function_tool(search_tool)
+            .build();
+        let root = Agent::builder("assistant")
+            .model("root")
+            .handoff(crate::handoff::handoff(child))
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(Arc::new(StaticProvider {
+                model: model.clone(),
+            }))
+            .run(&root, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            model.seen_tool_choices("child"),
+            vec![Some("required".to_owned()), None]
+        );
+
+        let tracker = result
+            .run_state
+            .as_ref()
+            .map(|state| state.tool_use_tracker.clone())
+            .expect("run state should include tracker");
+        assert_eq!(
+            tracker.get("assistant"),
+            Some(&vec!["transfer_to_assistant".to_owned()])
+        );
+        assert_eq!(tracker.get("assistant#2"), Some(&vec!["search".to_owned()]));
     }
 
     #[tokio::test]
