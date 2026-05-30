@@ -10,7 +10,7 @@ pub const OPENAI_DEFAULT_MODEL_ENV_VARIABLE_NAME: &str = "OPENAI_DEFAULT_MODEL";
 
 pub fn get_default_model() -> String {
     env::var(OPENAI_DEFAULT_MODEL_ENV_VARIABLE_NAME)
-        .unwrap_or_else(|_| "gpt-4.1".to_owned())
+        .unwrap_or_else(|_| "gpt-5.4-mini".to_owned())
         .to_lowercase()
 }
 
@@ -37,6 +37,7 @@ fn get_default_reasoning_effort(model_name: &str) -> Option<&'static str> {
         || is_versioned_default_model(model_name, "gpt-5.4")
         || is_versioned_default_model(model_name, "gpt-5.4-mini")
         || is_versioned_default_model(model_name, "gpt-5.4-nano")
+        || is_versioned_default_model(model_name, "gpt-5.5")
         || model_name == "gpt-5.3-codex"
     {
         return Some("none");
@@ -87,6 +88,54 @@ pub fn get_default_model_settings(model: Option<&str>) -> ModelSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    fn default_model_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn default_model_is_current_mini_model() {
+        let _lock = default_model_env_lock()
+            .lock()
+            .expect("default model env lock");
+        let _env = EnvVarGuard::unset(OPENAI_DEFAULT_MODEL_ENV_VARIABLE_NAME);
+
+        assert_eq!(get_default_model(), "gpt-5.4-mini");
+        assert!(is_gpt_5_default());
+        let settings = get_default_model_settings(None);
+        assert_eq!(settings.verbosity.as_deref(), Some("low"));
+        assert_eq!(
+            settings
+                .reasoning
+                .as_ref()
+                .and_then(|value| value.effort.as_deref()),
+            Some("none")
+        );
+    }
 
     #[test]
     fn detects_gpt5_reasoning_requirement() {
@@ -98,6 +147,19 @@ mod tests {
     #[test]
     fn returns_gpt5_defaults() {
         let settings = get_default_model_settings(Some("gpt-5.4"));
+        assert_eq!(settings.verbosity.as_deref(), Some("low"));
+        assert_eq!(
+            settings
+                .reasoning
+                .as_ref()
+                .and_then(|value| value.effort.as_deref()),
+            Some("none")
+        );
+    }
+
+    #[test]
+    fn returns_gpt55_none_reasoning_defaults() {
+        let settings = get_default_model_settings(Some("gpt-5.5-2026-04-23"));
         assert_eq!(settings.verbosity.as_deref(), Some("low"));
         assert_eq!(
             settings
