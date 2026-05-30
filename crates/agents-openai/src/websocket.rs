@@ -1,9 +1,31 @@
+use std::time::Duration;
+
 use agents_core::{AgentsError, ModelRequest, Result};
 use reqwest::header::HeaderMap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
 use crate::models::{OpenAIClientOptions, OpenAIResponsesModel};
+
+/// Low-level keepalive settings for the Responses websocket transport.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OpenAIResponsesWebSocketOptions {
+    pub ping_interval: Option<Duration>,
+    pub ping_timeout: Option<Duration>,
+}
+
+impl OpenAIResponsesWebSocketOptions {
+    pub fn with_ping_interval(mut self, ping_interval: Option<Duration>) -> Self {
+        self.ping_interval = ping_interval;
+        self
+    }
+
+    pub fn with_ping_timeout(mut self, ping_timeout: Option<Duration>) -> Self {
+        self.ping_timeout = ping_timeout;
+        self
+    }
+}
 
 /// Shared helper for constructing Responses websocket requests.
 #[derive(Clone, Debug, Default)]
@@ -11,6 +33,7 @@ pub struct ResponsesWebSocketSession {
     pub model: Option<String>,
     pub response_id: Option<String>,
     pub client_options: OpenAIClientOptions,
+    pub websocket_options: OpenAIResponsesWebSocketOptions,
 }
 
 pub fn responses_websocket_session(
@@ -20,17 +43,50 @@ pub fn responses_websocket_session(
     ResponsesWebSocketSession::new(Some(model.into()), client_options)
 }
 
+pub fn responses_websocket_session_with_options(
+    model: impl Into<String>,
+    client_options: OpenAIClientOptions,
+    websocket_options: OpenAIResponsesWebSocketOptions,
+) -> ResponsesWebSocketSession {
+    ResponsesWebSocketSession::new_with_options(
+        Some(model.into()),
+        client_options,
+        websocket_options,
+    )
+}
+
 impl ResponsesWebSocketSession {
     pub fn new(model: Option<String>, client_options: OpenAIClientOptions) -> Self {
+        Self::new_with_options(
+            model,
+            client_options,
+            OpenAIResponsesWebSocketOptions::default(),
+        )
+    }
+
+    pub fn new_with_options(
+        model: Option<String>,
+        client_options: OpenAIClientOptions,
+        websocket_options: OpenAIResponsesWebSocketOptions,
+    ) -> Self {
         Self {
             model,
             response_id: None,
             client_options,
+            websocket_options,
         }
     }
 
     pub fn with_response_id(mut self, response_id: impl Into<String>) -> Self {
         self.response_id = Some(response_id.into());
+        self
+    }
+
+    pub fn with_websocket_options(
+        mut self,
+        websocket_options: OpenAIResponsesWebSocketOptions,
+    ) -> Self {
+        self.websocket_options = websocket_options;
         self
     }
 
@@ -192,6 +248,20 @@ mod tests {
 
         assert!(url.contains("foo=bar"));
         assert!(url.contains("baz=1"));
+    }
+
+    #[test]
+    fn stores_websocket_keepalive_options() {
+        let options = OpenAIResponsesWebSocketOptions::default()
+            .with_ping_interval(Some(Duration::from_secs(5)))
+            .with_ping_timeout(Some(Duration::from_secs(2)));
+        let session = ResponsesWebSocketSession::new_with_options(
+            Some("gpt-5".to_owned()),
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+            options.clone(),
+        );
+
+        assert_eq!(session.websocket_options, options);
     }
 
     #[test]

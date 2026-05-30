@@ -1,6 +1,10 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use agents_core::{
@@ -13,6 +17,7 @@ use once_cell::sync::Lazy;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::time::{Instant, MissedTickBehavior, Sleep};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, client::IntoClientRequest, http::HeaderName},
@@ -20,7 +25,7 @@ use tokio_tungstenite::{
 
 use crate::chatcmpl_helpers::chat_tool_output_content;
 use crate::defaults::{OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_WEBSOCKET_BASE_URL};
-use crate::websocket::ResponsesWebSocketSession;
+use crate::websocket::{OpenAIResponsesWebSocketOptions, ResponsesWebSocketSession};
 
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
@@ -306,17 +311,31 @@ impl Model for OpenAIChatCompletionsModel {
 #[derive(Clone, Debug)]
 pub struct OpenAIResponsesWsModel {
     inner: OpenAIResponsesModel,
+    websocket_options: OpenAIResponsesWebSocketOptions,
 }
 
 impl OpenAIResponsesWsModel {
     pub fn new(model: impl Into<String>, options: OpenAIClientOptions) -> Self {
+        Self::new_with_websocket_options(model, options, OpenAIResponsesWebSocketOptions::default())
+    }
+
+    pub fn new_with_websocket_options(
+        model: impl Into<String>,
+        options: OpenAIClientOptions,
+        websocket_options: OpenAIResponsesWebSocketOptions,
+    ) -> Self {
         Self {
             inner: OpenAIResponsesModel::new(model, options),
+            websocket_options,
         }
     }
 
     pub fn websocket_session(&self) -> ResponsesWebSocketSession {
-        ResponsesWebSocketSession::new(Some(self.inner.model.clone()), self.inner.options.clone())
+        ResponsesWebSocketSession::new_with_options(
+            Some(self.inner.model.clone()),
+            self.inner.options.clone(),
+            self.websocket_options.clone(),
+        )
     }
 }
 
@@ -351,18 +370,64 @@ impl Model for OpenAIResponsesWsModel {
             }
         }
 
-        let (mut websocket, _) = connect_async(request_handle)
+        let (websocket, _) = connect_async(request_handle)
             .await
             .map_err(|error| AgentsError::message(error.to_string()))?;
-        websocket
+        let (mut websocket_write, mut websocket_read) = websocket.split();
+
+        let mut ping_interval =
+            make_websocket_ping_interval(&session.websocket_options, "responses websocket")?;
+        let mut pong_deadline: Option<Pin<Box<Sleep>>> = None;
+
+        websocket_write
             .send(Message::Text(
                 session.request_frame(&request)?.to_string().into(),
             ))
             .await
             .map_err(|error| AgentsError::message(error.to_string()))?;
 
-        while let Some(frame) = websocket.next().await {
-            let frame = frame.map_err(|error| AgentsError::message(error.to_string()))?;
+        loop {
+            let frame = tokio::select! {
+                frame = websocket_read.next() => {
+                    let Some(frame) = frame else {
+                        return Err(AgentsError::message(
+                            "responses websocket stream ended without a terminal response event",
+                        ));
+                    };
+                    frame.map_err(|error| AgentsError::message(error.to_string()))?
+                }
+                _ = async {
+                    match ping_interval.as_mut() {
+                        Some(interval) => interval.tick().await,
+                        None => future::pending::<Instant>().await,
+                    }
+                } => {
+                    websocket_write
+                        .send(Message::Ping(Vec::new().into()))
+                        .await
+                        .map_err(|error| AgentsError::message(error.to_string()))?;
+                    if let Some(timeout) = session.websocket_options.ping_timeout {
+                        if timeout.is_zero() {
+                            return Err(AgentsError::message(
+                                "responses websocket ping_timeout must be greater than zero",
+                            ));
+                        }
+                        pong_deadline = Some(Box::pin(tokio::time::sleep(timeout)));
+                    }
+                    continue;
+                }
+                _ = async {
+                    match pong_deadline.as_mut() {
+                        Some(deadline) => deadline.as_mut().await,
+                        None => future::pending::<()>().await,
+                    }
+                } => {
+                    return Err(AgentsError::message(
+                        "responses websocket keepalive pong timed out",
+                    ));
+                }
+            };
+
             let payload = match frame {
                 Message::Text(text) => serde_json::from_str::<Value>(&text)
                     .map_err(|error| AgentsError::message(error.to_string()))?,
@@ -373,7 +438,18 @@ impl Model for OpenAIResponsesWsModel {
                         "responses websocket connection closed before a terminal response event",
                     ));
                 }
-                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                Message::Ping(bytes) => {
+                    websocket_write
+                        .send(Message::Pong(bytes))
+                        .await
+                        .map_err(|error| AgentsError::message(error.to_string()))?;
+                    continue;
+                }
+                Message::Pong(_) => {
+                    pong_deadline = None;
+                    continue;
+                }
+                Message::Frame(_) => continue,
             };
 
             match payload.get("type").and_then(Value::as_str) {
@@ -409,11 +485,24 @@ impl Model for OpenAIResponsesWsModel {
                 _ => continue,
             }
         }
-
-        Err(AgentsError::message(
-            "responses websocket stream ended without a terminal response event",
-        ))
     }
+}
+
+fn make_websocket_ping_interval(
+    options: &OpenAIResponsesWebSocketOptions,
+    transport_name: &str,
+) -> Result<Option<tokio::time::Interval>> {
+    let Some(interval) = options.ping_interval else {
+        return Ok(None);
+    };
+    if interval.is_zero() {
+        return Err(AgentsError::message(format!(
+            "{transport_name} ping_interval must be greater than zero"
+        )));
+    }
+    let mut interval = tokio::time::interval_at(Instant::now() + interval, interval);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    Ok(Some(interval))
 }
 
 async fn post_json(

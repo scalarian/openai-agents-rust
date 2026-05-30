@@ -14,6 +14,7 @@ use crate::openai_agent_registration::{
     OpenAIAgentRegistrationConfig, ResolvedOpenAIAgentRegistrationConfig,
     merge_openai_harness_id_into_metadata, resolve_openai_agent_registration_config,
 };
+use crate::websocket::OpenAIResponsesWebSocketOptions;
 use crate::{
     get_default_openai_websocket_base_url, get_openai_base_url, get_use_responses_by_default,
     get_use_responses_websocket_by_default,
@@ -37,8 +38,15 @@ pub struct OpenAIProvider {
     pub use_responses_websocket: bool,
     pub strict_feature_validation: bool,
     pub agent_registration: Option<ResolvedOpenAIAgentRegistrationConfig>,
-    websocket_model_cache:
-        Arc<Mutex<HashMap<(String, OpenAIClientOptions), Arc<OpenAIResponsesWsModel>>>>,
+    pub responses_websocket_options: OpenAIResponsesWebSocketOptions,
+    websocket_model_cache: Arc<
+        Mutex<
+            HashMap<
+                (String, OpenAIClientOptions, OpenAIResponsesWebSocketOptions),
+                Arc<OpenAIResponsesWsModel>,
+            >,
+        >,
+    >,
 }
 
 impl Default for OpenAIProvider {
@@ -54,6 +62,7 @@ impl Default for OpenAIProvider {
             use_responses_websocket: get_use_responses_websocket_by_default() == Some(true),
             strict_feature_validation: false,
             agent_registration: None,
+            responses_websocket_options: OpenAIResponsesWebSocketOptions::default(),
             websocket_model_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -101,6 +110,14 @@ impl OpenAIProvider {
 
     pub fn with_use_responses_websocket(mut self, use_responses_websocket: bool) -> Self {
         self.use_responses_websocket = use_responses_websocket;
+        self
+    }
+
+    pub fn with_responses_websocket_options(
+        mut self,
+        responses_websocket_options: OpenAIResponsesWebSocketOptions,
+    ) -> Self {
+        self.responses_websocket_options = responses_websocket_options;
         self
     }
 
@@ -166,11 +183,16 @@ impl OpenAIProvider {
             .lock()
             .expect("openai provider websocket cache");
         let entry = cache
-            .entry((model_name.to_owned(), client_options.clone()))
+            .entry((
+                model_name.to_owned(),
+                client_options.clone(),
+                self.responses_websocket_options.clone(),
+            ))
             .or_insert_with(|| {
-                Arc::new(OpenAIResponsesWsModel::new(
+                Arc::new(OpenAIResponsesWsModel::new_with_websocket_options(
                     model_name.to_owned(),
                     client_options,
+                    self.responses_websocket_options.clone(),
                 ))
             })
             .clone();
@@ -228,6 +250,8 @@ impl ModelProvider for OpenAIProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::defaults::{default_openai_base_url, default_openai_websocket_base_url};
     use crate::openai_agent_registration::{
@@ -420,6 +444,31 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&first, &second),
             "websocket models should not be reused across distinct client identities"
+        );
+    }
+
+    #[test]
+    fn does_not_reuse_websocket_models_across_different_keepalive_options() {
+        let provider = OpenAIProvider::new()
+            .with_api_key("sk-test")
+            .with_use_responses(true)
+            .with_use_responses_websocket(true)
+            .with_responses_websocket_options(
+                OpenAIResponsesWebSocketOptions::default()
+                    .with_ping_interval(Some(Duration::from_secs(20))),
+            );
+        let first = provider.resolve(Some("gpt-5"));
+
+        let provider_with_timeout = provider.clone().with_responses_websocket_options(
+            OpenAIResponsesWebSocketOptions::default()
+                .with_ping_interval(Some(Duration::from_secs(20)))
+                .with_ping_timeout(Some(Duration::from_secs(5))),
+        );
+        let second = provider_with_timeout.resolve(Some("gpt-5"));
+
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "websocket models should not be reused across distinct keepalive options"
         );
     }
 

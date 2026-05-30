@@ -70,4 +70,7 @@ pub use tools::{
     code_interpreter_tool, file_search_tool, image_generation_tool, tool_search_tool,
     web_search_tool,
 };
-pub use websocket::{ResponsesWebSocketSession, responses_websocket_session};
+pub use websocket::{
+    OpenAIResponsesWebSocketOptions, ResponsesWebSocketSession, responses_websocket_session,
+    responses_websocket_session_with_options,
+};
