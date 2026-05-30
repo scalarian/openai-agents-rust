@@ -14,6 +14,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | agents as tools structured | structured input for agent-as-tool calls | [agents_as_tools_structured.rs](../crates/openai-agents/examples/agents_as_tools_structured.rs) |
 | advanced sqlite session | extension SQLite session with custom table names and tool history | [advanced_sqlite_session.rs](../crates/openai-agents/examples/advanced_sqlite_session.rs) |
 | async sqlite session | async-friendly extension wrapper over SQLite-backed session memory | [async_sqlite_session.rs](../crates/openai-agents/examples/async_sqlite_session.rs) |
+| auto mode | deterministic fallback inputs and confirmations for automated example runs | [auto_mode.rs](../crates/openai-agents/examples/auto_mode.rs) |
 | basic run | smallest end-to-end call | [basic_run.rs](../crates/openai-agents/examples/basic_run.rs) |
 | code interpreter | hosted code interpreter tool configuration and streamed call items | [code_interpreter.rs](../crates/openai-agents/examples/code_interpreter.rs) |
 | compaction session | automatic and manual OpenAI Responses session compaction | [compaction_session.rs](../crates/openai-agents/examples/compaction_session.rs) |
@@ -31,6 +32,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | function tools | typed local tools with JSON-schema inputs | [function_tools.rs](../crates/openai-agents/examples/function_tools.rs) |
 | forcing tool use | required tool choice and stop-on-tool behavior | [forcing_tool_use.rs](../crates/openai-agents/examples/forcing_tool_use.rs) |
 | handoffs | control transfer between agents | [handoffs.rs](../crates/openai-agents/examples/handoffs.rs) |
+| hello world | upstream-style haiku response example | [hello_world.rs](../crates/openai-agents/examples/hello_world.rs) |
 | hosted mcp | hosted MCP tool payload configuration for Responses models | [hosted_mcp.rs](../crates/openai-agents/examples/hosted_mcp.rs) |
 | human in the loop | approval-required tool calls with saved run state | [human_in_the_loop.rs](../crates/openai-agents/examples/human_in_the_loop.rs) |
 | human in the loop custom rejection | custom model-visible rejection text for denied tool calls | [human_in_the_loop_custom_rejection.rs](../crates/openai-agents/examples/human_in_the_loop_custom_rejection.rs) |
@@ -53,7 +55,16 @@ All runnable examples live in `crates/openai-agents/examples`.
 | previous response id | continue a Responses API conversation by id | [previous_response_id.rs](../crates/openai-agents/examples/previous_response_id.rs) |
 | prompt template | static and dynamic reusable prompt config | [prompt_template.rs](../crates/openai-agents/examples/prompt_template.rs) |
 | reasoning content | reasoning items from normal and streamed runner output | [reasoning_content.rs](../crates/openai-agents/examples/reasoning_content.rs) |
+| reasoning content GPT OSS stream | optional local GPT-OSS reasoning stream smoke example | [reasoning_content_gpt_oss_stream.rs](../crates/openai-agents/examples/reasoning_content_gpt_oss_stream.rs) |
+| realtime app agent | realtime airline customer-service agent tools and handoffs | [realtime_app_agent.rs](../crates/openai-agents/examples/realtime_app_agent.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
+| sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
+| sandbox Cloudflare extension | Cloudflare hosted sandbox client feature-gate and session lifecycle | [sandbox_cloudflare_extension.rs](../crates/openai-agents/examples/sandbox_cloudflare_extension.rs) |
+| sandbox Daytona extension | Daytona hosted sandbox client feature-gate and session lifecycle | [sandbox_daytona_extension.rs](../crates/openai-agents/examples/sandbox_daytona_extension.rs) |
+| sandbox E2B extension | E2B hosted sandbox client feature-gate and session lifecycle | [sandbox_e2b_extension.rs](../crates/openai-agents/examples/sandbox_e2b_extension.rs) |
+| sandbox Modal extension | Modal hosted sandbox client feature-gate and session lifecycle | [sandbox_modal_extension.rs](../crates/openai-agents/examples/sandbox_modal_extension.rs) |
+| sandbox Runloop extension | Runloop hosted sandbox client feature-gate and session lifecycle | [sandbox_runloop_extension.rs](../crates/openai-agents/examples/sandbox_runloop_extension.rs) |
+| sandbox Vercel extension | Vercel hosted sandbox client feature-gate and session lifecycle | [sandbox_vercel_extension.rs](../crates/openai-agents/examples/sandbox_vercel_extension.rs) |
 | sqlite session | SQLite-backed conversation memory | [sqlite_session.rs](../crates/openai-agents/examples/sqlite_session.rs) |
 | stream function call args | streamed tool-call argument items | [stream_function_call_args.rs](../crates/openai-agents/examples/stream_function_call_args.rs) |
 | stream items | streamed run-item events for tool calls and messages | [stream_items.rs](../crates/openai-agents/examples/stream_items.rs) |
@@ -61,8 +72,11 @@ All runnable examples live in `crates/openai-agents/examples`.
 | streamed run | live events and completion | [streamed_run.rs](../crates/openai-agents/examples/streamed_run.rs) |
 | tool guardrails | function-tool input and output guardrails | [tool_guardrails.rs](../crates/openai-agents/examples/tool_guardrails.rs) |
 | tool search | hosted tool search with namespaces and top-level deferred tools | [tool_search.rs](../crates/openai-agents/examples/tool_search.rs) |
+| tools | upstream-style basic function tool example | [tools.rs](../crates/openai-agents/examples/tools.rs) |
 | usage tracking | token usage from a completed run | [usage_tracking.rs](../crates/openai-agents/examples/usage_tracking.rs) |
 | realtime session | long-lived realtime interaction | [realtime_session.rs](../crates/openai-agents/examples/realtime_session.rs) |
+| realtime Twilio media stream | Twilio media stream event bridge for realtime sessions | [realtime_twilio_media_stream.rs](../crates/openai-agents/examples/realtime_twilio_media_stream.rs) |
+| realtime Twilio SIP | Twilio SIP-oriented realtime runner example | [realtime_twilio_sip.rs](../crates/openai-agents/examples/realtime_twilio_sip.rs) |
 | remote image | remote image input item by URL | [remote_image.rs](../crates/openai-agents/examples/remote_image.rs) |
 | remote pdf | remote PDF input item by URL | [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs) |
 | redis session | Redis-backed extension session with graceful availability check | [redis_session.rs](../crates/openai-agents/examples/redis_session.rs) |
@@ -71,6 +85,8 @@ All runnable examples live in `crates/openai-agents/examples`.
 | web search | hosted web search tool configuration | [web_search.rs](../crates/openai-agents/examples/web_search.rs) |
 | web search filters | hosted web search domain filters and source includes | [web_search_filters.rs](../crates/openai-agents/examples/web_search_filters.rs) |
 | voice pipeline | STT -> workflow -> TTS flow | [voice_pipeline.rs](../crates/openai-agents/examples/voice_pipeline.rs) |
+| voice static | non-streamed voice pipeline example | [voice_static.rs](../crates/openai-agents/examples/voice_static.rs) |
+| voice streamed | streamed voice pipeline example | [voice_streamed.rs](../crates/openai-agents/examples/voice_streamed.rs) |
 
 ## Read By Goal
 
