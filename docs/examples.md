@@ -140,6 +140,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | sandbox tax prep | streamed sandbox tax preparation workflow with generated 1040 summary artifact | [sandbox_tax_prep.rs](../crates/openai-agents/examples/sandbox_tax_prep.rs) |
 | sandbox tutorial resume | serialized sandbox resume from app build to added test coverage | [sandbox_tutorial_resume.rs](../crates/openai-agents/examples/sandbox_tutorial_resume.rs) |
 | sandbox Unix local runner | local Unix sandbox runner with path grants | [sandbox_unix_local_runner.rs](../crates/openai-agents/examples/sandbox_unix_local_runner.rs) |
+| sandbox Unix local PTY | stateful Unix-local sandbox PTY interaction with stdin and output waits | [sandbox_unix_local_pty.rs](../crates/openai-agents/examples/sandbox_unix_local_pty.rs) |
 | sandbox workspace | local sandbox workspace preparation and shell confinement | [sandbox_workspace.rs](../crates/openai-agents/examples/sandbox_workspace.rs) |
 | sandbox Blaxel extension | Blaxel hosted sandbox client feature-gate and session lifecycle | [sandbox_blaxel_extension.rs](../crates/openai-agents/examples/sandbox_blaxel_extension.rs) |
 | sandbox Cloudflare extension | Cloudflare hosted sandbox client feature-gate and session lifecycle | [sandbox_cloudflare_extension.rs](../crates/openai-agents/examples/sandbox_cloudflare_extension.rs) |
