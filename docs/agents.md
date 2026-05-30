@@ -62,7 +62,7 @@ Use structured outputs when:
 
 Use `AgentOutputSchema<T>` or `OutputSchemaDefinition` directly when you need non-strict schema handling or a custom validation pass. See [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs).
 
-For file input content, pass raw JSON `InputItem::Json` messages with `content` entries such as `{"type":"input_file","file_data":"data:application/pdf;base64,...","filename":"..."}`. See [local_file.rs](../crates/openai-agents/examples/local_file.rs).
+For file input content, pass raw JSON `InputItem::Json` messages with `content` entries such as `{"type":"input_file","file_data":"data:application/pdf;base64,...","filename":"..."}` or `{"type":"input_file","file_url":"https://..."}`. See [local_file.rs](../crates/openai-agents/examples/local_file.rs) and [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs).
 
 ## Agents As Tools
 
