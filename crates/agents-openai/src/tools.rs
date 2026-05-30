@@ -136,6 +136,21 @@ impl ToolSearchToolOptions {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ImageGenerationToolOptions {
+    pub quality: Option<String>,
+}
+
+impl ImageGenerationToolOptions {
+    fn into_hosted_tool_options(self) -> BTreeMap<String, Value> {
+        let mut options = BTreeMap::new();
+        if let Some(quality) = self.quality {
+            options.insert("quality".to_owned(), Value::String(quality));
+        }
+        options
+    }
+}
+
 pub fn web_search_tool() -> StaticTool {
     web_search_tool_with_options(WebSearchToolOptions::default())
 }
@@ -195,8 +210,13 @@ pub fn tool_search_tool_with_options(options: ToolSearchToolOptions) -> StaticTo
 }
 
 pub fn image_generation_tool() -> StaticTool {
+    image_generation_tool_with_options(ImageGenerationToolOptions::default())
+}
+
+pub fn image_generation_tool_with_options(options: ImageGenerationToolOptions) -> StaticTool {
     StaticTool::new(
         "image_generation",
         "Generate or edit images with OpenAI hosted tooling.",
     )
+    .with_hosted_tool_options(options.into_hosted_tool_options())
 }

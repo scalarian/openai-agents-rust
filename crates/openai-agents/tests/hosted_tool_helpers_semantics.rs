@@ -1,8 +1,9 @@
 use openai_agents::{
-    Agent, CodeInterpreterToolOptions, InputItem, MCPListToolsItem, Model, ModelProvider,
-    ModelRequest, ModelResponse, OutputItem, Result as AgentsResult, Runner, ToolSearchCallItem,
-    ToolSearchOutputItem, Usage, code_interpreter_tool, code_interpreter_tool_with_options,
-    file_search_tool, image_generation_tool, tool_search_tool, web_search_tool,
+    Agent, CodeInterpreterToolOptions, ImageGenerationToolOptions, InputItem, MCPListToolsItem,
+    Model, ModelProvider, ModelRequest, ModelResponse, OutputItem, Result as AgentsResult, Runner,
+    ToolSearchCallItem, ToolSearchOutputItem, Usage, code_interpreter_tool,
+    code_interpreter_tool_with_options, file_search_tool, image_generation_tool,
+    image_generation_tool_with_options, tool_search_tool, web_search_tool,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -68,6 +69,14 @@ fn facade_hosted_tool_helpers_are_constructible() {
     assert_eq!(
         configured.definition.hosted_tool_options.get("container"),
         Some(&json!({"type": "auto"}))
+    );
+
+    let configured = image_generation_tool_with_options(ImageGenerationToolOptions {
+        quality: Some("low".to_owned()),
+    });
+    assert_eq!(
+        configured.definition.hosted_tool_options.get("quality"),
+        Some(&json!("low"))
     );
 }
 

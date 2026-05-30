@@ -2179,6 +2179,41 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_includes_image_generation_options() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let image_generation = crate::tools::image_generation_tool_with_options(
+            crate::tools::ImageGenerationToolOptions {
+                quality: Some("low".to_owned()),
+            },
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![image_generation.definition],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(
+            payload["tools"][0],
+            json!({
+                "type": "image_generation",
+                "quality": "low"
+            })
+        );
+    }
+
+    #[test]
     fn responses_payload_includes_tool_search_options() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",
