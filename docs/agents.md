@@ -60,6 +60,8 @@ Use structured outputs when:
 - you need stable keys and types
 - you want retries or max-turn logic to stay in the runtime
 
+Use `AgentOutputSchema<T>` or `OutputSchemaDefinition` directly when you need non-strict schema handling or a custom validation pass. See [non_strict_output_type.rs](../crates/openai-agents/examples/non_strict_output_type.rs).
+
 ## Agents As Tools
 
 An agent can be wrapped as a tool and invoked from another agent. This is the main primitive for “router + specialist” setups.
