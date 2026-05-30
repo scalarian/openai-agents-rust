@@ -130,7 +130,7 @@ impl OpenAIResponsesModel {
     }
 
     pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
-        validate_responses_tool_search_configuration(&request.tools)?;
+        validate_responses_tool_search_configuration(&request.tools, request.prompt.is_some())?;
         let mut payload = serde_json::Map::new();
         payload.insert("model".to_owned(), Value::String(self.model.clone()));
         if let Some(instructions) = &request.instructions {
@@ -1180,7 +1180,10 @@ fn openai_responses_tools_payload(tools: &[ToolDefinition]) -> Vec<Value> {
     payloads.into_iter().flatten().collect()
 }
 
-fn validate_responses_tool_search_configuration(tools: &[ToolDefinition]) -> Result<()> {
+fn validate_responses_tool_search_configuration(
+    tools: &[ToolDefinition],
+    allow_opaque_search_surface: bool,
+) -> Result<()> {
     let tool_search_count = tools
         .iter()
         .filter(|tool| tool.input_json_schema.is_none() && tool.name == "tool_search")
@@ -1191,17 +1194,37 @@ fn validate_responses_tool_search_configuration(tools: &[ToolDefinition]) -> Res
         ));
     }
 
-    if tool_search_count == 0
-        && tools
-            .iter()
-            .any(|tool| tool.input_json_schema.is_some() && tool.defer_loading)
-    {
+    let has_tool_search_surface = tools.iter().any(is_responses_tool_search_surface);
+    if tool_search_count > 0 && !has_tool_search_surface && !allow_opaque_search_surface {
+        return Err(AgentsError::message(
+            "ToolSearchTool() requires at least one searchable Responses surface: a tool_namespace(...) function tool, a deferred-loading function tool (`function_tool(..., defer_loading=True)`), or a deferred-loading hosted MCP server.",
+        ));
+    }
+
+    if tool_search_count == 0 && tools.iter().any(is_required_tool_search_surface) {
         return Err(AgentsError::message(
             "Deferred-loading Responses tools require ToolSearchTool() when using OpenAI Responses models.",
         ));
     }
 
     Ok(())
+}
+
+fn is_responses_tool_search_surface(tool: &ToolDefinition) -> bool {
+    if tool.name == "tool_search" {
+        return false;
+    }
+    tool.defer_loading
+        || (tool.input_json_schema.is_some()
+            && tool
+                .namespace
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|namespace| !namespace.is_empty()))
+}
+
+fn is_required_tool_search_surface(tool: &ToolDefinition) -> bool {
+    tool.name != "tool_search" && tool.defer_loading
 }
 
 fn openai_chat_tools_payload(tools: &[ToolDefinition]) -> Result<Vec<Value>> {
@@ -2354,7 +2377,11 @@ mod tests {
                 tools: vec![tool_search.definition],
                 output_schema: None,
                 trace_id: None,
-                prompt: None,
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_tool_search".to_owned(),
+                    version: None,
+                    variables: std::collections::BTreeMap::new(),
+                }),
             })
             .expect("responses payload should build");
 
@@ -2372,6 +2399,38 @@ mod tests {
                     "required": ["query"]
                 }
             })
+        );
+    }
+
+    #[test]
+    fn responses_payload_rejects_tool_search_without_searchable_surface() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("get_weather", "Get weather")
+                        .with_input_json_schema(json!({"type": "object"})),
+                    crate::tools::tool_search_tool().definition,
+                ],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect_err("tool_search should require a searchable surface");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires at least one searchable Responses surface")
         );
     }
 
