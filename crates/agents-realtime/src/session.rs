@@ -82,6 +82,15 @@ impl LiveRealtimeSessionState {
         self.state.lock().await.closed
     }
 
+    async fn mark_closed(&self) {
+        let mut state = self.state.lock().await;
+        state.connected = false;
+        state.closed = true;
+        drop(state);
+        self.revision.fetch_add(1, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
     fn revision(&self) -> u64 {
         self.revision.load(Ordering::SeqCst)
     }
@@ -336,11 +345,6 @@ impl RealtimeSession {
         }
 
         let active_agent = self.active_agent().await;
-        {
-            let mut state = self.shared_state.state.lock().await;
-            state.connected = false;
-            state.closed = true;
-        }
 
         if let Some(active_agent) = active_agent {
             self.shared_state
@@ -360,6 +364,7 @@ impl RealtimeSession {
             },
         });
         self.shared_state.push_event(event.clone()).await;
+        self.shared_state.mark_closed().await;
         Ok(event)
     }
 }
@@ -423,6 +428,7 @@ fn realtime_events_from_model_events(events: Vec<RealtimeModelEvent>) -> Vec<Rea
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
     use tokio::time::{Duration, timeout};
 
     use super::*;
@@ -472,5 +478,47 @@ mod tests {
         .await
         .expect("wait should observe realtime state changes");
         assert_eq!(session.transcript().await, "hello");
+    }
+
+    #[tokio::test]
+    async fn realtime_session_stream_drains_close_events_before_ending() {
+        let session = RealtimeSession::new(Some("gpt-realtime".to_owned()));
+        session
+            .connect(Some(RealtimeAgent::new("assistant")))
+            .await
+            .expect("connect should succeed");
+        let mut events = session.stream_events();
+        assert!(matches!(
+            events.next().await,
+            Some(RealtimeEvent::AgentStart(_))
+        ));
+
+        session.close().await.expect("close should succeed");
+
+        assert!(matches!(
+            events.next().await,
+            Some(RealtimeEvent::AgentEnd(_))
+        ));
+        assert!(matches!(
+            events.next().await,
+            Some(RealtimeEvent::SessionClosed(_))
+        ));
+        let end = timeout(Duration::from_millis(100), events.next())
+            .await
+            .expect("stream should finish after close events");
+        assert!(end.is_none());
+    }
+
+    #[tokio::test]
+    async fn realtime_session_stream_wakes_when_closed_without_events() {
+        let session = RealtimeSession::new(Some("gpt-realtime".to_owned()));
+        let mut events = session.stream_events();
+
+        session.shared_state.mark_closed().await;
+
+        let end = timeout(Duration::from_millis(100), events.next())
+            .await
+            .expect("stream should wake when session closes");
+        assert!(end.is_none());
     }
 }
