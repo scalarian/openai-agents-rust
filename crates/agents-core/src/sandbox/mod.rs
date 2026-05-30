@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::env;
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
 use std::fs;
-use std::io::ErrorKind;
-use std::io::{Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
@@ -2064,6 +2067,25 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+#[cfg(target_os = "linux")]
+fn configure_linux_landlock(
+    process: &mut Command,
+    workspace_root: &Path,
+    extra_path_grants: &[SandboxPathGrant],
+) -> Result<()> {
+    let ruleset =
+        LinuxLandlockRuleset::new(workspace_root, extra_path_grants).map_err(|error| {
+            AgentsError::message(format!(
+                "linux local sandbox shell confinement failed: {error}"
+            ))
+        })?;
+
+    unsafe {
+        process.pre_exec(move || ruleset.restrict_self());
+    }
+    Ok(())
+}
+
 fn confined_shell_command(
     command: &str,
     workspace_root: &Path,
@@ -2092,6 +2114,8 @@ fn confined_shell_command(
         command_builder
     };
     process.envs(env_vars);
+    #[cfg(target_os = "linux")]
+    configure_linux_landlock(&mut process, workspace_root, extra_path_grants)?;
     Ok(process)
 }
 
@@ -2129,6 +2153,8 @@ fn confined_pty_command(
     }
 
     process.envs(env_vars);
+    #[cfg(target_os = "linux")]
+    configure_linux_landlock(&mut process, workspace_root, extra_path_grants)?;
     restore_pty_child_signal_defaults(&mut process);
     Ok(process)
 }
@@ -2154,6 +2180,227 @@ fn restore_signal_default(signum: libc::c_int) -> std::io::Result<()> {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct LinuxLandlockRulesetAttr {
+    handled_access_fs: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct LinuxLandlockPathBeneathAttr {
+    allowed_access: u64,
+    parent_fd: i32,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxLandlockRuleset {
+    fd: i32,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxLandlockRuleset {
+    fn new(workspace_root: &Path, extra_path_grants: &[SandboxPathGrant]) -> io::Result<Self> {
+        let abi_version = linux_landlock_abi_version()?;
+        let write_access = linux_landlock_write_access(abi_version);
+        let ruleset = Self::create(write_access)?;
+
+        ruleset.add_rule(workspace_root, write_access)?;
+        ruleset.add_rule(
+            Path::new("/dev/null"),
+            linux_landlock_file_write_access(abi_version),
+        )?;
+        ruleset.add_existing_rule(
+            Path::new("/dev/ptmx"),
+            linux_landlock_file_write_access(abi_version),
+        )?;
+        ruleset.add_existing_rule(
+            Path::new("/dev/pts"),
+            linux_landlock_file_write_access(abi_version),
+        )?;
+
+        for grant in extra_path_grants {
+            let grant = validate_extra_path_grant(grant).map_err(io::Error::other)?;
+            if !grant.read_only {
+                ruleset.add_rule(
+                    &grant.resolved_path,
+                    linux_landlock_write_access_for_path(&grant.resolved_path, abi_version)?,
+                )?;
+            }
+        }
+
+        Ok(ruleset)
+    }
+
+    fn create(handled_access_fs: u64) -> io::Result<Self> {
+        let attr = LinuxLandlockRulesetAttr { handled_access_fs };
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                &attr as *const LinuxLandlockRulesetAttr,
+                std::mem::size_of::<LinuxLandlockRulesetAttr>(),
+                0,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { fd: fd as i32 })
+    }
+
+    fn add_existing_rule(&self, path: &Path, allowed_access: u64) -> io::Result<()> {
+        match self.add_rule(path, allowed_access) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn add_rule(&self, path: &Path, allowed_access: u64) -> io::Result<()> {
+        let path_fd = open_landlock_path(path)?;
+        let attr = LinuxLandlockPathBeneathAttr {
+            allowed_access,
+            parent_fd: path_fd,
+        };
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_add_rule,
+                self.fd,
+                LANDLOCK_RULE_PATH_BENEATH,
+                &attr as *const LinuxLandlockPathBeneathAttr,
+                0,
+            )
+        };
+        let add_rule_error = if result < 0 {
+            Some(io::Error::last_os_error())
+        } else {
+            None
+        };
+        let close_result = unsafe { libc::close(path_fd) };
+        if let Some(error) = add_rule_error {
+            return Err(error);
+        }
+        if close_result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn restrict_self(&self) -> io::Result<()> {
+        let no_new_privs = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+        if no_new_privs != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let result = unsafe { libc::syscall(libc::SYS_landlock_restrict_self, self.fd, 0) };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxLandlockRuleset {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::close(self.fd) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1 << 0;
+#[cfg(target_os = "linux")]
+const LANDLOCK_RULE_PATH_BENEATH: i32 = 1;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_REFER: u64 = 1 << 13;
+#[cfg(target_os = "linux")]
+const LANDLOCK_ACCESS_FS_TRUNCATE: u64 = 1 << 14;
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_abi_version() -> io::Result<i32> {
+    let version = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            std::ptr::null::<libc::c_void>(),
+            0,
+            LANDLOCK_CREATE_RULESET_VERSION,
+        )
+    };
+    if version < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(version as i32)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_file_write_access(abi_version: i32) -> u64 {
+    let mut access = LANDLOCK_ACCESS_FS_WRITE_FILE;
+    if abi_version >= 3 {
+        access |= LANDLOCK_ACCESS_FS_TRUNCATE;
+    }
+    access
+}
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_write_access(abi_version: i32) -> u64 {
+    let mut access = linux_landlock_file_write_access(abi_version)
+        | LANDLOCK_ACCESS_FS_REMOVE_DIR
+        | LANDLOCK_ACCESS_FS_REMOVE_FILE
+        | LANDLOCK_ACCESS_FS_MAKE_CHAR
+        | LANDLOCK_ACCESS_FS_MAKE_DIR
+        | LANDLOCK_ACCESS_FS_MAKE_REG
+        | LANDLOCK_ACCESS_FS_MAKE_SOCK
+        | LANDLOCK_ACCESS_FS_MAKE_FIFO
+        | LANDLOCK_ACCESS_FS_MAKE_BLOCK
+        | LANDLOCK_ACCESS_FS_MAKE_SYM;
+    if abi_version >= 2 {
+        access |= LANDLOCK_ACCESS_FS_REFER;
+    }
+    access
+}
+
+#[cfg(target_os = "linux")]
+fn linux_landlock_write_access_for_path(path: &Path, abi_version: i32) -> io::Result<u64> {
+    let metadata = fs::metadata(path)?;
+    if metadata.is_dir() {
+        Ok(linux_landlock_write_access(abi_version))
+    } else {
+        Ok(linux_landlock_file_write_access(abi_version))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_landlock_path(path: &Path) -> io::Result<i32> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "path contains a NUL byte"))?;
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+    if fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(fd)
     }
 }
 
