@@ -1214,6 +1214,7 @@ dependencies = [
  "async-trait",
  "futures",
  "jsonschema",
+ "libc",
  "log",
  "schemars",
  "serde",

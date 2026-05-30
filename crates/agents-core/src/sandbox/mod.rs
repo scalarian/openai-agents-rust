@@ -4,6 +4,8 @@ use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -1789,9 +1791,9 @@ fn confined_pty_command(
     env_vars: &BTreeMap<String, String>,
 ) -> Result<Command> {
     let mut process = Command::new("/usr/bin/script");
-    process.arg("-q").arg("/dev/null");
 
     if cfg!(target_os = "macos") {
+        process.arg("-q").arg("/dev/null");
         let sandbox_exec = darwin_sandbox_exec()?;
         let profile = darwin_exec_profile(workspace_root, env_vars, Path::new("/bin/sh"));
         process
@@ -1802,11 +1804,41 @@ fn confined_pty_command(
             .arg("-lc")
             .arg(command);
     } else {
-        process.arg("/bin/sh").arg("-lc").arg(command);
+        process
+            .arg("-q")
+            .arg("-e")
+            .arg("-c")
+            .arg(command)
+            .arg("/dev/null");
     }
 
     process.envs(env_vars);
+    restore_pty_child_signal_defaults(&mut process);
     Ok(process)
+}
+
+#[cfg(unix)]
+fn restore_pty_child_signal_defaults(process: &mut Command) {
+    unsafe {
+        process.pre_exec(|| {
+            restore_signal_default(libc::SIGINT)?;
+            restore_signal_default(libc::SIGQUIT)?;
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_pty_child_signal_defaults(_process: &mut Command) {}
+
+#[cfg(unix)]
+fn restore_signal_default(signum: libc::c_int) -> std::io::Result<()> {
+    let previous = unsafe { libc::signal(signum, libc::SIG_DFL) };
+    if previous == libc::SIG_ERR {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn darwin_sandbox_exec() -> Result<&'static str> {
@@ -2196,6 +2228,54 @@ mod tests {
                 .to_string()
                 .contains("sandbox workspace root must be absolute")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_children_restore_parent_ignored_terminal_signals() {
+        let session = LocalSandboxSession::create_caller_owned(Manifest::default())
+            .expect("sandbox should create");
+        let _int_guard = SignalDispositionGuard::ignore(libc::SIGINT);
+        let _quit_guard = SignalDispositionGuard::ignore(libc::SIGQUIT);
+        let command = concat!(
+            "python3 -c '",
+            "import signal, sys; ",
+            "int_ok = signal.getsignal(signal.SIGINT) == signal.default_int_handler; ",
+            "quit_ok = signal.getsignal(signal.SIGQUIT) == signal.SIG_DFL; ",
+            "print(f\"int={int_ok} quit={quit_ok}\"); ",
+            "sys.exit(0 if int_ok and quit_ok else 42)'",
+        );
+
+        let pty = session.open_pty(command).expect("pty should open");
+
+        let status = pty.wait().expect("pty should wait");
+        let output = pty.read_output();
+
+        assert_eq!(status, 0, "{output}");
+        assert!(output.contains("int=True quit=True"), "{output}");
+    }
+
+    #[cfg(unix)]
+    struct SignalDispositionGuard {
+        signum: libc::c_int,
+        previous: libc::sighandler_t,
+    }
+
+    #[cfg(unix)]
+    impl SignalDispositionGuard {
+        fn ignore(signum: libc::c_int) -> Self {
+            let previous = unsafe { libc::signal(signum, libc::SIG_IGN) };
+            assert_ne!(previous, libc::SIG_ERR);
+            Self { signum, previous }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for SignalDispositionGuard {
+        fn drop(&mut self) {
+            let restored = unsafe { libc::signal(self.signum, self.previous) };
+            assert_ne!(restored, libc::SIG_ERR);
+        }
     }
 }
 
