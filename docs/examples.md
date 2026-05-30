@@ -56,6 +56,7 @@ All runnable examples live in `crates/openai-agents/examples`.
 | input guardrail | local tripwire handling before model execution | [input_guardrail.rs](../crates/openai-agents/examples/input_guardrail.rs) |
 | lifecycle hooks | run and agent lifecycle callbacks | [lifecycle_hooks.rs](../crates/openai-agents/examples/lifecycle_hooks.rs) |
 | LiteLLM auto | upstream-named multi-provider LiteLLM routing entry point | [litellm_auto.rs](../crates/openai-agents/examples/litellm_auto.rs) |
+| LiteLLM provider | upstream-named LiteLLM provider entry point | [litellm_provider.rs](../crates/openai-agents/examples/litellm_provider.rs) |
 | llm as a judge | iterative generator and evaluator agent loop | [llm_as_a_judge.rs](../crates/openai-agents/examples/llm_as_a_judge.rs) |
 | local file | local file input item encoded as data URL content | [local_file.rs](../crates/openai-agents/examples/local_file.rs) |
 | local image | local image input item encoded as data URL content | [local_image.rs](../crates/openai-agents/examples/local_image.rs) |
