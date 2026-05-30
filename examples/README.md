@@ -18,6 +18,7 @@ cargo run -p openai-agents-rs --example input_guardrail
 cargo run -p openai-agents-rs --example lifecycle_hooks
 cargo run -p openai-agents-rs --example memory_session
 cargo run -p openai-agents-rs --example output_guardrail
+cargo run -p openai-agents-rs --example parallelization
 cargo run -p openai-agents-rs --example previous_response_id
 cargo run -p openai-agents-rs --example prompt_template
 cargo run -p openai-agents-rs --example prompt_template -- --dynamic
@@ -45,6 +46,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `lifecycle_hooks` | run and agent lifecycle callbacks | [docs/running_agents.md](../docs/running_agents.md) |
 | `memory_session` | persistent session state across turns | [docs/sessions/README.md](../docs/sessions/README.md) |
 | `output_guardrail` | tripwire handling for final model output | [docs/guardrails.md](../docs/guardrails.md) |
+| `parallelization` | concurrent agent calls followed by a picker agent | [docs/multi_agent.md](../docs/multi_agent.md) |
 | `previous_response_id` | Responses API conversation continuation by id | [docs/running_agents.md](../docs/running_agents.md) |
 | `prompt_template` | static and dynamic reusable prompt config | [docs/agents.md](../docs/agents.md) |
 | `sandbox_workspace` | local sandbox manifest staging and shell confinement | [docs/sandbox_agents.md](../docs/sandbox_agents.md) |

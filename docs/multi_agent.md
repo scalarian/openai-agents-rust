@@ -35,6 +35,10 @@ This is usually the right choice for:
 - search or retrieval specialists
 - translation or formatting specialists
 
+## Parallelization
+
+Use normal Rust concurrency when several independent agent calls can run at once. For example, run translation attempts with `tokio::try_join!`, collect the candidate outputs, then pass them to a picker agent. See [parallelization.rs](../crates/openai-agents/examples/parallelization.rs).
+
 ## Handoffs
 
 Use a handoff when control should actually move to another agent instead of appearing as a tool call in the parent run.
