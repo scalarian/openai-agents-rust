@@ -45,6 +45,7 @@ cargo run -p openai-agents-rs --example streamed_run
 cargo run -p openai-agents-rs --example tool_guardrails
 cargo run -p openai-agents-rs --example usage_tracking
 cargo run -p openai-agents-rs --example realtime_session
+cargo run -p openai-agents-rs --example remote_image
 cargo run -p openai-agents-rs --example remote_pdf
 cargo run -p openai-agents-rs --example retry
 cargo run -p openai-agents-rs --example routing
@@ -92,6 +93,7 @@ cargo run -p openai-agents-rs --example voice_pipeline
 | `tool_guardrails` | input and output guardrails around function tools | [docs/guardrails.md](../docs/guardrails.md) |
 | `usage_tracking` | token usage from a completed run | [docs/usage.md](../docs/usage.md) |
 | `realtime_session` | a long-lived realtime session with live text interaction | [docs/realtime/README.md](../docs/realtime/README.md) |
+| `remote_image` | remote image input item by URL | [docs/agents.md](../docs/agents.md) |
 | `remote_pdf` | remote PDF input item by URL | [docs/agents.md](../docs/agents.md) |
 | `retry` | runner-managed model retry settings | [docs/models/settings.md](../docs/models/settings.md) |
 | `routing` | streamed triage handoff to a specialist agent | [docs/handoffs.md](../docs/handoffs.md) |

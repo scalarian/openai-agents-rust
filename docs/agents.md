@@ -64,7 +64,7 @@ Use `AgentOutputSchema<T>` or `OutputSchemaDefinition` directly when you need no
 
 For file input content, pass raw JSON `InputItem::Json` messages with `content` entries such as `{"type":"input_file","file_data":"data:application/pdf;base64,...","filename":"..."}` or `{"type":"input_file","file_url":"https://..."}`. See [local_file.rs](../crates/openai-agents/examples/local_file.rs) and [remote_pdf.rs](../crates/openai-agents/examples/remote_pdf.rs).
 
-For image input content, use `{"type":"input_image","detail":"auto","image_url":"data:image/...;base64,..."}` for local images. See [local_image.rs](../crates/openai-agents/examples/local_image.rs).
+For image input content, use `{"type":"input_image","detail":"auto","image_url":"data:image/...;base64,..."}` for local images or an HTTPS image URL for remote images. See [local_image.rs](../crates/openai-agents/examples/local_image.rs) and [remote_image.rs](../crates/openai-agents/examples/remote_image.rs).
 
 ## Agents As Tools
 
