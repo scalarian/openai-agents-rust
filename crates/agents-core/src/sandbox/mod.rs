@@ -2174,6 +2174,14 @@ fn clear_directory(path: &Path) -> Result<()> {
 }
 
 fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
+    copy_directory_contents_with_root(source, source, destination)
+}
+
+fn copy_directory_contents_with_root(
+    source_root: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<()> {
     fs::create_dir_all(destination).map_err(|error| AgentsError::message(error.to_string()))?;
     for entry in fs::read_dir(source).map_err(|error| AgentsError::message(error.to_string()))? {
         let entry = entry.map_err(|error| AgentsError::message(error.to_string()))?;
@@ -2183,7 +2191,7 @@ fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
             .file_type()
             .map_err(|error| AgentsError::message(error.to_string()))?;
         if file_type.is_dir() {
-            copy_directory_contents(&source_path, &destination_path)?;
+            copy_directory_contents_with_root(source_root, &source_path, &destination_path)?;
         } else if file_type.is_file() {
             if let Some(parent) = destination_path.parent() {
                 fs::create_dir_all(parent)
@@ -2196,15 +2204,57 @@ fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
                 fs::create_dir_all(parent)
                     .map_err(|error| AgentsError::message(error.to_string()))?;
             }
-            std::os::unix::fs::symlink(
-                fs::read_link(&source_path)
-                    .map_err(|error| AgentsError::message(error.to_string()))?,
-                &destination_path,
-            )
-            .map_err(|error| AgentsError::message(error.to_string()))?;
+            let target = fs::read_link(&source_path)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+            validate_copied_symlink_target(source_root, &source_path, &target)?;
+            std::os::unix::fs::symlink(target, &destination_path)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
         }
     }
     Ok(())
+}
+
+fn validate_copied_symlink_target(
+    source_root: &Path,
+    source_path: &Path,
+    target: &Path,
+) -> Result<()> {
+    if target.is_absolute() {
+        return Err(AgentsError::message(format!(
+            "absolute symlink target not allowed: {}",
+            target.display()
+        )));
+    }
+
+    let relative_path = source_path
+        .strip_prefix(source_root)
+        .map_err(|_| AgentsError::message("symlink source must stay within copy root"))?;
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+    if normalize_relative_path(&parent.join(target)).is_none() {
+        return Err(AgentsError::message(format!(
+            "symlink target escapes sandbox workspace: {}",
+            target.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn normalize_relative_path(path: &Path) -> Option<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized)
 }
 
 #[cfg(test)]
@@ -2256,6 +2306,61 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn copy_directory_contents_rejects_absolute_symlink_targets() {
+        let source = TestTempDir::new();
+        let destination = TestTempDir::new();
+        std::os::unix::fs::symlink("/etc/passwd", source.path().join("leak"))
+            .expect("symlink should create");
+
+        let error = copy_directory_contents(source.path(), destination.path())
+            .expect_err("external symlink should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("absolute symlink target not allowed: /etc/passwd")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_directory_contents_rejects_parent_escape_symlink_targets() {
+        let source = TestTempDir::new();
+        let destination = TestTempDir::new();
+        fs::create_dir_all(source.path().join("nested")).expect("nested dir should create");
+        std::os::unix::fs::symlink("../../etc/passwd", source.path().join("nested/leak"))
+            .expect("symlink should create");
+
+        let error = copy_directory_contents(source.path(), destination.path())
+            .expect_err("escaping symlink should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("symlink target escapes sandbox workspace: ../../etc/passwd")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_directory_contents_allows_internal_symlink_targets() {
+        let source = TestTempDir::new();
+        let destination = TestTempDir::new();
+        fs::create_dir_all(source.path().join("bin")).expect("bin dir should create");
+        fs::create_dir_all(source.path().join("nested")).expect("nested dir should create");
+        fs::write(source.path().join("bin/python3"), b"python").expect("target file should write");
+        std::os::unix::fs::symlink("../bin/python3", source.path().join("nested/python"))
+            .expect("symlink should create");
+
+        copy_directory_contents(source.path(), destination.path()).expect("copy should succeed");
+
+        let target = fs::read_link(destination.path().join("nested/python"))
+            .expect("copied symlink should exist");
+        assert_eq!(target, PathBuf::from("../bin/python3"));
+    }
+
+    #[cfg(unix)]
     struct SignalDispositionGuard {
         signum: libc::c_int,
         previous: libc::sighandler_t,
@@ -2275,6 +2380,28 @@ mod tests {
         fn drop(&mut self) {
             let restored = unsafe { libc::signal(self.signum, self.previous) };
             assert_ne!(restored, libc::SIG_ERR);
+        }
+    }
+
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new() -> Self {
+            Self {
+                path: create_temp_workspace_root().expect("temp dir should create"),
+            }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
         }
     }
 }
