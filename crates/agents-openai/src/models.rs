@@ -15,7 +15,7 @@ use agents_core::{
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use once_cell::sync::Lazy;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::{Instant, MissedTickBehavior, Sleep};
@@ -93,6 +93,11 @@ impl OpenAIClientOptions {
             .ok_or(AgentsError::ModelProviderNotConfigured)?;
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&format!("Agents/Rust {}", agents_core::VERSION))
+                .map_err(|error| AgentsError::message(error.to_string()))?,
+        );
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {api_key}"))
@@ -1878,6 +1883,21 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn client_auth_headers_include_agents_user_agent() {
+        let headers = OpenAIClientOptions::new(Some("sk-test".to_owned()))
+            .auth_headers()
+            .expect("auth headers should build");
+        let expected_user_agent = format!("Agents/Rust {}", agents_core::VERSION);
+
+        assert_eq!(
+            headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_user_agent.as_str())
+        );
+    }
 
     fn build_responses_payload_with_tool_choice(
         tool_choice: &str,
@@ -4234,6 +4254,10 @@ mod tests {
                 .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                     && value == "Bearer sk-test")
         );
+        let expected_user_agent = format!("Agents/Rust {}", agents_core::VERSION);
+        assert!(headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("user-agent") && value == &expected_user_agent
+        }));
         assert!(headers.iter().any(
             |(name, value)| name.eq_ignore_ascii_case("openai-organization") && value == "org-test"
         ));
