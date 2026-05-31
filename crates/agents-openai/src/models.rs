@@ -115,6 +115,12 @@ impl OpenAIClientOptions {
     }
 }
 
+fn is_official_openai_base_url(base_url: &str) -> bool {
+    url::Url::parse(base_url)
+        .ok()
+        .is_some_and(|url| url.scheme() == "https" && url.host_str() == Some("api.openai.com"))
+}
+
 #[derive(Clone, Debug)]
 pub struct OpenAIResponsesModel {
     model: String,
@@ -255,7 +261,12 @@ impl OpenAIChatCompletionsModel {
         if let Some(response_format) = openai_chat_response_format(request) {
             payload.insert("response_format".to_owned(), response_format);
         }
-        apply_chat_model_settings(&mut payload, &request.settings, has_tools)?;
+        apply_chat_model_settings(
+            &mut payload,
+            &request.settings,
+            has_tools,
+            is_official_openai_base_url(&self.options.base_url).then_some(true),
+        )?;
         Ok(Value::Object(payload))
     }
 
@@ -867,6 +878,7 @@ fn apply_chat_model_settings(
     payload: &mut serde_json::Map<String, Value>,
     settings: &agents_core::ModelSettings,
     has_tools: bool,
+    default_store: Option<bool>,
 ) -> Result<()> {
     validate_extra_body_keys(
         &settings.extra_body,
@@ -884,7 +896,11 @@ fn apply_chat_model_settings(
             "tool_choice",
             "logprobs",
             "top_logprobs",
+            "store",
+            "reasoning_effort",
+            "verbosity",
             "prompt_cache_retention",
+            "metadata",
         ],
     )?;
     if let Some(value) = settings.temperature {
@@ -914,11 +930,25 @@ fn apply_chat_model_settings(
         payload.insert("logprobs".to_owned(), Value::Bool(true));
         payload.insert("top_logprobs".to_owned(), json!(value));
     }
+    if let Some(value) = settings.store.or(default_store) {
+        payload.insert("store".to_owned(), json!(value));
+    }
+    if let Some(reasoning) = &settings.reasoning {
+        if let Some(effort) = &reasoning.effort {
+            payload.insert("reasoning_effort".to_owned(), Value::String(effort.clone()));
+        }
+    }
+    if let Some(value) = &settings.verbosity {
+        payload.insert("verbosity".to_owned(), Value::String(value.clone()));
+    }
     if let Some(value) = &settings.prompt_cache_retention {
         payload.insert(
             "prompt_cache_retention".to_owned(),
             Value::String(value.clone()),
         );
+    }
+    if !settings.metadata.is_empty() {
+        payload.insert("metadata".to_owned(), json!(settings.metadata));
     }
     for (key, value) in &settings.extra_body {
         payload.insert(key.clone(), value.clone());
@@ -2666,7 +2696,17 @@ mod tests {
                     presence_penalty: Some(0.2),
                     parallel_tool_calls: Some(true),
                     top_logprobs: Some(3),
+                    store: Some(false),
+                    reasoning: Some(agents_core::ReasoningSettings {
+                        effort: Some("low".to_owned()),
+                        summary: Some("auto".to_owned()),
+                    }),
+                    verbosity: Some("low".to_owned()),
                     prompt_cache_retention: Some("24h".to_owned()),
+                    metadata: std::collections::BTreeMap::from([(
+                        "scenario".to_owned(),
+                        json!("chat"),
+                    )]),
                     ..Default::default()
                 },
                 input: vec![
@@ -2701,8 +2741,58 @@ mod tests {
         assert!((payload["presence_penalty"].as_f64().unwrap_or_default() - 0.2).abs() < 0.000_1);
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
+        assert_eq!(payload["store"], false);
+        assert_eq!(payload["reasoning_effort"], "low");
+        assert_eq!(payload["verbosity"], "low");
         assert_eq!(payload["prompt_cache_retention"], "24h");
+        assert_eq!(payload["metadata"]["scenario"], "chat");
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_defaults_store_for_official_openai_base_url_only() {
+        let official_model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let official_payload = official_model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("official chat payload should build");
+
+        assert_eq!(official_payload["store"], true);
+
+        let custom_model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned()))
+                .with_base_url("https://example.test/v1"),
+        );
+        let custom_payload = custom_model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("custom chat payload should build");
+
+        assert!(custom_payload.get("store").is_none());
     }
 
     #[test]
