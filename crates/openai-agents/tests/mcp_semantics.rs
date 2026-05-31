@@ -454,7 +454,7 @@ async fn runner_surfaces_failing_mcp_tools_as_tool_outputs() {
         .expect("tool call output item");
     match tool_output {
         OutputItem::Text { text } => {
-            assert_eq!(text, "Tool `lookup` failed: Tool execution failed.");
+            assert_eq!(text, "Tool `docs.lookup` failed: Tool execution failed.");
             assert!(!text.contains("tool `lookup` crashed"));
         }
         other => panic!("expected text tool output, got {other:?}"),

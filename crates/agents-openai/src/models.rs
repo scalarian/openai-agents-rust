@@ -10,7 +10,7 @@ use std::{
 
 use agents_core::{
     AgentsError, InputItem, LOGGER_TARGET, Model, ModelBehaviorError, ModelRequest, ModelResponse,
-    OutputItem, Result, ToolDefinition, Usage, UserError,
+    OutputItem, Result, ToolDefinition, Usage, UserError, build_function_tool_lookup_map,
 };
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
@@ -1196,6 +1196,7 @@ fn validate_responses_tool_search_configuration(
             "Only one ToolSearchTool() is allowed when using OpenAI Responses models.",
         ));
     }
+    build_function_tool_lookup_map(tools.iter().filter(|tool| tool.input_json_schema.is_some()))?;
 
     let has_tool_search_surface = tools.iter().any(is_responses_tool_search_surface);
     if tool_search_count > 0 && !has_tool_search_surface && !allow_opaque_search_surface {
@@ -1838,6 +1839,7 @@ mod tests {
                     ToolDefinition::custom("raw_editor", "Edit raw text.")
                         .with_format(json!({"type": "text"}))
                         .with_defer_loading(true),
+                    crate::tools::tool_search_tool().definition,
                 ],
                 output_schema: None,
                 trace_id: None,
@@ -1855,6 +1857,7 @@ mod tests {
                 "defer_loading": true
             })
         );
+        assert_eq!(payload["tools"][1], json!({"type": "tool_search"}));
     }
 
     #[test]
@@ -2490,6 +2493,36 @@ mod tests {
             .expect_err("duplicate tool_search tools should fail");
 
         assert!(error.to_string().contains("Only one ToolSearchTool()"));
+    }
+
+    #[test]
+    fn responses_payload_rejects_ambiguous_function_lookup_configuration() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("crm.lookup", "Top-level lookup")
+                        .with_input_json_schema(json!({"type": "object"})),
+                    ToolDefinition::new("lookup", "Namespaced lookup")
+                        .with_namespace("crm")
+                        .with_input_json_schema(json!({"type": "object"})),
+                ],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect_err("ambiguous function lookup should fail");
+
+        assert!(error.to_string().contains("qualified name `crm.lookup`"));
     }
 
     #[test]
