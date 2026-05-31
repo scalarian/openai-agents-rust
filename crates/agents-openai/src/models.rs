@@ -723,6 +723,31 @@ fn apply_responses_model_settings(
             "context_management",
         ],
     )?;
+    validate_extra_args_keys(
+        &settings.extra_args,
+        &[
+            "model",
+            "instructions",
+            "previous_response_id",
+            "conversation",
+            "input",
+            "tools",
+            "text",
+            "temperature",
+            "top_p",
+            "max_output_tokens",
+            "parallel_tool_calls",
+            "tool_choice",
+            "truncation",
+            "store",
+            "prompt_cache_retention",
+            "include",
+            "top_logprobs",
+            "metadata",
+            "reasoning",
+            "context_management",
+        ],
+    )?;
     if let Some(value) = settings.temperature {
         payload.insert("temperature".to_owned(), json!(value));
     }
@@ -801,6 +826,9 @@ fn apply_responses_model_settings(
         }
     }
     for (key, value) in &settings.extra_body {
+        payload.insert(key.clone(), value.clone());
+    }
+    for (key, value) in &settings.extra_args {
         payload.insert(key.clone(), value.clone());
     }
     Ok(())
@@ -925,6 +953,29 @@ fn apply_chat_model_settings(
             "metadata",
         ],
     )?;
+    validate_extra_args_keys(
+        &settings.extra_args,
+        &[
+            "model",
+            "messages",
+            "tools",
+            "response_format",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "frequency_penalty",
+            "presence_penalty",
+            "parallel_tool_calls",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs",
+            "store",
+            "reasoning_effort",
+            "verbosity",
+            "prompt_cache_retention",
+            "metadata",
+        ],
+    )?;
     if let Some(value) = settings.temperature {
         payload.insert("temperature".to_owned(), json!(value));
     }
@@ -975,6 +1026,9 @@ fn apply_chat_model_settings(
     for (key, value) in &settings.extra_body {
         payload.insert(key.clone(), value.clone());
     }
+    for (key, value) in &settings.extra_args {
+        payload.insert(key.clone(), value.clone());
+    }
     Ok(())
 }
 
@@ -994,12 +1048,27 @@ fn validate_extra_body_keys(
     extra_body: &std::collections::BTreeMap<String, Value>,
     reserved: &[&str],
 ) -> Result<()> {
-    if let Some(key) = extra_body
+    validate_extra_request_keys("extra_body", extra_body, reserved)
+}
+
+fn validate_extra_args_keys(
+    extra_args: &std::collections::BTreeMap<String, Value>,
+    reserved: &[&str],
+) -> Result<()> {
+    validate_extra_request_keys("extra_args", extra_args, reserved)
+}
+
+fn validate_extra_request_keys(
+    label: &str,
+    extra_fields: &std::collections::BTreeMap<String, Value>,
+    reserved: &[&str],
+) -> Result<()> {
+    if let Some(key) = extra_fields
         .keys()
         .find(|key| reserved.contains(&key.as_str()))
     {
         return Err(AgentsError::message(format!(
-            "extra_body cannot override reserved request field `{key}`"
+            "{label} cannot override reserved request field `{key}`"
         )));
     }
     Ok(())
@@ -1842,6 +1911,10 @@ mod tests {
                         "service_tier".to_owned(),
                         json!("priority"),
                     )]),
+                    extra_args: std::collections::BTreeMap::from([(
+                        "prompt_cache_key".to_owned(),
+                        json!("responses-cache-key"),
+                    )]),
                     ..Default::default()
                 },
                 input: vec![InputItem::from("hello")],
@@ -1896,6 +1969,7 @@ mod tests {
             })
         );
         assert_eq!(payload["service_tier"], "priority");
+        assert_eq!(payload["prompt_cache_key"], "responses-cache-key");
     }
 
     #[test]
@@ -2703,6 +2777,40 @@ mod tests {
     }
 
     #[test]
+    fn responses_payload_rejects_reserved_extra_args_fields() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    extra_args: std::collections::BTreeMap::from([(
+                        "model".to_owned(),
+                        json!("override"),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect_err("reserved responses extra_args fields should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("extra_args cannot override reserved request field `model`")
+        );
+    }
+
+    #[test]
     fn responses_payload_rejects_context_management_extra_body_override() {
         let model = OpenAIResponsesModel::new(
             "gpt-5",
@@ -2768,6 +2876,10 @@ mod tests {
                         "scenario".to_owned(),
                         json!("chat"),
                     )]),
+                    extra_args: std::collections::BTreeMap::from([(
+                        "prompt_cache_key".to_owned(),
+                        json!("chat-cache-key"),
+                    )]),
                     ..Default::default()
                 },
                 input: vec![
@@ -2807,6 +2919,7 @@ mod tests {
         assert_eq!(payload["verbosity"], "low");
         assert_eq!(payload["prompt_cache_retention"], "24h");
         assert_eq!(payload["metadata"]["scenario"], "chat");
+        assert_eq!(payload["prompt_cache_key"], "chat-cache-key");
         assert_eq!(payload["tool_choice"], "auto");
     }
 
@@ -3177,6 +3290,40 @@ mod tests {
             error
                 .to_string()
                 .contains("extra_body cannot override reserved request field `messages`")
+        );
+    }
+
+    #[test]
+    fn chat_payload_rejects_reserved_extra_args_fields() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let error = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: Some("Be brief".to_owned()),
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    extra_args: std::collections::BTreeMap::from([(
+                        "messages".to_owned(),
+                        json!(["override"]),
+                    )]),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect_err("reserved chat extra_args fields should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("extra_args cannot override reserved request field `messages`")
         );
     }
 
