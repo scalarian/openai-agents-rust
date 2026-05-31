@@ -187,13 +187,20 @@ impl OpenAIResponsesModel {
             );
         }
         let tools = openai_responses_tools_payload(&request.tools);
+        let has_tools_payload = !tools.is_empty();
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
         }
         if let Some(text_config) = openai_responses_text_config(request) {
             payload.insert("text".to_owned(), text_config);
         }
-        apply_responses_model_settings(&mut payload, &request.settings, &request.tools)?;
+        apply_responses_model_settings(
+            &mut payload,
+            &request.settings,
+            &request.tools,
+            request.prompt.is_some(),
+            has_tools_payload,
+        )?;
         apply_hosted_tool_includes(&mut payload, &request.tools);
         Ok(Value::Object(payload))
     }
@@ -698,6 +705,8 @@ fn apply_responses_model_settings(
     payload: &mut serde_json::Map<String, Value>,
     settings: &agents_core::ModelSettings,
     tools: &[ToolDefinition],
+    prompt_managed: bool,
+    has_tools_payload: bool,
 ) -> Result<()> {
     validate_extra_body_keys(
         &settings.extra_body,
@@ -762,10 +771,10 @@ fn apply_responses_model_settings(
         payload.insert("parallel_tool_calls".to_owned(), json!(value));
     }
     if let Some(value) = &settings.tool_choice {
-        payload.insert(
-            "tool_choice".to_owned(),
-            responses_tool_choice_value(value, tools)?,
-        );
+        let tool_choice = responses_tool_choice_value(value, tools)?;
+        if !(prompt_managed && !has_tools_payload && tool_choice.is_object()) {
+            payload.insert("tool_choice".to_owned(), tool_choice);
+        }
     }
     if let Some(value) = &settings.truncation {
         payload.insert("truncation".to_owned(), Value::String(value.clone()));
@@ -2100,6 +2109,70 @@ mod tests {
             .expect("responses payload should build");
 
         assert!(payload.get("model").is_none());
+    }
+
+    #[test]
+    fn responses_payload_omits_named_tool_choice_for_prompt_managed_tools() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    tool_choice: Some("prompt_tool".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_123".to_owned(),
+                    version: None,
+                    variables: std::collections::BTreeMap::new(),
+                }),
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert!(payload.get("tools").is_none());
+        assert!(payload.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn responses_payload_keeps_control_tool_choice_for_prompt_managed_tools() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings {
+                    tool_choice: Some("required".to_owned()),
+                    ..Default::default()
+                },
+                input: vec![InputItem::from("hello")],
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_123".to_owned(),
+                    version: None,
+                    variables: std::collections::BTreeMap::new(),
+                }),
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert!(payload.get("tools").is_none());
+        assert_eq!(payload["tool_choice"], "required");
     }
 
     #[test]
