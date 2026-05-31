@@ -758,13 +758,14 @@ fn apply_responses_model_settings(
         payload.insert("metadata".to_owned(), json!(settings.metadata));
     }
     if let Some(reasoning) = &settings.reasoning {
-        payload.insert(
-            "reasoning".to_owned(),
-            json!({
-                "effort": reasoning.effort,
-                "summary": reasoning.summary,
-            }),
-        );
+        let mut reasoning_payload = serde_json::Map::new();
+        if let Some(effort) = &reasoning.effort {
+            reasoning_payload.insert("effort".to_owned(), Value::String(effort.clone()));
+        }
+        if let Some(summary) = &reasoning.summary {
+            reasoning_payload.insert("summary".to_owned(), Value::String(summary.clone()));
+        }
+        payload.insert("reasoning".to_owned(), Value::Object(reasoning_payload));
     }
     if !settings.context_management.is_empty() {
         payload.insert(
@@ -1813,6 +1814,10 @@ mod tests {
                     tool_choice: Some("required".to_owned()),
                     response_include: vec!["reasoning".to_owned()],
                     top_logprobs: Some(2),
+                    reasoning: Some(agents_core::ReasoningSettings {
+                        effort: Some("low".to_owned()),
+                        summary: None,
+                    }),
                     context_management: vec![json!({
                         "type": "compaction",
                         "compact_threshold": 200_000
@@ -1865,6 +1870,8 @@ mod tests {
         assert_eq!(payload["include"][0], "reasoning");
         assert_eq!(payload["include"][1], "message.output_text.logprobs");
         assert_eq!(payload["top_logprobs"], 2);
+        assert_eq!(payload["reasoning"]["effort"], "low");
+        assert!(payload["reasoning"].get("summary").is_none());
         assert_eq!(
             payload["context_management"][0],
             json!({
