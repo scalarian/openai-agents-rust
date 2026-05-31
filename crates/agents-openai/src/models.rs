@@ -26,6 +26,7 @@ use tokio_tungstenite::{
 
 use crate::chatcmpl_helpers::chat_tool_output_content;
 use crate::defaults::{OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_WEBSOCKET_BASE_URL};
+use crate::fake_id::FAKE_RESPONSES_ID;
 use crate::websocket::{OpenAIResponsesWebSocketOptions, ResponsesWebSocketSession};
 
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
@@ -174,7 +175,7 @@ impl OpenAIResponsesModel {
                 request
                     .input
                     .iter()
-                    .map(openai_response_input_item)
+                    .filter_map(openai_response_input_item)
                     .collect(),
             ),
         );
@@ -1084,9 +1085,9 @@ fn json_value_to_string(value: &Value) -> String {
     }
 }
 
-fn openai_response_input_item(item: &InputItem) -> Value {
+fn openai_response_input_item(item: &InputItem) -> Option<Value> {
     match item {
-        InputItem::Text { text } => json!({
+        InputItem::Text { text } => Some(json!({
             "role": "user",
             "content": [
                 {
@@ -1094,14 +1095,16 @@ fn openai_response_input_item(item: &InputItem) -> Value {
                     "text": text,
                 }
             ]
-        }),
+        })),
         InputItem::Json { value } => openai_response_json_item(value),
     }
 }
 
-fn openai_response_json_item(value: &Value) -> Value {
+fn openai_response_json_item(value: &Value) -> Option<Value> {
+    let value = clean_openai_responses_provider_item(value)?;
+
     if let Some(role) = value.get("role").and_then(Value::as_str) {
-        return json!({
+        return Some(json!({
             "type": "message",
             "role": role,
             "content": value.get("content").cloned().unwrap_or_else(|| {
@@ -1110,18 +1113,18 @@ fn openai_response_json_item(value: &Value) -> Value {
                     "text": value.to_string(),
                 })])
             }),
-        });
+        }));
     }
 
-    match value.get("type").and_then(Value::as_str) {
+    Some(match value.get("type").and_then(Value::as_str) {
         Some("tool_call_output") => json!({
             "type": "function_call_output",
-            "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
+            "call_id": first_non_empty_string(&value, &["call_id", "id"]).unwrap_or_default(),
             "output": tool_output_to_responses_output(value.get("output")),
         }),
         Some("custom_tool_call_output") => json!({
             "type": "custom_tool_call_output",
-            "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
+            "call_id": first_non_empty_string(&value, &["call_id", "id"]).unwrap_or_default(),
             "output": value
                 .get("output")
                 .and_then(Value::as_str)
@@ -1130,20 +1133,20 @@ fn openai_response_json_item(value: &Value) -> Value {
         }),
         Some("tool_call") => json!({
             "type": "function_call",
-            "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
-            "name": first_non_empty_string(value, &["tool_name", "name"]).unwrap_or_default(),
+            "call_id": first_non_empty_string(&value, &["call_id", "id"]).unwrap_or_default(),
+            "name": first_non_empty_string(&value, &["tool_name", "name"]).unwrap_or_default(),
             "arguments": serialize_json_argument(value.get("arguments").unwrap_or(&Value::Null)),
         }),
         Some("custom_tool_call") => json!({
             "type": "custom_tool_call",
-            "call_id": first_non_empty_string(value, &["call_id", "id"]).unwrap_or_default(),
-            "name": first_non_empty_string(value, &["tool_name", "name"]).unwrap_or_default(),
+            "call_id": first_non_empty_string(&value, &["call_id", "id"]).unwrap_or_default(),
+            "name": first_non_empty_string(&value, &["tool_name", "name"]).unwrap_or_default(),
             "input": value
                 .get("input")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
         }),
-        Some("reasoning") if has_reasoning_persistence_identity(value) => value.clone(),
+        Some("reasoning") if has_reasoning_persistence_identity(&value) => value.clone(),
         Some("reasoning") => json!({
             "type": "message",
             "role": "assistant",
@@ -1194,7 +1197,25 @@ fn openai_response_json_item(value: &Value) -> Value {
             ],
         }),
         _ => value.clone(),
+    })
+}
+
+fn clean_openai_responses_provider_item(value: &Value) -> Option<Value> {
+    if !truthy_json_field(value.get("provider_data")) {
+        return Some(value.clone());
     }
+    if value.get("type").and_then(Value::as_str) == Some("reasoning") {
+        return None;
+    }
+
+    let mut cleaned = value.clone();
+    if let Some(object) = cleaned.as_object_mut() {
+        object.remove("provider_data");
+        if object.get("id").and_then(Value::as_str) == Some(FAKE_RESPONSES_ID) {
+            object.remove("id");
+        }
+    }
+    Some(cleaned)
 }
 
 fn openai_chat_messages(item: &InputItem, strict_feature_validation: bool) -> Result<Vec<Value>> {
@@ -3559,6 +3580,79 @@ mod tests {
         assert_eq!(payload["input"][0]["type"], "reasoning");
         assert_eq!(payload["input"][0]["id"], "rs_123");
         assert_eq!(payload["input"][0]["encrypted_content"], "encrypted");
+    }
+
+    #[test]
+    fn responses_payload_omits_provider_specific_reasoning_items() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![
+                    InputItem::Json {
+                        value: json!({
+                            "type": "reasoning",
+                            "id": FAKE_RESPONSES_ID,
+                            "summary": [{"type": "summary_text", "text": "private chain"}],
+                            "provider_data": {"model": "third-party"}
+                        }),
+                    },
+                    InputItem::from("hello"),
+                ],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        let input = payload["input"]
+            .as_array()
+            .expect("input should be a JSON array");
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn responses_payload_strips_provider_data_and_fake_ids() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::Json {
+                    value: json!({
+                        "type": "unknown_event",
+                        "id": FAKE_RESPONSES_ID,
+                        "value": 1,
+                        "provider_data": {"model": "third-party"}
+                    }),
+                }],
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("responses payload should build");
+
+        assert_eq!(payload["input"][0]["type"], "unknown_event");
+        assert_eq!(payload["input"][0]["value"], 1);
+        assert!(payload["input"][0].get("id").is_none());
+        assert!(payload["input"][0].get("provider_data").is_none());
     }
 
     #[test]
