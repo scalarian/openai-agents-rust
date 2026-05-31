@@ -271,7 +271,6 @@ impl OpenAIChatCompletionsModel {
         messages.extend(converted_messages.into_iter().flatten());
         payload.insert("messages".to_owned(), Value::Array(messages));
         let tools = openai_chat_tools_payload(&request.tools)?;
-        let has_tools = !tools.is_empty();
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
         }
@@ -281,7 +280,6 @@ impl OpenAIChatCompletionsModel {
         apply_chat_model_settings(
             &mut payload,
             &request.settings,
-            has_tools,
             is_official_openai_base_url(&self.options.base_url).then_some(true),
         )?;
         Ok(Value::Object(payload))
@@ -937,7 +935,6 @@ fn validate_named_responses_tool_choice(tool_choice: &str, tools: &[ToolDefiniti
 fn apply_chat_model_settings(
     payload: &mut serde_json::Map<String, Value>,
     settings: &agents_core::ModelSettings,
-    has_tools: bool,
     default_store: Option<bool>,
 ) -> Result<()> {
     validate_extra_body_keys(
@@ -1006,8 +1003,6 @@ fn apply_chat_model_settings(
     }
     if let Some(value) = &settings.tool_choice {
         payload.insert("tool_choice".to_owned(), chat_tool_choice_value(value));
-    } else if has_tools {
-        payload.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
     }
     if let Some(value) = settings.top_logprobs {
         payload.insert("logprobs".to_owned(), Value::Bool(true));
@@ -2966,6 +2961,7 @@ mod tests {
                     }),
                     verbosity: Some("low".to_owned()),
                     prompt_cache_retention: Some("24h".to_owned()),
+                    tool_choice: Some("auto".to_owned()),
                     metadata: std::collections::BTreeMap::from([(
                         "scenario".to_owned(),
                         json!("chat"),
@@ -3015,6 +3011,34 @@ mod tests {
         assert_eq!(payload["metadata"]["scenario"], "chat");
         assert_eq!(payload["prompt_cache_key"], "chat-cache-key");
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn chat_payload_omits_default_tool_choice_with_tools() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-4.1".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                tools: vec![
+                    ToolDefinition::new("search", "Search")
+                        .with_input_json_schema(json!({"type": "object"})),
+                ],
+                output_schema: None,
+                trace_id: None,
+                prompt: None,
+            })
+            .expect("chat payload should build");
+
+        assert!(payload.get("tools").is_some());
+        assert!(payload.get("tool_choice").is_none());
     }
 
     #[test]
