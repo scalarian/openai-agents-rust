@@ -701,6 +701,7 @@ fn apply_responses_model_settings(
             "store",
             "prompt_cache_retention",
             "include",
+            "top_logprobs",
             "metadata",
             "reasoning",
             "context_management",
@@ -736,18 +737,22 @@ fn apply_responses_model_settings(
             Value::String(value.clone()),
         );
     }
-    if !settings.response_include.is_empty() {
+    let mut include = settings.response_include.clone();
+    if settings.top_logprobs.is_some()
+        && !include
+            .iter()
+            .any(|value| value == "message.output_text.logprobs")
+    {
+        include.push("message.output_text.logprobs".to_owned());
+    }
+    if !include.is_empty() {
         payload.insert(
             "include".to_owned(),
-            Value::Array(
-                settings
-                    .response_include
-                    .iter()
-                    .cloned()
-                    .map(Value::String)
-                    .collect(),
-            ),
+            Value::Array(include.into_iter().map(Value::String).collect()),
         );
+    }
+    if let Some(value) = settings.top_logprobs {
+        payload.insert("top_logprobs".to_owned(), json!(value));
     }
     if !settings.metadata.is_empty() {
         payload.insert("metadata".to_owned(), json!(settings.metadata));
@@ -1807,6 +1812,7 @@ mod tests {
                     prompt_cache_retention: Some("24h".to_owned()),
                     tool_choice: Some("required".to_owned()),
                     response_include: vec!["reasoning".to_owned()],
+                    top_logprobs: Some(2),
                     context_management: vec![json!({
                         "type": "compaction",
                         "compact_threshold": 200_000
@@ -1857,6 +1863,8 @@ mod tests {
         assert_eq!(payload["prompt_cache_retention"], "24h");
         assert_eq!(payload["tool_choice"], "required");
         assert_eq!(payload["include"][0], "reasoning");
+        assert_eq!(payload["include"][1], "message.output_text.logprobs");
+        assert_eq!(payload["top_logprobs"], 2);
         assert_eq!(
             payload["context_management"][0],
             json!({
