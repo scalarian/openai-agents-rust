@@ -31,6 +31,7 @@ impl OpenAIResponsesWebSocketOptions {
 #[derive(Clone, Debug, Default)]
 pub struct ResponsesWebSocketSession {
     pub model: Option<String>,
+    pub model_is_explicit: bool,
     pub response_id: Option<String>,
     pub client_options: OpenAIClientOptions,
     pub websocket_options: OpenAIResponsesWebSocketOptions,
@@ -69,8 +70,10 @@ impl ResponsesWebSocketSession {
         client_options: OpenAIClientOptions,
         websocket_options: OpenAIResponsesWebSocketOptions,
     ) -> Self {
+        let model_is_explicit = model.is_some();
         Self {
             model,
+            model_is_explicit,
             response_id: None,
             client_options,
             websocket_options,
@@ -143,7 +146,8 @@ impl ResponsesWebSocketSession {
         let model = OpenAIResponsesModel::new(
             self.model.clone().unwrap_or_else(|| "gpt-5".to_owned()),
             self.client_options.clone(),
-        );
+        )
+        .with_model_is_explicit(self.model_is_explicit);
         let mut payload = model.build_payload(request)?;
         if let (Some(response_id), Value::Object(payload_object)) =
             (&self.response_id, &mut payload)
@@ -234,6 +238,38 @@ mod tests {
             payload["input"].as_array().map(|items| items.len()),
             Some(2)
         );
+    }
+
+    #[test]
+    fn request_payload_omits_default_model_for_prompt_managed_requests() {
+        let mut session = ResponsesWebSocketSession::new(
+            Some("gpt-5".to_owned()),
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        session.model_is_explicit = false;
+
+        let payload = session
+            .request_frame(&ModelRequest {
+                trace_id: None,
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: Default::default(),
+                input: vec![InputItem::from("hello")],
+                tools: Vec::new(),
+                output_schema: None,
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_123".to_owned(),
+                    version: None,
+                    variables: Default::default(),
+                }),
+            })
+            .expect("request frame should build");
+
+        assert!(payload.get("model").is_none());
+        assert_eq!(payload["type"], "response.create");
+        assert_eq!(payload["stream"], true);
     }
 
     #[test]

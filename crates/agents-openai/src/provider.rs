@@ -42,7 +42,12 @@ pub struct OpenAIProvider {
     websocket_model_cache: Arc<
         Mutex<
             HashMap<
-                (String, OpenAIClientOptions, OpenAIResponsesWebSocketOptions),
+                (
+                    String,
+                    bool,
+                    OpenAIClientOptions,
+                    OpenAIResponsesWebSocketOptions,
+                ),
                 Arc<OpenAIResponsesWsModel>,
             >,
         >,
@@ -176,7 +181,11 @@ impl OpenAIProvider {
         }
     }
 
-    fn resolve_responses_ws_model(&self, model_name: &str) -> Arc<dyn Model> {
+    fn resolve_responses_ws_model(
+        &self,
+        model_name: &str,
+        model_is_explicit: bool,
+    ) -> Arc<dyn Model> {
         let client_options = self.client_options();
         let mut cache = self
             .websocket_model_cache
@@ -185,15 +194,19 @@ impl OpenAIProvider {
         let entry = cache
             .entry((
                 model_name.to_owned(),
+                model_is_explicit,
                 client_options.clone(),
                 self.responses_websocket_options.clone(),
             ))
             .or_insert_with(|| {
-                Arc::new(OpenAIResponsesWsModel::new_with_websocket_options(
-                    model_name.to_owned(),
-                    client_options,
-                    self.responses_websocket_options.clone(),
-                ))
+                Arc::new(
+                    OpenAIResponsesWsModel::new_with_websocket_options(
+                        model_name.to_owned(),
+                        client_options,
+                        self.responses_websocket_options.clone(),
+                    )
+                    .with_model_is_explicit(model_is_explicit),
+                )
             })
             .clone();
         entry
@@ -242,6 +255,7 @@ impl ModelProvider for OpenAIProvider {
     }
 
     fn resolve(&self, model: Option<&str>) -> Arc<dyn Model> {
+        let model_is_explicit = model.is_some();
         let resolved_default_model = get_default_model();
         let model_name = model.unwrap_or(resolved_default_model.as_str());
         let options = self.client_options();
@@ -251,11 +265,12 @@ impl ModelProvider for OpenAIProvider {
                 OpenAIChatCompletionsModel::new(model_name, options)
                     .with_strict_feature_validation(self.strict_feature_validation),
             ),
-            (OpenAIApi::Responses, OpenAIResponsesTransport::Http) => {
-                Arc::new(OpenAIResponsesModel::new(model_name, options))
-            }
+            (OpenAIApi::Responses, OpenAIResponsesTransport::Http) => Arc::new(
+                OpenAIResponsesModel::new(model_name, options)
+                    .with_model_is_explicit(model_is_explicit),
+            ),
             (OpenAIApi::Responses, OpenAIResponsesTransport::WebSocket) => {
-                self.resolve_responses_ws_model(model_name)
+                self.resolve_responses_ws_model(model_name, model_is_explicit)
             }
         }
     }

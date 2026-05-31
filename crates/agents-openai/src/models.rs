@@ -125,6 +125,7 @@ fn is_official_openai_base_url(base_url: &str) -> bool {
 pub struct OpenAIResponsesModel {
     model: String,
     options: OpenAIClientOptions,
+    model_is_explicit: bool,
 }
 
 impl OpenAIResponsesModel {
@@ -132,13 +133,21 @@ impl OpenAIResponsesModel {
         Self {
             model: model.into(),
             options,
+            model_is_explicit: true,
         }
+    }
+
+    pub fn with_model_is_explicit(mut self, model_is_explicit: bool) -> Self {
+        self.model_is_explicit = model_is_explicit;
+        self
     }
 
     pub fn build_payload(&self, request: &ModelRequest) -> Result<Value> {
         validate_responses_tool_search_configuration(&request.tools, request.prompt.is_some())?;
         let mut payload = serde_json::Map::new();
-        payload.insert("model".to_owned(), Value::String(self.model.clone()));
+        if request.prompt.is_none() || self.model_is_explicit {
+            payload.insert("model".to_owned(), Value::String(self.model.clone()));
+        }
         if let Some(instructions) = &request.instructions {
             payload.insert(
                 "instructions".to_owned(),
@@ -381,12 +390,19 @@ impl OpenAIResponsesWsModel {
         }
     }
 
+    pub fn with_model_is_explicit(mut self, model_is_explicit: bool) -> Self {
+        self.inner.model_is_explicit = model_is_explicit;
+        self
+    }
+
     pub fn websocket_session(&self) -> ResponsesWebSocketSession {
-        ResponsesWebSocketSession::new_with_options(
+        let mut session = ResponsesWebSocketSession::new_with_options(
             Some(self.inner.model.clone()),
             self.inner.options.clone(),
             self.websocket_options.clone(),
-        )
+        );
+        session.model_is_explicit = self.inner.model_is_explicit;
+        session
     }
 }
 
@@ -1959,6 +1975,36 @@ mod tests {
                 }
             })
         );
+        assert_eq!(payload["model"], "gpt-5");
+    }
+
+    #[test]
+    fn responses_payload_omits_default_model_for_prompt_managed_requests() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        )
+        .with_model_is_explicit(false);
+        let payload = model
+            .build_payload(&ModelRequest {
+                model: Some("gpt-5".to_owned()),
+                instructions: None,
+                previous_response_id: None,
+                conversation_id: None,
+                settings: agents_core::ModelSettings::default(),
+                input: vec![InputItem::from("hello")],
+                prompt: Some(agents_core::Prompt {
+                    id: "pmpt_123".to_owned(),
+                    version: None,
+                    variables: std::collections::BTreeMap::new(),
+                }),
+                tools: Vec::new(),
+                output_schema: None,
+                trace_id: None,
+            })
+            .expect("responses payload should build");
+
+        assert!(payload.get("model").is_none());
     }
 
     #[test]
