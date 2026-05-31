@@ -18,6 +18,7 @@ pub struct ModelSettings {
     pub parallel_tool_calls: Option<bool>,
     pub truncation: Option<String>,
     pub store: Option<bool>,
+    pub prompt_cache_retention: Option<String>,
     pub include_usage: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub response_include: Vec<String>,
@@ -79,6 +80,9 @@ impl ModelSettings {
         }
         if let Some(value) = self.store {
             traceable.insert("store".to_owned(), json!(value));
+        }
+        if let Some(value) = &self.prompt_cache_retention {
+            traceable.insert("prompt_cache_retention".to_owned(), json!(value));
         }
         if let Some(value) = self.include_usage {
             traceable.insert("include_usage".to_owned(), json!(value));
@@ -142,6 +146,9 @@ impl ModelSettings {
         }
         if override_settings.store.is_some() {
             resolved.store = override_settings.store;
+        }
+        if override_settings.prompt_cache_retention.is_some() {
+            resolved.prompt_cache_retention = override_settings.prompt_cache_retention.clone();
         }
         if override_settings.include_usage.is_some() {
             resolved.include_usage = override_settings.include_usage;
@@ -244,6 +251,7 @@ mod tests {
             parallel_tool_calls: Some(false),
             truncation: Some("auto".to_owned()),
             store: Some(false),
+            prompt_cache_retention: Some("in_memory".to_owned()),
             include_usage: Some(false),
             response_include: vec!["reasoning".to_owned()],
             top_logprobs: Some(3),
@@ -273,6 +281,7 @@ mod tests {
             parallel_tool_calls: Some(true),
             truncation: Some("disabled".to_owned()),
             store: Some(true),
+            prompt_cache_retention: Some("24h".to_owned()),
             include_usage: Some(true),
             response_include: vec!["file_search_call.results".to_owned()],
             top_logprobs: Some(5),
@@ -304,6 +313,7 @@ mod tests {
         assert_eq!(resolved.parallel_tool_calls, Some(true));
         assert_eq!(resolved.truncation.as_deref(), Some("disabled"));
         assert_eq!(resolved.store, Some(true));
+        assert_eq!(resolved.prompt_cache_retention.as_deref(), Some("24h"));
         assert_eq!(resolved.include_usage, Some(true));
         assert_eq!(
             resolved.response_include,
@@ -344,6 +354,7 @@ mod tests {
     fn traceable_model_settings_omit_request_extras() {
         let settings = ModelSettings {
             temperature: Some(0.5),
+            prompt_cache_retention: Some("24h".to_owned()),
             retry: Some(ModelRetrySettings {
                 max_retries: Some(2),
                 backoff: Some(ModelRetryBackoffSettings {
@@ -372,6 +383,7 @@ mod tests {
         let traceable = settings.to_traceable_map();
 
         assert_eq!(traceable.get("temperature"), Some(&json!(0.5)));
+        assert_eq!(traceable.get("prompt_cache_retention"), Some(&json!("24h")));
         assert_eq!(
             traceable.get("context_management"),
             Some(&json!([{

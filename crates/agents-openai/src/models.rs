@@ -688,6 +688,7 @@ fn apply_responses_model_settings(
             "tool_choice",
             "truncation",
             "store",
+            "prompt_cache_retention",
             "include",
             "metadata",
             "reasoning",
@@ -717,6 +718,12 @@ fn apply_responses_model_settings(
     }
     if let Some(value) = settings.store {
         payload.insert("store".to_owned(), json!(value));
+    }
+    if let Some(value) = &settings.prompt_cache_retention {
+        payload.insert(
+            "prompt_cache_retention".to_owned(),
+            Value::String(value.clone()),
+        );
     }
     if !settings.response_include.is_empty() {
         payload.insert(
@@ -877,6 +884,7 @@ fn apply_chat_model_settings(
             "tool_choice",
             "logprobs",
             "top_logprobs",
+            "prompt_cache_retention",
         ],
     )?;
     if let Some(value) = settings.temperature {
@@ -905,6 +913,12 @@ fn apply_chat_model_settings(
     if let Some(value) = settings.top_logprobs {
         payload.insert("logprobs".to_owned(), Value::Bool(true));
         payload.insert("top_logprobs".to_owned(), json!(value));
+    }
+    if let Some(value) = &settings.prompt_cache_retention {
+        payload.insert(
+            "prompt_cache_retention".to_owned(),
+            Value::String(value.clone()),
+        );
     }
     for (key, value) in &settings.extra_body {
         payload.insert(key.clone(), value.clone());
@@ -1760,6 +1774,7 @@ mod tests {
                     temperature: Some(0.3),
                     max_output_tokens: Some(256),
                     store: Some(true),
+                    prompt_cache_retention: Some("24h".to_owned()),
                     tool_choice: Some("required".to_owned()),
                     response_include: vec!["reasoning".to_owned()],
                     context_management: vec![json!({
@@ -1809,6 +1824,7 @@ mod tests {
         assert!((payload["temperature"].as_f64().unwrap_or_default() - 0.3).abs() < 0.000_1);
         assert_eq!(payload["max_output_tokens"], 256);
         assert_eq!(payload["store"], true);
+        assert_eq!(payload["prompt_cache_retention"], "24h");
         assert_eq!(payload["tool_choice"], "required");
         assert_eq!(payload["include"][0], "reasoning");
         assert_eq!(
@@ -2650,6 +2666,7 @@ mod tests {
                     presence_penalty: Some(0.2),
                     parallel_tool_calls: Some(true),
                     top_logprobs: Some(3),
+                    prompt_cache_retention: Some("24h".to_owned()),
                     ..Default::default()
                 },
                 input: vec![
@@ -2684,6 +2701,7 @@ mod tests {
         assert!((payload["presence_penalty"].as_f64().unwrap_or_default() - 0.2).abs() < 0.000_1);
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
+        assert_eq!(payload["prompt_cache_retention"], "24h");
         assert_eq!(payload["tool_choice"], "auto");
     }
 
