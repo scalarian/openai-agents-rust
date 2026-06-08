@@ -11,11 +11,12 @@ Mission-specific parity guidance for syncing Rust to `openai/openai-agents-pytho
 - Full `v0.14.2` parity target
 - English docs only
 - Publish all Rust crates
+- Docker-backed sandbox parity is deferred for this mission because Docker is unavailable
 - Hosted sandbox providers are required at the code/package/config parity layer, but live provider validation is out of scope unless extra credentials are later supplied
 
 ## Highest-Risk Parity Buckets
 - Sandbox runtime surface (`SandboxAgent`, manifests, local sessions, resume/snapshots, capabilities, memory)
-- Docker sandbox support and mount semantics
+- Docker sandbox support and mount semantics (deferred in this mission)
 - Hosted sandbox provider feature gates and public surface
 - README/docs/examples breadth and onboarding flow parity
 - Release hardening and crates.io publication flow
@@ -25,7 +26,7 @@ Mission-specific parity guidance for syncing Rust to `openai/openai-agents-pytho
 2. local sandbox MVP
 3. sandbox resume/state
 4. sandbox composition
-5. Docker and mount parity
+5. Docker and mount parity (deferred)
 6. hosted sandbox provider parity
 7. English docs/examples/release sweep
 
